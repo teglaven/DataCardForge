@@ -10,7 +10,12 @@ export default defineConfig({
     },
   },
   test: {
+    // Default stays `node`: almost every suite is pure logic and runs faster without a
+    // DOM. Suites that must mount components opt in per file with a
+    // `// @vitest-environment jsdom` docblock (see tests/ConnectionAnchors.dom.test.tsx).
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.{ts,tsx}'],
+    // jsdom lacks ResizeObserver / layout APIs; DOM suites need the stub to mount.
+    setupFiles: ['tests/setup.dom.ts'],
   },
 });

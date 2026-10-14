@@ -6,6 +6,7 @@
 ## 导航
 
 - 📌 **决策记录** (`decisions/`) — 已经拍板、影响后续的方向性结论
+  - [[2026-10-15-qt-implementation-removed|彻底移除 Qt 实现]] ← **当前仓库形态**
   - [[2026-10-14-frontend-web-chosen|前端选型定为 Web]] ← **当前前端方案**
   - [[2026-10-14-chart-library-audit|图表库保持 ECharts]] ← 统计图型与矢量导出审计
   - [[2026-08-07-backend-first-frontend-paused|后端先行，前端搁置]]（其中"前端暂停"部分已被上面取代）
@@ -16,6 +17,7 @@
   - [[implot-v1.1-api|ImPlot v1.1 API 大改]]
   - [[imgui-docking-pushstylecolor|ImGui Docking 下 PushStyleColor 的坑]]
 - 📅 **开发日志** (`log/`) — 按日期记录进展
+  - [[2026-10-15|2026-10-15]]（仓库治理 + 移除 Qt + 修复 A/B/D/E/F）
   - [[2026-10-14|2026-10-14]]（前端定为 Web + `web/` 实现落地）
   - [[2026-08-07|2026-08-07]]
 

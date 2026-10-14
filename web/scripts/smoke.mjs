@@ -84,6 +84,8 @@ const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
 const consoleErrors = [];
+const workerUrls = [];
+page.on('worker', (worker) => workerUrls.push(worker.url()));
 page.on('console', (message) => {
   if (message.type() === 'error') consoleErrors.push(message.text());
 });
@@ -110,6 +112,15 @@ try {
     'card reports 10000 rows and 10 cols',
     /10000/.test(badge) && /\b10\b/.test(badge),
     badge,
+  );
+
+  // Parsing runs in a dedicated worker since 2026-10-15 (fix F). If it silently fell
+  // back to the main thread the app would still work — but freeze on big files — so
+  // assert the off-thread path is really taken.
+  check(
+    'file parsing happened in a worker, not on the main thread',
+    workerUrls.some((url) => /parse\.worker/.test(url)),
+    workerUrls.map((u) => u.split('/').pop()).join(', ') || 'no worker spawned',
   );
 
   await page.waitForSelector('.vtable__colhead', { timeout: 10_000 });
@@ -185,6 +196,59 @@ try {
     .first()
     .getAttribute('stroke');
   check('active table highlights the line in red', redStroke === 'rgb(200, 50, 50)', String(redStroke));
+
+  // ── 6b. scrolling a table must move its connection anchors (fix A) ───
+  // The line is anchored to a *column header* inside a scrollable viewport. Reading the
+  // anchor happens against live DOM, so scrolling has to bump the layout version or the
+  // path keeps pointing at where the header used to be.
+  const lineStartBefore = await page
+    .locator('.connection-layer .connection--fg path')
+    .first()
+    .getAttribute('d');
+  await page
+    .locator('.vtable__viewport')
+    .first()
+    .evaluate((el) => {
+      el.scrollLeft = 260;
+    });
+  await page.waitForTimeout(350);
+  const lineStartAfter = await page
+    .locator('.connection-layer .connection--fg path')
+    .first()
+    .getAttribute('d');
+  check(
+    'horizontal table scroll moves the connection anchor',
+    typeof lineStartBefore === 'string' &&
+      typeof lineStartAfter === 'string' &&
+      lineStartBefore !== lineStartAfter,
+    `path changed: ${lineStartBefore !== lineStartAfter}`,
+  );
+
+  // Scrolling a column fully out of view must snap the line to an edge, not lose it.
+  await page
+    .locator('.vtable__viewport')
+    .first()
+    .evaluate((el) => {
+      el.scrollLeft = 4000;
+    });
+  await page.waitForTimeout(350);
+  const snappedPath = await page
+    .locator('.connection-layer .connection--fg path')
+    .first()
+    .getAttribute('d');
+  check(
+    'off-screen column keeps its line pinned instead of dropping it',
+    typeof snappedPath === 'string' && snappedPath.length > 0,
+    `${String(snappedPath).slice(0, 28)}…`,
+  );
+
+  await page
+    .locator('.vtable__viewport')
+    .first()
+    .evaluate((el) => {
+      el.scrollLeft = 0;
+    });
+  await page.waitForTimeout(200);
 
   // Deselecting both must drop the line back to the grey background layer.
   await page.locator('.menubar__brand').click();

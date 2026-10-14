@@ -49,14 +49,47 @@ describe('addMatrixCard', () => {
     expect(store().selectedId).toBe(id);
   });
 
-  it('reuses a previously parsed matrix when the same file is opened again', () => {
-    const first = store().addMatrixCard([{ name: '1.txt', matrix: matrix([[1], [2]]) }]);
-    const second = store().addMatrixCard([{ name: '1.txt', matrix: matrix([[9], [9]]) }]);
+  it('reuses a parse when the same bytes are opened again', () => {
+    const identity = { size: 1024, lastModified: 1_700_000_000_000 };
+    const first = store().addMatrixCard([
+      { name: '1.txt', matrix: matrix([[1], [2]]), identity },
+    ]);
+    const second = store().addMatrixCard([
+      { name: '1.txt', matrix: matrix([[1], [2]]), identity },
+    ]);
 
     const a = store().cards.find((c) => c.id === first) as MatrixCardModel;
     const b = store().cards.find((c) => c.id === second) as MatrixCardModel;
     expect(b.sources[0].matrixId).toBe(a.sources[0].matrixId);
     expect(store().matrices.size).toBe(1);
+  });
+
+  it('does NOT reuse a parse for a different file that shares the name', () => {
+    // The bug this locks out: `export.csv` overwritten daily. Keying the cache on the
+    // file name returned yesterday's measurements under today's label — silently stale
+    // data in a scientific tool. Identity is the bytes, never the label.
+    const cardA = store().addMatrixCard([
+      { name: 'export.csv', matrix: matrix([[1], [2]]), identity: { size: 100, lastModified: 1 } },
+    ]);
+    const cardB = store().addMatrixCard([
+      { name: 'export.csv', matrix: matrix([[9], [9]]), identity: { size: 250, lastModified: 2 } },
+    ]);
+
+    const a = store().cards.find((c) => c.id === cardA) as MatrixCardModel;
+    const b = store().cards.find((c) => c.id === cardB) as MatrixCardModel;
+    expect(b.sources[0].matrixId).not.toBe(a.sources[0].matrixId);
+    expect(store().matrices.size).toBe(2);
+    // Each card keeps its own values.
+    expect(store().matrices.get(b.sources[0].matrixId)!.cell(0, 0)).toBe(9);
+    expect(store().matrices.get(a.sources[0].matrixId)!.cell(0, 0)).toBe(1);
+  });
+
+  it('treats an entry with no identity as unshareable', () => {
+    // Programmatically built tables and restored snapshots have no backing bytes, so
+    // they must not be deduplicated against each other by coincidence of name.
+    store().addMatrixCard([{ name: 'x.txt', matrix: matrix([[1]]) }]);
+    store().addMatrixCard([{ name: 'x.txt', matrix: matrix([[2]]) }]);
+    expect(store().matrices.size).toBe(2);
   });
 
   it('places each new card at a different offset', () => {
@@ -168,9 +201,11 @@ describe('close rules', () => {
   });
 
   it('keeps a shared matrix alive until its last owning card closes', () => {
-    // Two cards over the same file share one parsed matrix id.
-    const first = store().addMatrixCard([{ name: '1.txt', matrix: matrix([[1, 2]]) }]);
-    const second = store().addMatrixCard([{ name: '1.txt', matrix: matrix([[1, 2]]) }]);
+    // Two cards over the same bytes share one parsed matrix id.
+    const identity = { size: 64, lastModified: 99 };
+    const entries = () => [{ name: '1.txt', matrix: matrix([[1, 2]]), identity }];
+    const first = store().addMatrixCard(entries());
+    const second = store().addMatrixCard(entries());
     expect(store().matrices.size).toBe(1);
 
     expect(store().removeCard(first)).toBe(true);
@@ -178,6 +213,21 @@ describe('close rules', () => {
 
     expect(store().removeCard(second)).toBe(true);
     expect(store().matrices.size).toBe(0);
+  });
+
+  it('prunes the identity cache so re-dropping the file re-parses it', () => {
+    const identity = { size: 64, lastModified: 99 };
+    const first = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1]]), identity },
+    ]);
+    store().removeCard(first);
+
+    // Same bytes again must NOT alias to the freed matrix.
+    const again = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[7]]), identity },
+    ]);
+    const card = store().cards.find((c) => c.id === again) as MatrixCardModel;
+    expect(store().matrices.get(card.sources[0].matrixId)!.cell(0, 0)).toBe(7);
   });
 });
 

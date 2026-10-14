@@ -40,6 +40,8 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 - Supports TXT / CSV / TSV / DAT / XLSX; CSV parsing handles quoted fields and sniffs the delimiter
 - **Automatic header detection**: if the first row is not purely numeric it is treated as column titles (annotations) rather than data
 - File-backed tables are read-only; unparseable cells show `—` instead of being silently turned into 0
+- Parsing runs in a **Web Worker**, so dropping a 10 000-row file no longer freezes the interface (falls back inline where workers are unavailable)
+- Re-opening the same file reuses its parse only when the **bytes match** (`size` + `lastModified`); a different file that merely shares the name gets a fresh parse — never stale measurements under a current label
 
 ### Plotting (ChartCard)
 - Right-click a column header → **pick the chart type directly** (types needing more columns are disabled)
@@ -64,7 +66,7 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 ### Connection Visualization (ConnectionLayer)
 - Red = source table selected; blue = target chart selected; gray = neither selected
 - Highlighted lines are thick and **on top** (above the cards); normal lines are thin and gray, below the cards (dual layers)
-- Lines track in real time when cards move / resize / scroll (driven by a layout version counter, not a polling timer)
+- Lines track in real time when cards move, resize **or when the table scrolls** (driven by a layout version counter, not a polling timer) — scrolling is what moves a column header, so it invalidates anchors just like a drag does
 - When a column scrolls out of the viewport → the line snaps to the left / right edge
 - When a column is visible → its header is framed with a semi-transparent box in the current color
 - The layer is `pointer-events: none`, so it never steals input or affects layout (the **connection subordination** principle holds by construction)
@@ -91,7 +93,8 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 | zustand | State (card table + dependency graph) | |
 | @e965/xlsx | Excel read | Loaded on demand |
 | Hand-rolled virtual scrolling | Large-table rendering | No third-party dependency |
-| Eigen | Matrix operations | **Not started** — see the open question in [docs/log/2026-10-15.md](docs/log/2026-10-15.md) |
+| Web Worker (`src/loaders/parse.worker.ts`) | Off-thread file parsing | Keeps the UI responsive on large files |
+| *(not included)* | Eigen / linear algebra | **No longer a dependency** — removed with the C++ tree on 2026-10-15; re-scope only if demand is proven |
 
 ## Building
 
@@ -127,17 +130,24 @@ All extension points are on the web side — there is no second implementation t
 
 ## Short-term Goals
 
-> **Current priority: Eigen linear algebra + element-wise formula computation.** The frontend is settled; what the web side still lacks is formula evaluation and more chart types.
+> **Current priority: element-wise formula computation.** The frontend is settled and the Qt/Eigen
+> backend is gone, so the next step is decided on the web side alone. Before choosing between a
+> pure-TS expression engine and a WASM linear-algebra build, answer the user-level question first:
+> do people need *column arithmetic* (`(A-B)/C`, `MOV(A,5)`, `IF(...)`) or actual *matrix algebra*?
+> See [docs/log/2026-10-15.md](docs/log/2026-10-15.md).
 
 - [x] **Frontend decision** → **Web chosen** (2026-10-14)
-- [ ] **Eigen integration**: matrix operations and linear algebra (column operations, matrix multiplication, eigenvalues, etc.) — the web side needs either WASM or a TS implementation
+- [x] **Qt implementation removed** → repo is now a single web-first monorepo (2026-10-15)
+- [x] **Dependency cycle detection** → `DependencyGraph` refuses loops and deduplicates edges (2026-10-15)
 - [ ] **Element-wise formula computation**: evaluate formulas on every matrix element (SUM / AVG / MIN / MAX / IF); more complex logic goes to the **FunctionCard**
-- [ ] Data **editing** capability (non-file-backed cards, double-click edit + formula evaluation; the table already has the editing path wired)
-- [ ] Connection arrows / dependency cycle detection / red-blue bidirectional highlight
+- [ ] Linear-algebra backend (**unresolved**): the old "Eigen integration" item lost its carrier when the C++ tree was deleted — re-scope it only if real demand exists
+- [ ] Data **editing** capability (non-file-backed cards, double-click edit + formula evaluation). Note: `VirtualTable` has the inline-edit branch but `MatrixCard` does not yet pass `onCellChange`, and nothing calls `setCell()` — the path is *not* wired, contrary to earlier notes here
+- [ ] Connection arrows / red-blue bidirectional highlight
 - [ ] **Selectable X axis**: charts can pick a column as the X-axis source (default remains the row number `No.N`)
 - [ ] Batch export (CSV / images / Excel tables) — CSV and single-chart SVG already work
-- [ ] More chart types (scatter, bar, multi-axis)
+- [x] Scatter, bar and multi-axis charts (delivered with the 9 statistical types, 2026-10-14)
 - [ ] **Card beautification**: unify card styling, spacing, colors, and layout
+- [ ] CI: typecheck + unit tests + end-to-end smoke (today these run only from one hand-built local environment)
 
 ## Long-term Roadmap
 

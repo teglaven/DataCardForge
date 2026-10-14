@@ -42,6 +42,26 @@ export function pickFiles(multiple: boolean, accept = FILE_ACCEPT): Promise<File
 export interface LoadedFile {
   name: string;
   matrix: MatrixData;
+  /** Identity of the bytes this was parsed from — see `MatrixEntry`. */
+  identity: FileIdentity;
+}
+
+/**
+ * Cheap fingerprint distinguishing "the same file again" from "a different file that
+ * happens to share a name". Sensor exports overwrite `today.csv` in place, so the name
+ * alone must not key a parse cache.
+ */
+export interface FileIdentity {
+  size: number;
+  lastModified: number;
+}
+
+export function identityOf(file: File): FileIdentity {
+  return { size: file.size, lastModified: file.lastModified };
+}
+
+export function identityKey(identity: FileIdentity): string {
+  return `${identity.size}:${identity.lastModified}`;
 }
 
 export interface LoadFailure {
@@ -51,8 +71,8 @@ export interface LoadFailure {
 
 /**
  * Parse a batch of files, reporting per-file failures instead of aborting.
- * Duplicate names are de-duplicated by suffixing, mirroring the Qt loader's
- * "file name -> matrix" map (which silently kept the last one).
+ * Duplicate names inside one batch are de-duplicated by suffixing so each card shows a
+ * distinct label; the byte identity travels with the parse for the store's cache.
  */
 export async function parseFiles(
   files: File[],
@@ -75,7 +95,7 @@ export async function parseFiles(
         counter += 1;
       }
       seen.add(name);
-      loaded.push({ name, matrix });
+      loaded.push({ name, matrix, identity: identityOf(file) });
     } catch (error) {
       failures.push({
         name: file.name,

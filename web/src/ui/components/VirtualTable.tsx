@@ -15,6 +15,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { MatrixData } from '../../core/MatrixData.ts';
 import { formatCell } from '../../core/numeric.ts';
+import { invalidateLayout } from '../cardMetrics.ts';
 
 const ROW_HEIGHT = 22;
 const HEADER_HEIGHT = 26;
@@ -29,7 +30,7 @@ export interface TableMetrics {
   headerHeight: number;
 }
 
-interface VirtualTableProps {
+export interface VirtualTableProps {
   matrix: MatrixData;
   readOnly: boolean;
   /** Row-number label builder, e.g. `No.12`. */
@@ -123,6 +124,13 @@ export function VirtualTable({
     if (!el) return;
     setScrollLeft(el.scrollLeft);
     setScrollTop(el.scrollTop);
+    // The connection layer reads `viewport.scrollLeft` live (see cardMetrics.headerAnchor),
+    // so a scrolled column moves its anchor — and may cross into or out of the viewport,
+    // which is exactly when the line must snap to an edge. Nothing else bumps the layout
+    // version on scroll: setTableMetrics only runs when offsets/widths change, and rows are
+    // absolutely positioned so no resize fires. Without this the line drifts off its header
+    // and stays stale until the next drag or resize.
+    invalidateLayout();
   }, []);
 
   const firstRow = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);

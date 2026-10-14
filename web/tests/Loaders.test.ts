@@ -1,8 +1,11 @@
 /**
- * Loader parity with `src/core/FileLoader.cpp` (TxtLoader) plus the CSV/XLSX additions.
+ * Loader behaviour: text/CSV parsing rules plus the off-main-thread dispatch added on
+ * 2026-10-15 (fix F). The C++ original these were ported from was removed from this repo;
+ * see docs/decisions/2026-10-15-qt-implementation-removed.md.
  *
  * Vitest runs in a Node environment, where the File / TextEncoder globals needed by
- * the loaders are available (Node >= 20).
+ * the loaders are available (Node >= 20). There is no Worker there, which is exactly the
+ * fallback path these tests pin down.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -176,5 +179,42 @@ describe('matrixToCsv', () => {
     const mat = new MatrixData();
     mat.appendColumn('Pos.1', [1, NaN]);
     expect(matrixToCsv(mat).split('\n')[2]).toBe('');
+  });
+});
+
+describe('loadMatrixFile worker dispatch (fix F)', () => {
+  it('parses inline when no Worker is available', async () => {
+    // Node/vitest has no Worker global, so the client must fall through to the loaders.
+    expect(typeof Worker).toBe('undefined');
+    const mat = await loadMatrixFile(makeFile('a.txt', '1 2\n3 4\n'));
+    expect(mat.rowCount()).toBe(2);
+    expect(mat.cell(1, 1)).toBe(4);
+  });
+
+  it('still rejects an unsupported extension without touching a worker', async () => {
+    await expect(loadMatrixFile(makeFile('a.parquet', 'x'))).rejects.toThrow(/Unsupported/);
+  });
+
+  it('payloadToMatrix round-trips the worker wire format', async () => {
+    const { payloadToMatrix } = await import('../src/loaders/parseWorker.ts');
+    const matrix = new MatrixData();
+    matrix.appendColumn('Pos.1', [1.5, NaN, 3]);
+    matrix.setColumnAnnotation(0, 'temp °C');
+    matrix.appendColumn('Pos.2', [4, 5, 6]);
+
+    const columns = matrix.columns().map((col) => ({
+      posName: col.posName,
+      annotation: col.annotation,
+      data: col.data,
+    }));
+    const restored = payloadToMatrix(columns);
+
+    expect(restored.columnCount()).toBe(2);
+    expect(restored.columnLabel(0)).toBe('temp °C');
+    expect(restored.cell(0, 0)).toBe(1.5);
+    expect(restored.cell(1, 0)).toBeNaN();
+    // A copy, not an alias — the worker's arrays must never be mutated in place.
+    columns[0].data[0] = 99;
+    expect(restored.cell(0, 0)).toBe(1.5);
   });
 });

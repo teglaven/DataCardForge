@@ -1,5 +1,10 @@
 /**
- * DependencyGraph parity with `src/core/DependencyGraph.cpp`.
+ * DependencyGraph behaviour.
+ *
+ * The C++ `src/core/DependencyGraph.cpp` was ported first; the cycle guard and edge
+ * deduplication were added on 2026-10-15 because FunctionCard will let cards depend on
+ * cards, which makes loops reachable. That C++ source no longer exists in this repo —
+ * see docs/decisions/2026-10-15-qt-implementation-removed.md.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -62,5 +67,84 @@ describe('DependencyGraph', () => {
     const graph = new DependencyGraph();
     graph.addDependency(10, 1);
     expect(graph.edges()).toEqual([{ dependsOn: 1, dependent: 10 }]);
+  });
+
+  // ── edge deduplication (2026-10-15) ───────────────────────────────────
+
+  it('does not register the same edge twice', () => {
+    const graph = new DependencyGraph();
+    expect(graph.addDependency(10, 1)).toBeNull();
+    expect(graph.addDependency(10, 1)).toBeNull(); // idempotent, not an error
+
+    expect(graph.getDependents(1)).toEqual([10]);
+    expect(graph.edgeCount()).toBe(1);
+  });
+
+  it('reports one refresh target per duplicate registration', () => {
+    // Regression: a duplicated edge made getDependents return the chart twice, so
+    // "switch file -> refresh charts" rebuilt the same card on every pass.
+    const graph = new DependencyGraph();
+    graph.addDependency(10, 1);
+    graph.addDependency(10, 1);
+    expect(graph.getDependents(1).length).toBe(1);
+  });
+
+  // ── cycle prevention (2026-10-15) ─────────────────────────────────────
+
+  it('refuses a self-dependency and reports the loop', () => {
+    const graph = new DependencyGraph();
+    const cycle = graph.addDependency(5, 5);
+
+    expect(cycle).not.toBeNull();
+    expect(cycle).toEqual([5, 5]);
+    expect(graph.hasDependents(5)).toBe(false); // nothing was mutated
+  });
+
+  it('refuses an edge that closes a two-node loop', () => {
+    const graph = new DependencyGraph();
+    graph.addDependency(10, 1); // chart 10 depends on matrix 1
+
+    const cycle = graph.addDependency(1, 10); // matrix 1 depending on its own chart
+
+    // The ring is reported from the node that would start the loop.
+    expect(cycle).not.toBeNull();
+    expect(cycle).toEqual([10, 1, 10]);
+    expect(graph.edgeCount()).toBe(1);
+    expect(graph.hasCycle()).toBe(false);
+  });
+
+  it('refuses an edge that closes a longer loop', () => {
+    const graph = new DependencyGraph();
+    graph.addDependency(2, 1);
+    graph.addDependency(3, 2);
+    graph.addDependency(4, 3);
+
+    const cycle = graph.addDependency(1, 4);
+
+    expect(cycle).not.toBeNull();
+    expect(cycle).toEqual([4, 3, 2, 1, 4]);
+    expect(graph.edgeCount()).toBe(3);
+  });
+
+  it('allows a diamond — shared upstream is not a cycle', () => {
+    const graph = new DependencyGraph();
+    graph.addDependency(3, 1);
+    graph.addDependency(3, 2);
+    graph.addDependency(4, 1);
+    graph.addDependency(4, 2);
+
+    expect(graph.hasCycle()).toBe(false);
+    expect(graph.getDependencies(3).sort()).toEqual([1, 2]);
+    expect(graph.getDependents(1).sort()).toEqual([3, 4]);
+  });
+
+  it('finds a path between nodes and returns null when unreachable', () => {
+    const graph = new DependencyGraph();
+    graph.addDependency(2, 1);
+    graph.addDependency(3, 2);
+
+    expect(graph.findPath(1, 3)).toEqual([1, 2, 3]);
+    expect(graph.findPath(3, 1)).toBeNull();
+    expect(graph.findPath(1, 99)).toBeNull();
   });
 });

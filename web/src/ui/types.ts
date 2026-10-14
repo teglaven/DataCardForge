@@ -1,10 +1,13 @@
 /**
  * Card-layer types.
  *
- * These mirror the Qt widget layer (`src/widgets/BaseCard.h`, `MatrixCard.h`,
- * `ChartCard.h`) but expressed as plain data: a card is a record in the store, and a
- * React component renders it. Keeping cards as data (rather than classes) is what
- * makes the workspace persistable and the dependency graph easy to reason about.
+ * A card is a record in the store and a React component renders it. Keeping cards as
+ * data (rather than classes) is what makes the workspace persistable and the dependency
+ * graph easy to reason about.
+ *
+ * The header comment used to describe these as mirroring the Qt widget layer; that C++
+ * tree was removed on 2026-10-15 (docs/decisions/2026-10-15-qt-implementation-removed.md),
+ * so this file is now the authoritative definition rather than a port.
  */
 
 import type { SmoothingOptions } from '../core/Smoothing.ts';
@@ -32,9 +35,24 @@ export interface CardBase extends CardBounds {
 
 /** One parsed file inside a matrix card. */
 export interface MatrixSource {
-  /** Display name — the file name. */
+  /** Display name — the file name. Unique within its card, not globally. */
   name: string;
   matrixId: number;
+}
+
+/**
+ * Byte identity of a loaded file. Two loads with the same size + lastModified are the
+ * same bytes; a different identity under the same name is a *new* file and must not
+ * reuse an older parse.
+ */
+export interface FileIdentity {
+  size: number;
+  lastModified: number;
+}
+
+/** Cache key for a parse: the bytes, not the label. */
+export function identityKey(identity: FileIdentity): string {
+  return `${identity.size}:${identity.lastModified}`;
 }
 
 export interface MatrixCardModel extends CardBase {
@@ -43,7 +61,7 @@ export interface MatrixCardModel extends CardBase {
   sources: MatrixSource[];
   /** Index into `sources` of the file currently displayed. */
   activeSource: number;
-  /** File-backed tables are read-only, matching the Qt frontend. */
+  /** File-backed tables are read-only. Editing belongs to non-file-backed cards. */
   readOnly: boolean;
 }
 

@@ -27,3 +27,9 @@ data-workbench/docs/private/
 
 # ── Obsidian local state ────────────────────────────────────────────────────
 data-workbench/docs/.obsidian/workspace*
+
+# ── Local end-to-end test runtime (rootless Chromium + its .so deps) ───────
+# Reproducible machine-local scaffolding for scripts/smoke.mjs, never published.
+.local-libs/
+.pw-browsers/
+.npm-cache/

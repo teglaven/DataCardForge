@@ -17,11 +17,11 @@ npm install
 npm run dev        # 开发服务器（默认 http://localhost:5173）
 npm run build      # 类型检查 + 生产构建 → dist/
 npm run preview    # 预览生产构建
-npm test           # 154 个单元测试（vitest）
+npm test           # 171 个单元测试（vitest）
 npm run typecheck  # 仅类型检查
 ```
 
-端到端冒烟测试（58 项检查，需要先起 `npm run preview`）：
+端到端冒烟测试（61 项检查，需要先起 `npm run preview`）：
 
 ```bash
 node scripts/smoke.mjs http://127.0.0.1:4173
@@ -101,8 +101,10 @@ PDF 绘图算子，工作量大且保真度风险高。本项目**手写了一�
 | 多列图表 | 图表可挂多列（点「+ 添加列」），配合「图型」下拉切换；散点/回归按 (X,Y) 配对 |
 | 大表虚拟滚动 | 只渲染可见行（实测 10 000 行 → 23 个行节点） |
 | 右键列头出图 | 列头右键直接选图型（列数不够的图型会置灰） |
-| 平滑 | 滑动平均 / 指数 / 中值 / Savitzky–Golay（与 C++ `Smoothing.cpp` 逐一对照） |
-| 连接线 | 贝塞尔曲线；源卡片激活=红、目标激活=蓝、都未激活=灰（背景层） |
+| 平滑 | 滑动平均 / 指数 / 中值 / Savitzky–Golay（移植时与已删除的 C++ `Smoothing.cpp` 逐行对照，现由 18 个测试锁定） |
+| 连接线 | 贝塞尔曲线；源卡片激活=红、目标激活=蓝、都未激活=灰（背景层）；拖拽/缩放/**表格滚动**均实时跟随 |
+| 解析离开主线程 | 文件解析在 Web Worker 中进行，无 Worker 环境自动回退内联执行 |
+| 内容寻址缓存 | 按 `size`+`lastModified` 复用解析结果；同名不同内容的文件不会被当成同一个 |
 | 依赖保护 | 有图表依赖的表格拒绝关闭，连线闪烁提示 |
 | 表格导出 | 当前表格导出 CSV |
 | 工作区持久化 | 保存/恢复工作区（卡片布局 + 图型配置 + 依赖 + 已解析数据）为 JSON |
@@ -144,7 +146,7 @@ src/
 ├── core/                    # 与前端框架无关的数据层（对应 C++ 的 core/）
 │   ├── MatrixData.ts        #   列式矩阵：Pos.N 列 + annotation + number[]
 │   ├── FileLoader.ts        #   加载器抽象 + 首行标题识别 + 文本解码
-│   ├── DependencyGraph.ts   #   卡片依赖图（dependent → dependsOn）
+│   ├── DependencyGraph.ts   #   卡片依赖图（dependent → dependsOn）+ 环检测 + 边去重
 │   ├── Smoothing.ts         #   4 种平滑算法 + SG 系数求解
 │   ├── stats.ts             #   统计量：分位数/KDE/直方图/OLS/相关/离群点
 │   └── numeric.ts           #   严格数字解析（fast_float 的替代）
@@ -156,6 +158,9 @@ src/
 │   ├── pdf.ts               #   无依赖的极简 PDF 生成器
 │   └── palette.ts           #   色盲友好调色板（Okabe–Ito）
 ├── loaders/                 # 具体格式解析
+│   ├── parse.worker.ts      #   worker 入口：解析并回传 ColumnPayload[]
+│   ├── parseWorker.ts       #   主线程侧客户端 + 无 worker 时的内联回退
+│   └── parseTypes.ts        #   两侧共享的线格式（独立模块，避免 import 期访问 self）
 ├── ui/
 │   ├── App.tsx              #   根组件：菜单动作、文件摄取、导入导出
 │   ├── workspaceStore.ts    #   卡片状态 + 依赖图 + 关闭规则
@@ -164,8 +169,8 @@ src/
 │   ├── i18n.ts              #   中英词典
 │   ├── fileActions.ts       #   文件选择 / 下载 / 工作区读写
 │   └── components/          #   CardCanvas / CardShell / MatrixCard / ChartCard …
-scripts/smoke.mjs            # headless Chromium 端到端冒烟（58 项检查）
-tests/                       # vitest：154 个用例
+scripts/smoke.mjs            # headless Chromium 端到端冒烟（61 项检查）
+tests/                       # vitest：171 个用例（*.dom.test.tsx 走 jsdom）
 docs/screenshots/            # 文档配图
 ```
 
@@ -215,13 +220,14 @@ dist/assets/xlsx-*.js          492    kB │ gzip 160    kB   ← 首次打开 x
 
 ## 已知限制
 
-- 未实现 Eigen / 逐元素公式计算（仍是下一步的后端优先级）。
+- 未实现逐元素公式计算；线性代数后端尚未立项（原「Eigen 集成」条目已随 Qt 代码删除而失去载体，见下）。
+- 工作区保存的是**已解析数据**而非文件引用，大文件会得到很大的 JSON。
 - 缺少少数进阶图型：等高线/密度二维图、带/带状误差（confidence band）已在回归图中提供，
   但**箱线图未支持凹口（notched）**、**未支持分组箱线图布局**。
 - PDF 导出为位图封装（详见上文「导出」），不是矢量 PDF。
 - 未提供 EPS（浏览器端无可行路径，见上文）。
 - 表格单元格目前仅文件来源（只读）；可编辑卡片与公式求值未实现。
-- 工作区 JSON 保存的是**已解析数据**，大文件会得到很大的 JSON（后续可改为只存文件引用）。
+  （`VirtualTable` 的双击编辑分支存在，但 `MatrixCard` 尚未接入 store 的写路径。）
 
 ## 许可证
 

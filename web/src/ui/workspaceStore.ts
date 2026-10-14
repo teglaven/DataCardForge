@@ -21,12 +21,14 @@ import { defaultChartConfig, type ChartConfig, type ChartSource } from '../chart
 import { chartTypeDef, minimumColumns, type ChartTypeId } from '../charts/chartTypes.ts';
 import { lineColor } from '../charts/palette.ts';
 import {
+  identityKey,
   isChartCard,
   isMatrixCard,
   type CardModel,
   type ChartCardModel,
   type MatrixCardModel,
   type MatrixSnapshot,
+  type FileIdentity,
   type WorkspaceSnapshot,
 } from './types.ts';
 import { createTranslator, detectLocale, type Locale, type MessageKey } from './i18n.ts';
@@ -58,8 +60,13 @@ interface WorkspaceState {
   cards: CardModel[];
   /** Parsed matrices by id. Kept outside the cards so charts can share them. */
   matrices: Map<number, MatrixData>;
-  /** file name -> matrix id, so re-opening the same file reuses the parse. */
-  matrixIdByFile: Map<string, number>;
+  /**
+   * Byte identity (`size:lastModified`) -> matrix id, so re-opening the *same bytes*
+   * reuses a parse. Keyed on content, never on file name: two different files routinely
+   * share a name (`export.csv` overwritten daily), and returning the older parse for the
+   * newer bytes would silently plot stale measurements.
+   */
+  matrixIdByIdentity: Map<string, number>;
   selectedId: number | null;
   dependencies: DependencyGraph;
   /** Card that should blink because a close was blocked. */
@@ -75,7 +82,9 @@ interface WorkspaceState {
   nextMatrixId: number;
 
   // ── card lifecycle ──────────────────────────────────────────────────
-  addMatrixCard: (entries: Array<{ name: string; matrix: MatrixData }>) => number;
+  addMatrixCard: (
+    entries: Array<{ name: string; matrix: MatrixData; identity?: FileIdentity }>,
+  ) => number;
   addChartCard: (matrixCardId: number, columnIndex: number, chartType?: ChartTypeId) => number | null;
   removeCard: (id: number) => boolean;
   closeAllCards: () => void;
@@ -180,7 +189,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
   return {
     cards: [],
     matrices: new Map(),
-    matrixIdByFile: new Map(),
+    matrixIdByIdentity: new Map(),
     selectedId: null,
     dependencies: new DependencyGraph(),
     blockedCardId: null,
@@ -198,21 +207,26 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const cardId = state.nextCardId;
       const z = topZ() + 1;
 
-      // Reuse already-parsed matrices by file name; allocate new ids otherwise.
+      // Reuse an already-parsed matrix only when the *bytes* match; allocate a new id
+      // otherwise. An entry without an identity (a programmatically built table, or a
+      // restored snapshot) is never shared — it gets its own matrix.
       const matrices = new Map(state.matrices);
-      const matrixIdByFile = new Map(state.matrixIdByFile);
+      const matrixIdByIdentity = new Map(state.matrixIdByIdentity);
       let nextMatrixId = state.nextMatrixId;
       const sources: Array<{ name: string; matrixId: number }> = [];
 
       for (const entry of entries) {
-        const existing = matrixIdByFile.get(entry.name);
-        if (existing !== undefined && matrices.has(existing)) {
-          sources.push({ name: entry.name, matrixId: existing });
-          continue;
+        const key = entry.identity ? identityKey(entry.identity) : null;
+        if (key !== null) {
+          const existing = matrixIdByIdentity.get(key);
+          if (existing !== undefined && matrices.has(existing)) {
+            sources.push({ name: entry.name, matrixId: existing });
+            continue;
+          }
         }
         const matrixId = nextMatrixId++;
         matrices.set(matrixId, entry.matrix);
-        matrixIdByFile.set(entry.name, matrixId);
+        if (key !== null) matrixIdByIdentity.set(key, matrixId);
         sources.push({ name: entry.name, matrixId });
       }
 
@@ -236,7 +250,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       set({
         cards: [...state.cards, card],
         matrices,
-        matrixIdByFile,
+        matrixIdByIdentity,
         nextCardId: cardId + 1,
         nextMatrixId,
         selectedId: cardId,
@@ -293,7 +307,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       // The chart depends on the matrix *card*: this is what makes "switch file in the
       // table, chart follows" work even though each file is a separate matrix.
-      state.dependencies.addDependency(cardId, matrixCardId);
+      // Guarded against loops — once FunctionCard chains cards together, a chart could
+      // otherwise end up depending on itself through a longer path.
+      const cycle = state.dependencies.addDependency(cardId, matrixCardId);
+      if (cycle) {
+        get().showToast('error', `循环依赖：${cycle.join(' → ')}`);
+        return null;
+      }
 
       set({
         cards: [...state.cards, card],
@@ -322,17 +342,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       const cards = state.cards.filter((c) => c.id !== id);
       const matrices = new Map(state.matrices);
-      const matrixIdByFile = new Map(state.matrixIdByFile);
+      const matrixIdByIdentity = new Map(state.matrixIdByIdentity);
 
       if (isMatrixCard(card)) {
         for (const source of card.sources) {
-          // Drop the parse only when no remaining card refers to it.
+          // Drop the parse only when no remaining card refers to it. The identity cache
+          // is pruned by scanning it for the id that just died — keying on name would
+          // delete the wrong entry whenever two files share a label.
           const stillUsed = cards.some(
             (c) => isMatrixCard(c) && c.sources.some((s) => s.matrixId === source.matrixId),
           );
           if (!stillUsed) {
             matrices.delete(source.matrixId);
-            matrixIdByFile.delete(source.name);
+            for (const [key, mid] of matrixIdByIdentity) {
+              if (mid === source.matrixId) matrixIdByIdentity.delete(key);
+            }
           }
         }
       }
@@ -342,7 +366,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       set({
         cards,
         matrices,
-        matrixIdByFile,
+        matrixIdByIdentity,
         selectedId: state.selectedId === id ? null : state.selectedId,
         blockedCardId: state.blockedCardId === id ? null : state.blockedCardId,
       });
@@ -353,7 +377,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       set((state) => ({
         cards: [],
         matrices: new Map(),
-        matrixIdByFile: new Map(),
+        matrixIdByIdentity: new Map(),
         selectedId: null,
         blockedCardId: null,
         blockNonce: state.blockNonce + 1,
@@ -595,11 +619,24 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     toSnapshot() {
       const state = get();
       const matrices: MatrixSnapshot[] = [];
+
+      // Resolve each matrix's display name from the cards that actually reference it.
+      // The identity cache cannot serve this purpose — it is keyed by bytes, not by label,
+      // and a name lookup here was what previously degraded to `#id` when two cards shared
+      // a file name. A matrix nothing references still gets a stable placeholder.
+      const nameForMatrix = (matrixId: number): string => {
+        for (const card of state.cards) {
+          if (!isMatrixCard(card)) continue;
+          const source = card.sources.find((s) => s.matrixId === matrixId);
+          if (source) return source.name;
+        }
+        return `#${matrixId}`;
+      };
+
       for (const [id, matrix] of state.matrices) {
-        const name = [...state.matrixIdByFile.entries()].find(([, mid]) => mid === id)?.[0] ?? `#${id}`;
         matrices.push({
           id,
-          name,
+          name: nameForMatrix(id),
           columns: matrix.columns().map((col) => ({
             posName: col.posName,
             annotation: col.annotation,
@@ -619,7 +656,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
     loadSnapshot(snapshot) {
       const matrices = new Map<number, MatrixData>();
-      const matrixIdByFile = new Map<string, number>();
       for (const entry of snapshot.matrices) {
         const matrix = new MatrixData();
         for (const col of entry.columns) {
@@ -627,12 +663,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           matrix.setColumnAnnotation(matrix.columnCount() - 1, col.annotation);
         }
         matrices.set(entry.id, matrix);
-        matrixIdByFile.set(entry.name, entry.id);
       }
 
+      // The identity cache is deliberately left empty after a restore: the bytes are no
+      // longer on disk, so re-dropping the same file must produce a fresh parse rather
+      // than silently aliasing to restored data.
+
       // Rebuild the graph from the restored chart lines. A line references a parsed
-      // matrix, so resolve it back to the matrix card that owns it.
+      // matrix, so resolve it back to the matrix card that owns it. Refused edges
+      // (loops) are skipped — a hand-edited save file must not corrupt close-protection.
       const dependencies = new DependencyGraph();
+      let droppedEdges = 0;
       for (const card of snapshot.cards) {
         if (!isChartCard(card)) continue;
         const ownerIds = new Set<number>();
@@ -643,13 +684,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           );
           if (owner) ownerIds.add(owner.id);
         }
-        for (const ownerId of ownerIds) dependencies.addDependency(card.id, ownerId);
+        for (const ownerId of ownerIds) {
+          if (dependencies.addDependency(card.id, ownerId)) droppedEdges += 1;
+        }
       }
 
       set({
         cards: snapshot.cards,
         matrices,
-        matrixIdByFile,
+        matrixIdByIdentity: new Map(),
         dependencies,
         nextCardId: snapshot.nextCardId,
         nextMatrixId: snapshot.nextMatrixId,
@@ -657,13 +700,20 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         blockedCardId: null,
         blockNonce: 1,
       });
+
+      if (droppedEdges > 0) {
+        get().showToast(
+          'error',
+          `工作区含 ${droppedEdges} 条循环依赖，已忽略（保存文件可能被手工编辑过）`,
+        );
+      }
     },
 
     reset() {
       set({
         cards: [],
         matrices: new Map(),
-        matrixIdByFile: new Map(),
+        matrixIdByIdentity: new Map(),
         selectedId: null,
         dependencies: new DependencyGraph(),
         blockedCardId: null,
