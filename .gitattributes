@@ -1,0 +1,26 @@
+# Normalise line endings: the repository stores LF, the checkout stays LF.
+# Without this, a Windows editor silently rewrites whole files to CRLF and every
+# subsequent diff becomes unreadable (see docs/log/2026-10-15.md).
+* text=auto eol=lf
+
+# Never touch real binary payloads.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.xlsx binary
+*.xls binary
+*.zip binary
+*.gz binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.lib binary
+*.o binary
+*.obj binary
+
+# Shell scripts must stay LF even when checked out on Windows.
+*.sh text eol=lf

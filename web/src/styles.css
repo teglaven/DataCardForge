@@ -1,0 +1,887 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   Data Workbench — web theme
+   Carries over the Qt "Fusion" look: neutral surfaces, a light/dark adaptive
+   palette, flat sub-window title bars, and the card/connection colours used by
+   the original ConnectionOverlay.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg: #eceff3;
+  --surface: #ffffff;
+  --surface-alt: #f6f7f9;
+  --border: #d3d7de;
+  --border-strong: #b9bfc9;
+  --text: #1d2126;
+  --text-dim: #6a7280;
+  --accent: #2f6fd0;
+  --accent-soft: rgba(47, 111, 208, 0.12);
+  --danger: #c83232;
+  --shadow: 0 6px 18px rgba(20, 26, 38, 0.14);
+  --shadow-active: 0 10px 28px rgba(20, 26, 38, 0.24);
+  --row-height: 22px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e2127;
+    --surface: #262a31;
+    --surface-alt: #2c3138;
+    --border: #3a4048;
+    --border-strong: #4a515b;
+    --text: #e6e9ee;
+    --text-dim: #9aa3b0;
+    --accent: #5c9ae8;
+    --accent-soft: rgba(92, 154, 232, 0.18);
+    --shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    --shadow-active: 0 10px 28px rgba(0, 0, 0, 0.55);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans SC", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* ── Shell layout ───────────────────────────────────────────────────── */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ── Menu bar ───────────────────────────────────────────────────────── */
+
+.menubar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.menubar__brand {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-right: 14px;
+  color: var(--text-dim);
+}
+
+.menubar__menu {
+  position: relative;
+}
+
+.menubar__trigger,
+.menubar__item {
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding: 5px 11px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.menubar__trigger:hover,
+.menubar__trigger--open,
+.menubar__item:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.menubar__item:disabled {
+  color: var(--text-dim);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.menubar__item--checked::before {
+  content: "✓ ";
+  color: var(--accent);
+}
+
+.menubar__dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  z-index: 5000;
+}
+
+.menubar__separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* ── Canvas (MDI plane) ─────────────────────────────────────────────── */
+
+.canvas {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+.canvas--dragging {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+/* The card plane itself must not swallow clicks: only the cards it contains should
+   receive pointer events, so the empty state and the bare-canvas gestures stay usable. */
+.canvas__cards {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.canvas__cards > * {
+  pointer-events: auto;
+}
+
+.canvas__drop-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+/* ── Connection layer ───────────────────────────────────────────────── */
+
+.connection-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Connections are a background visualization: never intercept input. */
+  pointer-events: none;
+  z-index: 900;
+}
+
+.connection path {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.connection--bg {
+  opacity: 0.75;
+}
+
+.connection__header-box {
+  stroke-width: 2;
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────── */
+
+.card {
+  /* react-rnd writes `display: inline-block` inline, which would otherwise win over
+     this class and let tall content (a 10 000-row table) stretch the card instead of
+     scrolling inside it — so the flex column layout is enforced. */
+  display: flex !important;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.card--active {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-active), 0 0 0 1px var(--accent-soft);
+}
+
+.card__titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 6px 0 10px;
+  /* Flat title bar blended into the theme, as the Qt build flattened QMdiSubWindow. */
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+}
+
+.card--active .card__titlebar {
+  background: var(--accent-soft);
+}
+
+.card__title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.card__badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+
+.card__close {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.card__close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.card__close--blocked {
+  color: var(--danger);
+}
+
+.card__body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Without this a flex child that sizes to content (the table canvas) would push the
+     body taller instead of letting the inner scroll container do the scrolling. */
+  overflow: hidden;
+}
+
+/* ── Matrix card ────────────────────────────────────────────────────── */
+
+.matrix-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 3px;
+  gap: 3px;
+}
+
+.matrix-card__selector,
+.matrix-card__single-file {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.matrix-card__single-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+
+.matrix-card__empty {
+  padding: 20px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+/* ── Virtual table ──────────────────────────────────────────────────── */
+
+.vtable {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  /* Bounds the flex item so `.vtable__viewport` scrolls instead of the canvas
+     stretching the card and defeating virtualization. */
+  overflow: hidden;
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.vtable__header {
+  flex: 0 0 auto;
+  overflow: hidden;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.vtable__header-inner {
+  display: grid;
+  height: 100%;
+  will-change: transform;
+}
+
+.vtable__corner,
+.vtable__colhead {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.vtable__colhead {
+  cursor: context-menu;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.vtable__colhead:hover {
+  background: var(--accent-soft);
+}
+
+.vtable__colhead--highlight {
+  background: var(--accent-soft);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.vtable__viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.vtable__canvas {
+  position: relative;
+}
+
+.vtable__row {
+  position: absolute;
+  left: 0;
+  display: grid;
+  align-items: center;
+  will-change: transform;
+}
+
+.vtable__row--odd {
+  background: color-mix(in srgb, var(--surface-alt) 70%, transparent);
+}
+
+.vtable__rowhead {
+  position: sticky;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  padding-right: 6px;
+  color: var(--text-dim);
+  background: var(--surface-alt);
+  border-right: 1px solid var(--border);
+  z-index: 1;
+}
+
+.vtable__cell,
+.vtable__input {
+  height: 100%;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.vtable__input {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 0;
+  border-right: 1px solid var(--border);
+  outline: 2px solid var(--accent);
+  text-align: right;
+}
+
+/* ── Chart card ─────────────────────────────────────────────────────── */
+
+.chart-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.chart-card__plot {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* ECharts measures this element; give it a usable floor so a freshly created card
+     always has a non-zero drawing box. */
+  height: 100%;
+  min-block-size: 80px;
+}
+
+.chart-card__empty {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+/* ── Chart toolbar: type / options / export ─────────────────────────── */
+
+.chart-card__toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.chart-card__tp {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.chart-card__tbutton {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chart-card__tbutton:hover,
+.chart-card__tbutton.is-open {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chart-card__spacer {
+  flex: 1 1 auto;
+}
+
+.chart-card__hint {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Dropdown panels. `z-index` must clear the connection layer (900). */
+.chart-card__popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 3000;
+  min-width: 150px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  box-shadow: var(--shadow);
+}
+
+.chart-card__popup--wide {
+  min-width: 220px;
+  gap: 4px;
+}
+
+.chart-card__popup--export {
+  left: auto;
+  right: 0;
+  min-width: 210px;
+}
+
+.chart-card__popup-item {
+  font: inherit;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.chart-card__popup-item:hover {
+  background: var(--accent-soft);
+}
+
+.chart-card__popup-item.is-active {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.chart-card__vec {
+  font-style: normal;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  color: #ffffff;
+  background: var(--accent);
+}
+
+.chart-card__field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.chart-card__field--tight {
+  padding: 3px 8px 1px;
+  border-top: 1px solid var(--border);
+  margin-top: 3px;
+}
+
+.chart-card__field input[type="range"] {
+  width: 84px;
+  accent-color: var(--accent);
+}
+
+.chart-card__field em {
+  font-style: normal;
+  font-family: var(--mono);
+}
+
+/* ── Chart footer: column chips + smoothing ─────────────────────────── */
+
+.chart-card__footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-alt);
+  border-top: 1px solid var(--border);
+}
+
+.chart-card__columns {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chart-card__label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.chart-card__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 200px;
+  padding: 1px 4px 1px 8px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-card__chip-x {
+  font: inherit;
+  line-height: 1;
+  padding: 0 4px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.chart-card__chip-x:hover {
+  color: #ffffff;
+  background: var(--danger);
+}
+
+.chart-card__add {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  cursor: pointer;
+  max-width: 190px;
+}
+
+.chart-card__controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 5px 8px;
+}
+
+.chart-card__control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.chart-card__control select,
+.chart-card__number {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.chart-card__control input[type="range"] {
+  width: 120px;
+  accent-color: var(--accent);
+}
+
+.chart-card__control em {
+  font-style: normal;
+  font-family: var(--mono);
+  min-width: 34px;
+  text-align: right;
+}
+
+.chart-card__number {
+  width: 56px;
+}
+
+/* ── Context menu ───────────────────────────────────────────────────── */
+
+.context-menu {
+  position: fixed;
+  z-index: 6000;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.context-menu:hover {
+  background: var(--accent-soft);
+}
+
+/* Context menu rendered as a titled list (the chart-type picker). */
+.context-menu--list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px;
+  min-width: 170px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.context-menu--list:hover {
+  background: var(--surface);
+}
+
+.context-menu__title {
+  padding: 3px 8px 5px;
+  margin-bottom: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.context-menu__item {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.context-menu__item:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.context-menu__item:disabled {
+  color: var(--text-dim);
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Empty state ────────────────────────────────────────────────────── */
+
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.empty-state--drop {
+  background: var(--accent-soft);
+}
+
+.empty-state__badge {
+  font-size: 42px;
+  line-height: 1;
+  opacity: 0.5;
+}
+
+.empty-state__title {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.empty-state__hint {
+  margin: 0;
+  max-width: 460px;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.empty-state__button {
+  pointer-events: auto;
+  font: inherit;
+  padding: 7px 18px;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.empty-state__button:hover {
+  filter: brightness(1.08);
+}
+
+/* ── Status bar ─────────────────────────────────────────────────────── */
+
+.statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.statusbar__message {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar__meta,
+.statusbar__hint {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+}
+
+.statusbar__hint {
+  opacity: 0.7;
+}
+
+.statusbar__error {
+  color: var(--danger);
+  font-weight: 700;
+}
