@@ -25,6 +25,12 @@ export interface ChartSource {
 export interface ChartConfig {
   type: ChartTypeId;
   sources: ChartSource[];
+  /**
+   * Optional X-axis source. When set, the chart uses this column's values as X instead
+   * of the row index (`No.N`). Enables time-series and arbitrary X-axis plots.
+   * `null` means "use row index" (the default for line/bar/histogram/boxplot/violin/errorBar).
+   */
+  xAxisSource: ChartSource | null;
   /** Render series on a logarithmic value axis. */
   logScale: boolean;
   /** Put every second series on a right-hand axis. */
@@ -47,6 +53,7 @@ export function defaultChartConfig(type: ChartTypeId, sources: ChartSource[]): C
   return {
     type,
     sources,
+    xAxisSource: null,
     logScale: false,
     secondAxis: false,
     showFitLine: true,
@@ -67,11 +74,14 @@ export interface XYPoint {
 /**
  * Pair a source's values with the row index (`No.N`, 1-based) — the default x axis for
  * line/bar/boxplot/violin/error-bar charts, matching the original Qt behaviour.
+ * When `xSource` is provided, its values are used as X instead of the row index.
  */
-export function withRowIndex(source: ChartSource): XYPoint[] {
+export function withRowIndex(source: ChartSource, xSource?: ChartSource | null): XYPoint[] {
   const points: XYPoint[] = [];
-  for (let i = 0; i < source.raw.length; ++i) {
-    points.push({ x: i + 1, y: source.raw[i] });
+  const len = Math.min(source.raw.length, xSource?.raw.length ?? source.raw.length);
+  for (let i = 0; i < len; ++i) {
+    const x = xSource ? xSource.raw[i] : i + 1;
+    points.push({ x, y: source.raw[i] });
   }
   return points;
 }
@@ -92,14 +102,14 @@ export function pair(xSource: ChartSource, ySource: ChartSource): XYPoint[] {
  * used; for `matrix` every source participates.
  */
 export function resolveSeries(config: ChartConfig): Array<{ label: string; points: XYPoint[] }> {
-  const { sources } = config;
+  const { sources, xAxisSource } = config;
   const def = chartTypeDef(config.type);
 
   switch (def.columnArity) {
     case 'single':
       return sources.slice(0, 1).map((source) => ({
         label: source.label,
-        points: withRowIndex(source),
+        points: withRowIndex(source, xAxisSource),
       }));
 
     case 'pairs': {
@@ -114,7 +124,7 @@ export function resolveSeries(config: ChartConfig): Array<{ label: string; point
       // index so the user sees the data rather than an empty chart.
       if (sources.length % 2 === 1 && sources.length > 1) {
         const last = sources[sources.length - 1];
-        out.push({ label: `${last.label} (no x)`, points: withRowIndex(last) });
+        out.push({ label: `${last.label} (no x)`, points: withRowIndex(last, xAxisSource) });
       }
       return out;
     }
@@ -124,7 +134,7 @@ export function resolveSeries(config: ChartConfig): Array<{ label: string; point
     default:
       return sources.map((source) => ({
         label: source.label,
-        points: withRowIndex(source),
+        points: withRowIndex(source, xAxisSource),
       }));
   }
 }

@@ -64,6 +64,7 @@ export function CardShell({
   return (
     <Rnd
       className={`card ${variant}${active ? ' card--active' : ''}`}
+      data-card-id={card.id}
       style={{ zIndex: card.z }}
       size={{ width: card.width, height: card.height }}
       position={{ x: card.x, y: card.y }}

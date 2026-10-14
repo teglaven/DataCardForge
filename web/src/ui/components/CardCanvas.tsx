@@ -9,10 +9,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { invalidateLayout, setCanvasElement } from '../cardMetrics.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
-import { isMatrixCard } from '../types.ts';
+import { isFormulaCard, isMatrixCard } from '../types.ts';
 import { ConnectionLayer } from '../ConnectionLayer.tsx';
 import { CardShell } from './CardShell.tsx';
 import { ChartCard } from './ChartCard.tsx';
+import { FormulaCard } from './FormulaCard.tsx';
 import { EmptyState } from './EmptyState.tsx';
 import { MatrixCard } from './MatrixCard.tsx';
 
@@ -34,6 +35,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
   const select = useWorkspace((s) => s.select);
   const removeCard = useWorkspace((s) => s.removeCard);
   const addChartCard = useWorkspace((s) => s.addChartCard);
+  const addFormulaCard = useWorkspace((s) => s.addFormulaCard);
   const showToast = useWorkspace((s) => s.showToast);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -107,10 +109,38 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
               onActivate={() => bringToFront(card.id)}
               onClose={() => handleClose(card.id)}
               onCloseBlocked={() => reportBlocked(card.id)}
-              onOpenChart={(columnIndex) => {
-                const id = addChartCard(card.id, columnIndex);
+              onOpenChart={(columnIndex, type) => {
+                const id = addChartCard(card.id, columnIndex, type);
                 if (id !== null) select(id);
               }}
+              onOpenFormula={() => {
+                const id = addFormulaCard(card.id);
+                if (id !== null) select(id);
+              }}
+            />
+          );
+        }
+
+        if (isFormulaCard(card)) {
+          const sourceCard = cards.find((c) => c.id === card.sourceCardId);
+          const sourceMatrix =
+            sourceCard && isMatrixCard(sourceCard)
+              ? matrices.get(sourceCard.sources[sourceCard.activeSource]?.matrixId ?? -1)
+              : undefined;
+          const sourceColumnNames = sourceMatrix
+            ? sourceMatrix.columns().map((c) => c.annotation || c.posName)
+            : [];
+          return (
+            <FormulaCard
+              key={card.id}
+              card={card}
+              resultMatrix={matrices.get(card.resultMatrixId)}
+              sourceColumnNames={sourceColumnNames}
+              active={active}
+              closeBlocked={closeBlocked}
+              onActivate={() => bringToFront(card.id)}
+              onClose={() => handleClose(card.id)}
+              onCloseBlocked={() => reportBlocked(card.id)}
             />
           );
         }
@@ -136,6 +166,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
       handleClose,
       reportBlocked,
       addChartCard,
+      addFormulaCard,
       select,
     ],
   );

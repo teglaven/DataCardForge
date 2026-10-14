@@ -797,6 +797,133 @@ body {
   cursor: default;
 }
 
+.context-menu__separator {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--border);
+}
+
+/* ── Formula card ───────────────────────────────────────────────────── */
+
+.formula-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.formula-card__editor {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-alt);
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+.formula-card__hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.formula-card__cols {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+.formula-card__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 3px;
+  flex-wrap: wrap;
+}
+
+.formula-card__row--error .formula-card__expr {
+  border-color: var(--danger);
+}
+
+.formula-card__name {
+  width: 80px;
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.formula-card__eq {
+  font-family: var(--mono);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.formula-card__expr {
+  flex: 1 1 auto;
+  min-width: 120px;
+  font-size: 12px;
+  font-family: var(--mono);
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.formula-card__expr:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.formula-card__remove {
+  font-size: 14px;
+  padding: 0 4px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.formula-card__remove:hover {
+  color: #fff;
+  background: var(--danger);
+}
+
+.formula-card__error {
+  font-size: 11px;
+  color: var(--danger);
+  width: 100%;
+  padding-left: 90px;
+}
+
+.formula-card__add {
+  font-size: 11px;
+  padding: 2px 8px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: 4px;
+  cursor: pointer;
+  margin-top: 2px;
+}
+
+.formula-card__add:hover {
+  background: var(--accent-soft);
+}
+
+.formula-card__empty {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  padding: 16px;
+  text-align: center;
+}
+
 /* ── Empty state ────────────────────────────────────────────────────── */
 
 .empty-state {

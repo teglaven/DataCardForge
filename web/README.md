@@ -3,9 +3,9 @@
 卡片式**数据矩阵批处理工作台**的 Web 前端（React + Vite + TypeScript）。
 
 > 这是项目的**主实现**（自 2026-10-14 起）。前端选型结论与理由见
-> [`docs/decisions/2026-10-14-frontend-web-chosen.md`](../data-workbench/docs/decisions/2026-10-14-frontend-web-chosen.md)。
+> [`docs/decisions/2026-10-14-frontend-web-chosen.md`](../docs/docs/decisions/2026-10-14-frontend-web-chosen.md)。
 > 原先作为行为参照的 Qt Widgets 版本已于 2026-10-15 **彻底移除**，见
-> [`2026-10-15-qt-implementation-removed.md`](../data-workbench/docs/decisions/2026-10-15-qt-implementation-removed.md)：
+> [`2026-10-15-qt-implementation-removed.md`](../docs/docs/decisions/2026-10-15-qt-implementation-removed.md)：
 > 本目录下不再有并行实现需要同步，语义的唯一权威来源是本目录的源码与 `tests/`。
 
 ## 快速开始
@@ -178,7 +178,7 @@ docs/screenshots/            # 文档配图
 
 > ⚠️ **下表左侧的 C++ 路径已于 2026-10-15 从仓库删除**，它们不再指向可打开的文件，
 > 只保留作为"每个模块当初是从哪里移植来"的出处记录。恢复方式见
-> [`2026-10-15-qt-implementation-removed.md`](../data-workbench/docs/decisions/2026-10-15-qt-implementation-removed.md)。
+> [`2026-10-15-qt-implementation-removed.md`](../docs/docs/decisions/2026-10-15-qt-implementation-removed.md)。
 
 | C++（已删除） | TypeScript | 说明 |
 |-----|-----------|------|

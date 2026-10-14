@@ -312,6 +312,45 @@ export function ChartCard({
                 onClick={(event) => event.stopPropagation()}
               >
                 {/* Log axis is meaningless for bar (zero-height) and correlation types. */}
+                {/* X-axis source selector — available for types that use row index by default. */}
+                {typeDef.usesRowIndexAsX ? (
+                  <label className="chart-card__field">
+                    <span>{t('chart.xAxis')}</span>
+                    <select
+                      className="card__control"
+                      value={card.config.xAxisSource ? `${card.config.xAxisSource.matrixId}:${card.config.xAxisSource.columnIndex}` : ''}
+                      onChange={(event) => {
+                        const val = event.target.value;
+                        if (!val) {
+                          setChartConfig(card.id, { xAxisSource: null });
+                          return;
+                        }
+                        const [matrixId, columnIndex] = val.split(':').map(Number);
+                        const matrix = matrices.get(matrixId);
+                        if (!matrix || columnIndex >= matrix.columnCount()) return;
+                        const col = matrix.column(columnIndex);
+                        setChartConfig(card.id, {
+                          xAxisSource: {
+                            matrixId,
+                            columnIndex,
+                            label: col.annotation || col.posName,
+                            raw: col.data.slice(),
+                          },
+                        });
+                      }}
+                    >
+                      <option value="">{t('chart.xAxisDefault')}</option>
+                      {availableColumns.map((col) => (
+                        <option
+                          key={`${col.matrixId}:${col.columnIndex}`}
+                          value={`${col.matrixId}:${col.columnIndex}`}
+                        >
+                          {col.label} · {col.file}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 {typeDef.supportsLogScale ? (
                   <label className="chart-card__field">
                     <input

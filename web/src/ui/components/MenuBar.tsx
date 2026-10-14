@@ -14,6 +14,7 @@ export interface MenuActions {
   onOpenWorkspace: () => void;
   onSaveWorkspace: () => void;
   onExportCsv: () => void;
+  onExportAllCharts: () => void;
   onTile: () => void;
   onCascade: () => void;
   onCloseAll: () => void;
@@ -21,6 +22,7 @@ export interface MenuActions {
 
 interface MenuBarProps extends MenuActions {
   canExport: boolean;
+  hasCharts: boolean;
 }
 
 export function MenuBar({
@@ -28,10 +30,12 @@ export function MenuBar({
   onOpenWorkspace,
   onSaveWorkspace,
   onExportCsv,
+  onExportAllCharts,
   onTile,
   onCascade,
   onCloseAll,
   canExport,
+  hasCharts,
 }: MenuBarProps) {
   const { t, locale } = useTranslator();
   const setLocale = useWorkspace((s) => s.setLocale);
@@ -113,6 +117,7 @@ export function MenuBar({
           {item(t('menu.saveWorkspace'), onSaveWorkspace)}
           <div className="menubar__separator" />
           {item(t('menu.exportCsv'), onExportCsv, !canExport)}
+          {item(t('menu.exportAllCharts'), onExportAllCharts, !hasCharts)}
           <div className="menubar__separator" />
           {item(t('menu.closeAll'), onCloseAll)}
         </>,

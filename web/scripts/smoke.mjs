@@ -33,8 +33,8 @@ const baseUrl = process.argv[2] ?? process.env.BASE_URL ?? 'http://127.0.0.1:519
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
-const sampleA = path.join(repoRoot, 'data-workbench', 'sampleData', '1.txt');
-const sampleB = path.join(repoRoot, 'data-workbench', 'sampleData', '2.txt');
+const sampleA = path.join(repoRoot, 'docs', 'sampleData', '1.txt');
+const sampleB = path.join(repoRoot, 'docs', 'sampleData', '2.txt');
 
 const results = [];
 let failures = 0;

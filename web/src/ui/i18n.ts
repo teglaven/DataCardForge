@@ -19,6 +19,7 @@ const dictionaries = {
     'menu.openWorkspace': '打开工作区…',
     'menu.saveWorkspace': '保存工作区',
     'menu.exportCsv': '导出当前表格为 CSV…',
+    'menu.exportAllCharts': '批量导出所有图表 SVG…',
     'menu.tile': '平铺',
     'menu.cascade': '层叠',
     'menu.closeAll': '关闭全部卡片',
@@ -113,6 +114,8 @@ const dictionaries = {
     'chart.exportPdf': '导出 PDF',
     'chart.exportPng': '导出 PNG {ratio}×',
     'chart.pixelRatio': '分辨率',
+    'chart.xAxis': 'X 轴',
+    'chart.xAxisDefault': '行号 (No.N)',
 
     'dialog.unsupported': '不支持的文件格式',
     'dialog.unsupportedBody': '不支持「{name}」。支持：txt、csv、tsv、dat、xlsx',
@@ -121,6 +124,17 @@ const dictionaries = {
     'dialog.openWorkspaceFailed': '无法打开工作区文件',
 
     'newMatrix.title': '新建表格',
+
+    'card.formula': '公式 — {name}',
+    'formula.hint': '可用列：',
+    'formula.namePlaceholder': '列名',
+    'formula.exprPlaceholder': '表达式，如 (A - AVG(A)) / STD(A)',
+    'formula.addColumn': '添加公式列',
+    'formula.remove': '删除此公式',
+    'formula.columns': '列',
+    'formula.rows': '行',
+    'formula.empty': '输入表达式以计算派生列',
+    'menu.newFormula': '新建公式卡…',
   },
 
   en: {
@@ -132,6 +146,7 @@ const dictionaries = {
     'menu.openWorkspace': 'Open Workspace…',
     'menu.saveWorkspace': 'Save Workspace',
     'menu.exportCsv': 'Export Current Table as CSV…',
+    'menu.exportAllCharts': 'Export All Charts as SVG…',
     'menu.tile': 'Tile',
     'menu.cascade': 'Cascade',
     'menu.closeAll': 'Close All Cards',
@@ -226,6 +241,8 @@ const dictionaries = {
     'chart.exportPdf': 'Export PDF',
     'chart.exportPng': 'Export PNG {ratio}×',
     'chart.pixelRatio': 'Resolution',
+    'chart.xAxis': 'X axis',
+    'chart.xAxisDefault': 'Row index (No.N)',
 
     'dialog.unsupported': 'Not Supported',
     'dialog.unsupportedBody': 'Unsupported "{name}". Supported: txt, csv, tsv, dat, xlsx',
@@ -234,6 +251,17 @@ const dictionaries = {
     'dialog.openWorkspaceFailed': 'Cannot open the workspace file',
 
     'newMatrix.title': 'New Table',
+
+    'card.formula': 'Formula — {name}',
+    'formula.hint': 'Available columns: ',
+    'formula.namePlaceholder': 'Column name',
+    'formula.exprPlaceholder': 'Expression, e.g. (A - AVG(A)) / STD(A)',
+    'formula.addColumn': 'Add formula column',
+    'formula.remove': 'Remove this formula',
+    'formula.columns': 'columns',
+    'formula.rows': 'rows',
+    'formula.empty': 'Enter an expression to compute derived columns',
+    'menu.newFormula': 'New Formula Card…',
   },
 } as const;
 

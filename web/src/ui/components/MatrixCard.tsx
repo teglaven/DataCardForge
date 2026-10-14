@@ -34,6 +34,7 @@ interface MatrixCardProps {
   onClose: () => void;
   onCloseBlocked: () => void;
   onOpenChart: (columnIndex: number, type: ChartTypeId) => void;
+  onOpenFormula: () => void;
   onActivate: () => void;
 }
 
@@ -45,11 +46,13 @@ export function MatrixCard({
   onClose,
   onCloseBlocked,
   onOpenChart,
+  onOpenFormula,
   onActivate,
 }: MatrixCardProps) {
   const { t } = useTranslator();
   const setBounds = useWorkspace((s) => s.setBounds);
   const setActiveSource = useWorkspace((s) => s.setActiveSource);
+  const editCell = useWorkspace((s) => s.editCell);
   const showToast = useWorkspace((s) => s.showToast);
 
   const [menu, setMenu] = useState<{ x: number; y: number; column: number } | null>(null);
@@ -142,6 +145,7 @@ export function MatrixCard({
             rowLabel={(n) => t('table.rowHeader', { n })}
             highlightColumn={highlightColumn}
             onMetrics={handleMetrics}
+            onCellChange={(row, col, value) => editCell(card.id, row, col, value)}
             onHeaderClick={(column) =>
               setHighlightColumn((current) => (current === column ? null : column))
             }
@@ -170,6 +174,10 @@ export function MatrixCard({
             showToast('info', t('status.chartCreated', { name: columnName }));
             setMenu(null);
           }}
+          onOpenFormula={() => {
+            onOpenFormula();
+            setMenu(null);
+          }}
         />
       ) : null}
     </CardShell>
@@ -183,6 +191,7 @@ interface ColumnContextMenuProps {
   /** Column count of the matrix currently displayed, used to disable impossible types. */
   columnCount: number;
   onSelect: (type: ChartTypeId) => void;
+  onOpenFormula: () => void;
   onDismiss: () => void;
 }
 
@@ -198,6 +207,7 @@ function ColumnContextMenu({
   columnName,
   columnCount,
   onSelect,
+  onOpenFormula,
   onDismiss,
 }: ColumnContextMenuProps) {
   const { t } = useTranslator();
@@ -236,6 +246,14 @@ function ColumnContextMenu({
           </button>
         );
       })}
+      <div className="context-menu__separator" />
+      <button
+        type="button"
+        className="context-menu__item"
+        onClick={() => onOpenFormula()}
+      >
+        {t('menu.newFormula')}
+      </button>
     </div>
   );
 }

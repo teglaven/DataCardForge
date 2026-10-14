@@ -89,13 +89,6 @@ function smoothed(source: ChartSource, smoothing: SmoothingOptions): number[] {
   return applySmoothing(source.raw, smoothing);
 }
 
-/** `[[rowIndex, value], …]` for the index-based types. */
-function indexPairs(values: readonly number[]): Array<[number, number]> {
-  const data: Array<[number, number]> = new Array(values.length);
-  for (let i = 0; i < values.length; ++i) data[i] = [i + 1, values[i]];
-  return data;
-}
-
 /** Strip NaN/Infinity so ECharts does not plot artefacts. */
 function finite(values: readonly number[]): number[] {
   return values.filter((value) => Number.isFinite(value));
@@ -158,12 +151,17 @@ function yAxisIndexFor(config: ChartConfig, index: number): number {
 
 function lineSeries(context: BuildContext): SeriesOption[] {
   const { config, smoothing } = context;
+  const xData = config.xAxisSource?.raw;
   return config.sources.map((source, index) => {
     const values = smoothed(source, smoothing);
+    const data: Array<[number, number]> = new Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      data[i] = [xData ? xData[i] ?? i + 1 : i + 1, values[i]];
+    }
     return {
       name: source.label,
       type: 'line',
-      data: indexPairs(values),
+      data,
       showSymbol: values.length <= 2,
       sampling: 'lttb',
       lineStyle: { width: 1.6, color: lineColor(index) },
@@ -177,12 +175,17 @@ function lineSeries(context: BuildContext): SeriesOption[] {
 
 function barSeries(context: BuildContext): SeriesOption[] {
   const { config, smoothing } = context;
+  const xData = config.xAxisSource?.raw;
   return config.sources.map((source, index) => {
     const values = smoothed(source, smoothing);
+    const data: Array<[number, number]> = new Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      data[i] = [xData ? xData[i] ?? i + 1 : i + 1, values[i]];
+    }
     return {
       name: source.label,
       type: 'bar',
-      data: indexPairs(values),
+      data,
       stack: config.layout === 'stacked' ? 'total' : undefined,
       large: true,
       largeThreshold: 4000,
@@ -674,7 +677,10 @@ export function buildOption(context: BuildContext): EChartsOption {
   const series = buildSeries(context);
   const categories = config.sources.map((source) => source.label);
   const isHeatmap = config.type === 'heatmap';
-  const kind = isHeatmap ? 'category' : xAxisKind(config);
+  // When an explicit X-axis source is set, the X axis is always a value axis regardless
+  // of chart type — this enables time-series and arbitrary X plots.
+  const hasExplicitX = config.xAxisSource !== null;
+  const kind: AxisKind = isHeatmap ? 'category' : hasExplicitX ? 'value' : xAxisKind(config);
 
   const xAxis =
     kind === 'category'
@@ -693,7 +699,11 @@ export function buildOption(context: BuildContext): EChartsOption {
       : {
           type: 'value' as const,
           scale: true,
-          name: config.type === 'scatter' || config.type === 'regression' ? undefined : 'No.',
+          name: hasExplicitX
+            ? config.xAxisSource!.label
+            : config.type === 'scatter' || config.type === 'regression'
+              ? undefined
+              : 'No.',
           nameLocation: 'end' as const,
           axisLabel: { fontSize: 10 },
           splitLine: { show: true, lineStyle: { color: 'rgba(128,128,128,0.18)' } },

@@ -14,7 +14,7 @@ import type { SmoothingOptions } from '../core/Smoothing.ts';
 import type { ChartConfig, ChartSource } from '../charts/chartModel.ts';
 import type { ChartTypeId } from '../charts/chartTypes.ts';
 
-export type CardKind = 'matrix' | 'chart';
+export type CardKind = 'matrix' | 'chart' | 'formula';
 
 /** A card can be dragged, resized, stacked and closed. */
 export interface CardBounds {
@@ -78,7 +78,23 @@ export interface ChartCardModel extends CardBase {
   smoothing: SmoothingOptions;
 }
 
-export type CardModel = MatrixCardModel | ChartCardModel;
+/** A formula card computes derived columns from expressions over a source matrix card. */
+export interface FormulaCardModel extends CardBase {
+  kind: 'formula';
+  /** The matrix card this formula reads from. */
+  sourceCardId: number;
+  /** One expression per output column. Each produces a new column in the result matrix. */
+  formulas: Array<{
+    /** Display name for the derived column. */
+    name: string;
+    /** The expression, e.g. `(A - AVG(A)) / STD(A)`. */
+    expression: string;
+  }>;
+  /** The computed result matrix id (stored in the matrices map). */
+  resultMatrixId: number;
+}
+
+export type CardModel = MatrixCardModel | ChartCardModel | FormulaCardModel;
 
 export function isMatrixCard(card: CardModel): card is MatrixCardModel {
   return card.kind === 'matrix';
@@ -86,6 +102,10 @@ export function isMatrixCard(card: CardModel): card is MatrixCardModel {
 
 export function isChartCard(card: CardModel): card is ChartCardModel {
   return card.kind === 'chart';
+}
+
+export function isFormulaCard(card: CardModel): card is FormulaCardModel {
+  return card.kind === 'formula';
 }
 
 /** Persisted card snapshot (no matrix payload — that travels in `MatrixSnapshot`). */

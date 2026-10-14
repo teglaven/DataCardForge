@@ -16,7 +16,8 @@ import {
   pickFiles,
   readWorkspace,
 } from './fileActions.ts';
-import { isMatrixCard } from './types.ts';
+import { exportChart } from '../charts/export.ts';
+import { isChartCard, isMatrixCard } from './types.ts';
 import { useWorkspace } from './workspaceStore.ts';
 import { CardCanvas } from './components/CardCanvas.tsx';
 import { MenuBar } from './components/MenuBar.tsx';
@@ -141,6 +142,40 @@ export default function App() {
     setStatus(t('status.exported', { name: `${base}.csv` }));
   }, [t]);
 
+  /** Export every chart card as an SVG file. */
+  const onExportAllCharts = useCallback(async () => {
+    const state = useWorkspace.getState();
+    const chartCards = state.cards.filter(isChartCard);
+    if (chartCards.length === 0) return;
+
+    // We need the DOM containers to extract SVG. Query them by card id.
+    let exported = 0;
+    for (const card of chartCards) {
+      const container = document.querySelector(
+        `.card--chart[data-card-id="${card.id}"] .chart-card__plot`,
+      ) as HTMLElement | null;
+      if (!container) continue;
+      try {
+        const label = card.config.sources[0]?.label ?? `chart-${card.id}`;
+        const safeName = `data-workbench-${card.config.type}-${label}`.replace(
+          /[^\w.-]+/g, '_',
+        );
+        await exportChart(container, 'svg', {
+          name: safeName,
+          pixelRatio: 2,
+          background: '#ffffff',
+        });
+        exported++;
+      } catch {
+        // Skip cards that fail to export; continue with the rest.
+      }
+    }
+
+    if (exported > 0) {
+      showToast('info', t('status.exported', { name: `${exported} SVG(s)` }));
+    }
+  }, [showToast, t]);
+
   /**
    * Tile / cascade need the live canvas size, not the window size, and must re-measure
    * connection anchors once the DOM has applied the new geometry.
@@ -181,6 +216,7 @@ export default function App() {
   );
 
   const exportable = cards.some(isMatrixCard) && matrices.size > 0;
+  const hasCharts = cards.some(isChartCard);
 
   return (
     <div className="app" ref={shellRef}>
@@ -189,7 +225,9 @@ export default function App() {
         onOpenWorkspace={() => void onOpenWorkspace()}
         onSaveWorkspace={onSaveWorkspace}
         onExportCsv={onExportCsv}
+        onExportAllCharts={() => void onExportAllCharts()}
         canExport={exportable}
+        hasCharts={hasCharts}
         onTile={onTile}
         onCascade={onCascade}
         onCloseAll={onCloseAll}

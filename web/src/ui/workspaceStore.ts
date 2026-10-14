@@ -20,12 +20,15 @@ import { DEFAULT_SMOOTHING, type SmoothingOptions } from '../core/Smoothing.ts';
 import { defaultChartConfig, type ChartConfig, type ChartSource } from '../charts/chartModel.ts';
 import { chartTypeDef, minimumColumns, type ChartTypeId } from '../charts/chartTypes.ts';
 import { lineColor } from '../charts/palette.ts';
+import { evaluateExpression } from '../core/expression.ts';
 import {
   identityKey,
   isChartCard,
+  isFormulaCard,
   isMatrixCard,
   type CardModel,
   type ChartCardModel,
+  type FormulaCardModel,
   type MatrixCardModel,
   type MatrixSnapshot,
   type FileIdentity,
@@ -94,6 +97,10 @@ interface WorkspaceState {
 
   // ── matrix card behaviour ───────────────────────────────────────────
   setActiveSource: (cardId: number, index: number) => void;
+  /** Edit a single cell in the active matrix of a matrix card. */
+  editCell: (cardId: number, row: number, col: number, value: number) => void;
+  /** Mark a matrix card as editable (non-file-backed cards). */
+  setEditable: (cardId: number, editable: boolean) => void;
 
   // ── chart card behaviour ────────────────────────────────────────────
   setSmoothing: (cardId: number, options: SmoothingOptions) => void;
@@ -103,6 +110,16 @@ interface WorkspaceState {
   setChartConfig: (cardId: number, patch: Partial<ChartConfig>) => void;
   addChartSource: (cardId: number, matrixId: number, columnIndex: number) => void;
   removeChartSource: (cardId: number, matrixId: number, columnIndex: number) => void;
+
+  // ── formula card behaviour ──────────────────────────────────────────
+  /** Create a formula card that reads from a source matrix card. */
+  addFormulaCard: (sourceCardId: number) => number | null;
+  /** Add or update a formula column. Recomputes the result matrix. */
+  setFormula: (cardId: number, index: number, name: string, expression: string) => void;
+  /** Remove a formula column. */
+  removeFormula: (cardId: number, index: number) => void;
+  /** Force recompute of a formula card's result matrix. */
+  recomputeFormula: (cardId: number) => void;
 
   // ── view helpers ────────────────────────────────────────────────────
   tileCards: (viewportWidth: number, viewportHeight: number) => void;
@@ -126,6 +143,32 @@ let toastCounter = 0;
 
 function nearlyEqual(a: number, b: number): boolean {
   return Math.abs(a - b) < GEOM_EPSILON;
+}
+
+/**
+ * Evaluate a set of formula expressions against a source matrix and return the result
+ * as a new MatrixData. Each formula produces one column in the output.
+ */
+function computeFormulaResult(
+  source: MatrixData,
+  formulas: Array<{ name: string; expression: string }>,
+): MatrixData {
+  const colNames = source.columns().map((c) => c.annotation || c.posName);
+  const colData = source.columns().map((c) => c.data);
+  const columns = colNames.map((name, i) => ({ name, data: colData[i] }));
+
+  const result = new MatrixData();
+  for (const formula of formulas) {
+    try {
+      const values = evaluateExpression(formula.expression, columns);
+      result.appendColumn(formula.name, values);
+    } catch {
+      // Invalid expression — fill with NaN so the card still renders.
+      const len = source.rowCount();
+      result.appendColumn(formula.name, new Array<number>(len).fill(NaN));
+    }
+  }
+  return result;
 }
 
 export const useWorkspace = create<WorkspaceState>((set, get) => {
@@ -441,6 +484,35 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       refreshDependentCharts(cardId);
     },
 
+    editCell(cardId, row, col, value) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isMatrixCard(card)) return;
+      const source = card.sources[card.activeSource];
+      if (!source) return;
+      const matrix = state.matrices.get(source.matrixId);
+      if (!matrix) return;
+      matrix.setCell(row, col, value);
+      // Mutating in place is intentional: MatrixData is a mutable model and charts read
+      // from it directly. The store reference does not change, so React won't re-render
+      // the table — but VirtualTable reads cell values on each render cycle triggered by
+      // scroll or other interactions. For an immediate visual update we bump the card.
+      set({
+        cards: state.cards.map((c) =>
+          c.id === cardId ? { ...c } : c,
+        ),
+      });
+      refreshDependentCharts(cardId);
+    },
+
+    setEditable(cardId, editable) {
+      set((state) => ({
+        cards: state.cards.map((c) =>
+          c.id === cardId && isMatrixCard(c) ? { ...c, readOnly: !editable } : c,
+        ),
+      }));
+    },
+
     // ── chart card behaviour ──────────────────────────────────────────
 
     setSmoothing(cardId, options) {
@@ -548,6 +620,134 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           return { ...card, config: { ...card.config, sources } };
         }),
       }));
+    },
+
+    // ── formula card behaviour ────────────────────────────────────────
+
+    addFormulaCard(sourceCardId) {
+      const state = get();
+      const sourceCard = state.cards.find((c) => c.id === sourceCardId);
+      if (!sourceCard || !isMatrixCard(sourceCard)) return null;
+      const source = sourceCard.sources[sourceCard.activeSource];
+      if (!source) return null;
+      const sourceMatrix = state.matrices.get(source.matrixId);
+      if (!sourceMatrix) return null;
+
+      const cardId = state.nextCardId;
+      const resultMatrixId = state.nextMatrixId;
+
+      // Start with one empty formula referencing the first column.
+      const firstColName = sourceMatrix.columnCount() > 0 ? sourceMatrix.column(0).posName : 'A';
+      const formulas = [{ name: `${firstColName} × 2`, expression: `${firstColName} * 2` }];
+
+      // Compute the initial result matrix.
+      const resultMatrix = computeFormulaResult(sourceMatrix, formulas);
+
+      const matrices = new Map(state.matrices);
+      matrices.set(resultMatrixId, resultMatrix);
+
+      const card: FormulaCardModel = {
+        kind: 'formula',
+        id: cardId,
+        title: '',
+        x: sourceCard.x + 40,
+        y: sourceCard.y + sourceCard.height + 32,
+        width: 520,
+        height: 380,
+        z: topZ() + 1,
+        createdAt: Date.now(),
+        sourceCardId,
+        formulas,
+        resultMatrixId,
+      };
+
+      state.dependencies.addDependency(cardId, sourceCardId);
+
+      set({
+        cards: [...state.cards, card],
+        matrices,
+        nextCardId: cardId + 1,
+        nextMatrixId: resultMatrixId + 1,
+        selectedId: cardId,
+      });
+      return cardId;
+    },
+
+    setFormula(cardId, index, name, expression) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isFormulaCard(card)) return;
+
+      const formulas = card.formulas.slice();
+      if (index >= 0 && index < formulas.length) {
+        formulas[index] = { name, expression };
+      } else {
+        formulas.push({ name, expression });
+      }
+
+      const sourceCard = state.cards.find((c) => c.id === card.sourceCardId);
+      if (!sourceCard || !isMatrixCard(sourceCard)) return;
+      const source = sourceCard.sources[sourceCard.activeSource];
+      if (!source) return;
+      const sourceMatrix = state.matrices.get(source.matrixId);
+      if (!sourceMatrix) return;
+
+      const resultMatrix = computeFormulaResult(sourceMatrix, formulas);
+      const matrices = new Map(state.matrices);
+      matrices.set(card.resultMatrixId, resultMatrix);
+
+      set({
+        cards: state.cards.map((c) =>
+          c.id === cardId && isFormulaCard(c) ? { ...c, formulas } : c,
+        ),
+        matrices,
+      });
+    },
+
+    removeFormula(cardId, index) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isFormulaCard(card)) return;
+      if (card.formulas.length <= 1) return; // keep at least one
+
+      const formulas = card.formulas.filter((_, i) => i !== index);
+
+      const sourceCard = state.cards.find((c) => c.id === card.sourceCardId);
+      if (!sourceCard || !isMatrixCard(sourceCard)) return;
+      const source = sourceCard.sources[sourceCard.activeSource];
+      if (!source) return;
+      const sourceMatrix = state.matrices.get(source.matrixId);
+      if (!sourceMatrix) return;
+
+      const resultMatrix = computeFormulaResult(sourceMatrix, formulas);
+      const matrices = new Map(state.matrices);
+      matrices.set(card.resultMatrixId, resultMatrix);
+
+      set({
+        cards: state.cards.map((c) =>
+          c.id === cardId && isFormulaCard(c) ? { ...c, formulas } : c,
+        ),
+        matrices,
+      });
+    },
+
+    recomputeFormula(cardId) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isFormulaCard(card)) return;
+
+      const sourceCard = state.cards.find((c) => c.id === card.sourceCardId);
+      if (!sourceCard || !isMatrixCard(sourceCard)) return;
+      const source = sourceCard.sources[sourceCard.activeSource];
+      if (!source) return;
+      const sourceMatrix = state.matrices.get(source.matrixId);
+      if (!sourceMatrix) return;
+
+      const resultMatrix = computeFormulaResult(sourceMatrix, card.formulas);
+      const matrices = new Map(state.matrices);
+      matrices.set(card.resultMatrixId, resultMatrix);
+
+      set({ matrices });
     },
 
     // ── view helpers ──────────────────────────────────────────────────
