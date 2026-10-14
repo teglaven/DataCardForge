@@ -1,0 +1,45 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+  Data Workbench — Data Matrix Workbench
+  Copyright (C) 2026 Data Workbench contributors
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, version 3 of the License.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+------------------------------------------------------------------
+
+This project is distributed under the terms of the
+**GNU General Public License, version 3 (GPL-3.0)**.
+
+The full, canonical license text is published by the Free Software
+Foundation and is available online at:
+
+    https://www.gnu.org/licenses/gpl-3.0.txt
+
+The repository also links the QCustomPlot library, which is itself
+released under GPL-3.0, and therefore this project must remain
+under a compatible GPL license.
+
+------------------------------------------------------------------
+
+Third-party components included in or linked by this project are
+distributed under their own licenses:
+
+  Qt 6          : LGPL-3.0 / Commercial
+  QCustomPlot   : GPL-3.0
+  QXlsx         : MIT
+  fast_float    : MIT / Apache-2.0

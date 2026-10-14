@@ -2,9 +2,11 @@
 
 卡片式**数据矩阵批处理工作台**的 Web 前端（React + Vite + TypeScript）。
 
-> 这是项目**当前的前端实现**。前端选型结论与理由见
+> 这是项目的**主实现**（自 2026-10-14 起）。前端选型结论与理由见
 > [`docs/decisions/2026-10-14-frontend-web-chosen.md`](../data-workbench/docs/decisions/2026-10-14-frontend-web-chosen.md)。
-> 仓库根目录的 Qt Widgets 版本（`data-workbench/src/widgets/`）保留为 **legacy / 行为参照实现**。
+> 原先作为行为参照的 Qt Widgets 版本已于 2026-10-15 **彻底移除**，见
+> [`2026-10-15-qt-implementation-removed.md`](../data-workbench/docs/decisions/2026-10-15-qt-implementation-removed.md)：
+> 本目录下不再有并行实现需要同步，语义的唯一权威来源是本目录的源码与 `tests/`。
 
 ## 快速开始
 
@@ -167,13 +169,17 @@ tests/                       # vitest：154 个用例
 docs/screenshots/            # 文档配图
 ```
 
-## C++ → TypeScript 映射
+## 移植来源：C++ → TypeScript 映射
 
-| C++ | TypeScript | 说明 |
+> ⚠️ **下表左侧的 C++ 路径已于 2026-10-15 从仓库删除**，它们不再指向可打开的文件，
+> 只保留作为"每个模块当初是从哪里移植来"的出处记录。恢复方式见
+> [`2026-10-15-qt-implementation-removed.md`](../data-workbench/docs/decisions/2026-10-15-qt-implementation-removed.md)。
+
+| C++（已删除） | TypeScript | 说明 |
 |-----|-----------|------|
 | `core/MatrixData.*` | `core/MatrixData.ts` | 语义一致；`cell()` 越界返回 `NaN` |
 | `core/FileLoader.*` | `core/FileLoader.ts` + `loaders/*` | 由路径改为 `File`；删除 `split_row` 的 `0` 兜底 |
-| `core/DependencyGraph.*` | `core/DependencyGraph.ts` | 语义一致 |
+| `core/DependencyGraph.*` | `core/DependencyGraph.ts` | 原语义一致；Web 侧另补了环检测与边去重 |
 | `core/algorithm/Smoothing.*` | `core/Smoothing.ts` | 四种算法逐行对照 |
 | （无） | `core/stats.ts` | **新增**：为统计图型补齐统计量 |
 | `widgets/MainWindow.*` | `ui/App.tsx` + `ui/components/CardCanvas.tsx` | |
@@ -182,7 +188,10 @@ docs/screenshots/            # 文档配图
 | `widgets/MatrixCard.*` | `ui/components/MatrixCard.tsx` + `VirtualTable.tsx` | 列头右键改为选图型 |
 | `widgets/ChartCard.*` | `ui/components/ChartCard.tsx` + `charts/*` | QCustomPlot → ECharts，单图型 → 9 图型 |
 
-### 与 Qt 版的**有意**差异
+### 当年相对 Qt 版的**有意**差异
+
+这些差异是移植时主动做出的选择；Qt 版现已删除，
+本节保留是为了说明**为什么 Web 版的语义与历史文档中的 C++ 描述不同**。
 
 1. **无法解析的单元格记为 `NaN`（显示 `—`），不再兜底为 `0`。**
    C++ 的 `TxtLoader` 在 `from_chars` 失败时写入 `0.0`，会静默污染测量数据。
