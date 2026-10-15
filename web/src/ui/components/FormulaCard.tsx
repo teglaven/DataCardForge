@@ -20,6 +20,7 @@ import { compile, ExpressionError } from '../../core/expression.ts';
 import { setTableMetrics, invalidateLayout } from '../cardMetrics.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
 import type { FormulaCardModel } from '../types.ts';
+import type { MessageKey } from '../i18n.ts';
 import { CardShell } from './CardShell.tsx';
 import { VirtualTable, type TableMetrics } from './VirtualTable.tsx';
 
@@ -109,12 +110,27 @@ export function FormulaCard({
         compile(draft[i].expression, sourceColumnNames);
       } catch (e) {
         if (e instanceof ExpressionError) {
-          newErrors.set(i, e.message);
+          // Render a localised sentence from the structured code; the raw English parser
+          // message stays available on the error object for logs and tests.
+          const key = `formula.error.${e.code}` as MessageKey;
+          // "2–2 arguments" reads badly; collapse an exact arity to a single number.
+          const params =
+            e.code === 'badArgCount'
+              ? {
+                  ...e.params,
+                  expected:
+                    e.params.min === e.params.max
+                      ? String(e.params.min)
+                      : `${e.params.min}–${e.params.max}`,
+                }
+              : e.params;
+          const localised = t(key, params);
+          newErrors.set(i, localised === key ? e.message : localised);
         }
       }
     }
     setErrors(newErrors);
-  }, [draft, sourceColumnNames]);
+  }, [draft, sourceColumnNames, t]);
 
   const rows = resultMatrix?.rowCount() ?? 0;
   const cols = resultMatrix?.columnCount() ?? 0;

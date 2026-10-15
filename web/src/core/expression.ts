@@ -93,7 +93,10 @@ function tokenize(input: string): Token[] {
     if (ch === ')') { tokens.push({ type: 'rparen', value: ')', pos: i }); i++; continue; }
     if (ch === ',') { tokens.push({ type: 'comma', value: ',', pos: i }); i++; continue; }
 
-    throw new ExpressionError(`Unexpected character '${ch}' at position ${i}`, i);
+    throw new ExpressionError(`Unexpected character '${ch}' at position ${i}`, i, 'unexpectedChar', {
+      char: ch,
+      position: i,
+    });
   }
 
   tokens.push({ type: 'eof', value: '', pos: i });
@@ -153,8 +156,30 @@ const FUNCTIONS: Record<string, { minArgs: number; maxArgs: number }> = {
 /** Aggregation functions that reduce a column to a scalar. */
 const AGGREGATIONS = new Set(['SUM', 'AVG', 'MEAN', 'MIN', 'MAX', 'MEDIAN', 'STD']);
 
+/**
+ * Machine-readable reason for an expression failure.
+ *
+ * The English `message` stays for logs, tests and stack traces; the UI renders a localised
+ * sentence from `code` + `params` so a Chinese-language user never sees a raw parser
+ * message.
+ */
+export type ExpressionErrorCode =
+  | 'unexpectedChar'
+  | 'unknownFunction'
+  | 'expectedCloseAfterArgs'
+  | 'badArgCount'
+  | 'unknownColumn'
+  | 'expectedClose'
+  | 'unexpectedToken'
+  | 'trailingToken';
+
 export class ExpressionError extends Error {
-  constructor(message: string, public readonly position: number) {
+  constructor(
+    message: string,
+    public readonly position: number,
+    public readonly code: ExpressionErrorCode = 'unexpectedToken',
+    public readonly params: Record<string, string | number> = {},
+  ) {
     super(message);
     this.name = 'ExpressionError';
   }
@@ -218,7 +243,9 @@ function parse(tokens: Token[], ctx: CompileContext): ASTNode {
       if (peek().type === 'lparen') {
         const upper = name.toUpperCase();
         if (!(upper in FUNCTIONS)) {
-          throw new ExpressionError(`Unknown function '${name}'`, token.pos);
+          throw new ExpressionError(`Unknown function '${name}'`, token.pos, 'unknownFunction', {
+            name,
+          });
         }
         advance(); // consume '('
         const args: ASTNode[] = [];
@@ -230,7 +257,11 @@ function parse(tokens: Token[], ctx: CompileContext): ASTNode {
           }
         }
         if (peek().type !== 'rparen') {
-          throw new ExpressionError(`Expected ')' after function arguments`, peek().pos);
+          throw new ExpressionError(
+            `Expected ')' after function arguments`,
+            peek().pos,
+            'expectedCloseAfterArgs',
+          );
         }
         advance(); // consume ')'
 
@@ -239,6 +270,13 @@ function parse(tokens: Token[], ctx: CompileContext): ASTNode {
           throw new ExpressionError(
             `${name}() expects ${spec.minArgs}${spec.maxArgs === Infinity ? '+' : `–${spec.maxArgs}`} argument(s), got ${args.length}`,
             token.pos,
+            'badArgCount',
+            {
+              name,
+              min: spec.minArgs,
+              max: spec.maxArgs === Infinity ? '∞' : spec.maxArgs,
+              got: args.length,
+            },
           );
         }
         return { kind: 'call', name: upper, args };
@@ -248,7 +286,9 @@ function parse(tokens: Token[], ctx: CompileContext): ASTNode {
       const lower = name.toLowerCase();
       const index = ctx.columns.get(lower);
       if (index === undefined) {
-        throw new ExpressionError(`Unknown column '${name}'`, token.pos);
+        throw new ExpressionError(`Unknown column '${name}'`, token.pos, 'unknownColumn', {
+          name,
+        });
       }
       return { kind: 'column', index, name };
     }
@@ -257,18 +297,28 @@ function parse(tokens: Token[], ctx: CompileContext): ASTNode {
       advance();
       const expr = parseExpression();
       if (peek().type !== 'rparen') {
-        throw new ExpressionError(`Expected ')'`, peek().pos);
+        throw new ExpressionError(`Expected ')'`, peek().pos, 'expectedClose');
       }
       advance();
       return expr;
     }
 
-    throw new ExpressionError(`Unexpected token '${token.value || token.type}'`, token.pos);
+    throw new ExpressionError(
+      `Unexpected token '${token.value || token.type}'`,
+      token.pos,
+      'unexpectedToken',
+      { token: token.value || token.type },
+    );
   }
 
   const ast = parseExpression();
   if (peek().type !== 'eof') {
-    throw new ExpressionError(`Unexpected token '${peek().value}' after expression`, peek().pos);
+    throw new ExpressionError(
+      `Unexpected token '${peek().value}' after expression`,
+      peek().pos,
+      'trailingToken',
+      { token: peek().value },
+    );
   }
   return ast;
 }

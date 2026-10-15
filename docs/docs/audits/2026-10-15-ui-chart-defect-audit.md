@@ -32,7 +32,7 @@
 | 7 | 严重 | 公式卡结果不随源表切换文件刷新 | `workspaceStore.ts` | ✅ 依赖方中一并重算公式卡 |
 | 7b | 严重 | 公式列无法绘图，但文档声称可以 | `FormulaCard.tsx` | ⚠️ 文档已改为如实描述（绘图仍未实现，见下） |
 | 8 | 严重 | 状态栏泄漏字面量 `{size}` | `App.tsx` | ✅ `downloadText` 返回字节数并传入 |
-| 9 | 严重 | 中文界面下多处字符串仍是硬编码英文 | 多处 | ✅ 新增 8 个 i18n 键，清除全部硬编码 |
+| 9 | 严重 | 中文界面下多处字符串仍是硬编码英文 | 多处 | ✅ 新增 16 个 i18n 键，清除全部硬编码（含公式报错） |
 | 10 | 严重 | 变更一个图表会让**所有**图表重建；公式输入逐键全量重算 | `ChartCard.tsx`、`FormulaCard.tsx` | ✅ 同 4；公式输入加 250ms 防抖 |
 | 11 | 严重 | 「可编辑单元格」在 UI 上完全无法触达 | `workspaceStore.ts` | ✅ 矩阵卡新增锁定/编辑按钮 |
 | 12 | 中 | react-rnd 四角缩放手柄被 `overflow: hidden` 裁掉 | `.card` | ✅ 裁剪下移到标题栏/正文；实测 560×400 → 290×250 |
@@ -249,6 +249,22 @@ CSV 导出后状态栏："Exported 1.csv ({size})"
 同时 `i18n.ts` 中 `chart.confidence`、`chart.resetZoom`、`chart.empty`、`status.needColumns`、`card.activate`、`table.editable`、`newMatrix.title` 共 7 个键**从未被引用**。
 
 ---
+
+### [严重] 9b. 公式报错是英文原文 ✅ 已修复
+
+`ExpressionError` 只带一句英文（`Unexpected token 'eof'`、`Unknown column 'X'`…），中文界面下直接显示原文。实测中文界面输入 `MOV(Pos.1)`、`NOPE(Pos.1)`、`XXX + 1`、`Pos.1 @ 2` 分别得到 `Unexpected ...` 系列英文。
+
+**修复**：`ExpressionError` 增加结构化的 `code` + `params`（英文 `message` 保留给日志与测试），UI 侧按 `formula.error.<code>` 渲染本地化句子。复核（中文界面）：
+
+```
+"Pos.1 * 2 +"  -> 无法解析的记号「eof」
+"NOPE(Pos.1)"  -> 未知函数「NOPE」
+"XXX + 1"      -> 未知列名「XXX」
+"MOV(Pos.1)"   -> 「MOV」需要 2 个参数，实际给了 1 个
+"Pos.1 @ 2"    -> 无法识别的字符「@」（第 6 个字符）
+```
+
+同时把文档标题接上原本闲置的 `app.title`，状态栏卡片数改为 `status.cards`（中文「2 张卡片」）。
 
 ### [严重] 10. 选项改动波及所有图表；公式输入逐键全量重算
 
