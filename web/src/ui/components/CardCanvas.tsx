@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { invalidateLayout, setCanvasElement } from '../cardMetrics.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
-import { isFormulaCard, isMatrixCard } from '../types.ts';
+import { isChartCard, isFormulaCard, isMatrixCard } from '../types.ts';
 import { ConnectionLayer } from '../ConnectionLayer.tsx';
 import { CardShell } from './CardShell.tsx';
 import { ChartCard } from './ChartCard.tsx';
@@ -99,11 +99,24 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
 
         if (isMatrixCard(card)) {
           const source = card.sources[card.activeSource];
+          // Which of this table's columns feed the selected chart. The connection overlay
+          // is painted *behind* the cards, so the "this column is in use" marker has to be
+          // a style on the header cell rather than an SVG rectangle.
+          const sourceColumns: number[] = [];
+          const selected = cards.find((entry) => entry.id === selectedId);
+          if (selected && isChartCard(selected) && source) {
+            for (const entry of selected.config.sources) {
+              if (entry.matrixId === source.matrixId) sourceColumns.push(entry.columnIndex);
+            }
+            const xAxis = selected.config.xAxisSource;
+            if (xAxis && xAxis.matrixId === source.matrixId) sourceColumns.push(xAxis.columnIndex);
+          }
           return (
             <MatrixCard
               key={card.id}
               card={card}
               matrix={source ? matrices.get(source.matrixId) : undefined}
+              sourceColumns={sourceColumns}
               active={active}
               closeBlocked={closeBlocked}
               onActivate={() => bringToFront(card.id)}
@@ -112,6 +125,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
               onOpenChart={(columnIndex, type) => {
                 const id = addChartCard(card.id, columnIndex, type);
                 if (id !== null) select(id);
+                return id;
               }}
               onOpenFormula={() => {
                 const id = addFormulaCard(card.id);
@@ -227,7 +241,9 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
 
       <div className="canvas__cards">{renderedCards}</div>
 
-      {dragActive ? <div className="canvas__drop-hint">{t('empty.hint')}</div> : null}
+      {dragActive ? (
+        <div className="canvas__drop-hint">{t('empty.dropHint')}</div>
+      ) : null}
     </div>
   );
 }

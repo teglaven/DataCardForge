@@ -34,7 +34,7 @@ import {
   type FileIdentity,
   type WorkspaceSnapshot,
 } from './types.ts';
-import { createTranslator, detectLocale, type Locale, type MessageKey } from './i18n.ts';
+import { translatorFor, detectLocale, type Locale } from './i18n.ts';
 
 export { lineColor };
 
@@ -46,9 +46,17 @@ function columnLabel(column: { posName: string; annotation: string }): string {
   return column.annotation !== '' ? `${column.posName} ${column.annotation}` : column.posName;
 }
 
-/** Minimum card footprint, in px (the Qt cards had a 300×200 minimum). */
+/**
+ * Minimum card footprint, in px.
+ *
+ * The height is not arbitrary: a chart card stacks a 31px toolbar, a 48px plot floor and a
+ * footer that measures 65px at comfortable widths but **117px** once the chip and smoothing
+ * rows wrap at the 280px minimum width, plus a 31px title bar and borders — 227px in the
+ * worst case. At the old 180px the smoothing row landed 80px *below* the card edge with no
+ * way to reach it; 240px leaves the plot ~59px in that worst case.
+ */
 export const MIN_CARD_WIDTH = 280;
-export const MIN_CARD_HEIGHT = 180;
+export const MIN_CARD_HEIGHT = 240;
 
 /** Deliberately coarse epsilon: float noise from drag/resize must not re-render. */
 const GEOM_EPSILON = 0.01;
@@ -201,32 +209,74 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     const dependentIds = new Set(state.dependencies.getDependents(matrixCardId));
     if (dependentIds.size === 0) return;
 
-    set((current) => ({
-      cards: current.cards.map((card) => {
-        if (!isChartCard(card) || !dependentIds.has(card.id)) return card;
+    /**
+     * Re-point one attached column at the newly active matrix.
+     *
+     * A column that vanished in the new file keeps its previous values so the curve does
+     * not silently disappear — the behaviour the Qt frontend settled on.
+     */
+    const rePoint = (source: ChartSource): ChartSource => {
+      if (source.columnIndex >= activeMatrix.columnCount()) {
+        return { ...source, matrixId: active.matrixId };
+      }
+      const column = activeMatrix.column(source.columnIndex);
+      return {
+        ...source,
+        matrixId: active.matrixId,
+        raw: column.data.slice(),
+        label: columnLabel(column),
+      };
+    };
 
-        let changed = false;
-        const sources = card.config.sources.map((source) => {
-          // Only sources that actually read this card's data are re-pointed.
-          if (!matrixIds.has(source.matrixId)) return source;
-          changed = true;
-          // Column vanished in the new file: re-point but keep the old values so the
-          // curve does not silently disappear.
-          if (source.columnIndex >= activeMatrix.columnCount()) {
-            return { ...source, matrixId: active.matrixId };
+    // Formula dependents get a fresh result matrix; charts only need re-pointing.
+    const nextMatrices = new Map(state.matrices);
+    let matricesChanged = false;
+
+    set(() => {
+      const cards = state.cards.map((card) => {
+        if (!dependentIds.has(card.id)) return card;
+
+        if (isChartCard(card)) {
+          let changed = false;
+          const sources = card.config.sources.map((source) => {
+            // Only sources that actually read this card's data are re-pointed.
+            if (!matrixIds.has(source.matrixId)) return source;
+            changed = true;
+            return rePoint(source);
+          });
+
+          // The explicit X axis is a second, independent reference to a column of this
+          // card's matrix. Leaving it alone made a file switch plot the *new* Y values
+          // against the *previous* file's X values.
+          let xAxisSource = card.config.xAxisSource;
+          if (xAxisSource && matrixIds.has(xAxisSource.matrixId)) {
+            changed = true;
+            // A vanished X column falls back to the row index rather than keeping stale
+            // values: the dropdown's label and the drawn axis must not disagree.
+            xAxisSource =
+              xAxisSource.columnIndex >= activeMatrix.columnCount()
+                ? null
+                : rePoint(xAxisSource);
           }
-          const column = activeMatrix.column(source.columnIndex);
-          return {
-            ...source,
-            matrixId: active.matrixId,
-            raw: column.data.slice(),
-            label: columnLabel(column),
-          };
-        });
 
-        return changed ? { ...card, config: { ...card.config, sources } } : card;
-      }),
-    }));
+          return changed
+            ? { ...card, config: { ...card.config, sources, xAxisSource } }
+            : card;
+        }
+
+        // A formula card reads its source card's *active* matrix, so switching files must
+        // recompute its derived columns — otherwise the result silently describes the
+        // file that is no longer displayed.
+        if (isFormulaCard(card) && card.sourceCardId === matrixCardId) {
+          nextMatrices.set(card.resultMatrixId, computeFormulaResult(activeMatrix, card.formulas));
+          matricesChanged = true;
+        }
+
+        return card;
+      });
+
+      return matricesChanged ? { cards, matrices: nextMatrices } : { cards };
+    });
   };
 
   return {
@@ -354,7 +404,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // otherwise end up depending on itself through a longer path.
       const cycle = state.dependencies.addDependency(cardId, matrixCardId);
       if (cycle) {
-        get().showToast('error', `循环依赖：${cycle.join(' → ')}`);
+        get().showToast(
+          'error',
+          translatorFor(get().locale)('status.cycle', { path: cycle.join(' → ') }),
+        );
         return null;
       }
 
@@ -402,6 +455,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
             }
           }
         }
+      } else if (isFormulaCard(card)) {
+        // A formula card owns its derived matrix outright; no other card can reference it,
+        // so it must not be left behind in the map.
+        matrices.delete(card.resultMatrixId);
       }
 
       state.dependencies.removeAllDependencies(id);
@@ -544,10 +601,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           const matrixId = sources[0]?.matrixId ?? owner.sources[owner.activeSource]?.matrixId;
           const matrix = matrixId !== undefined ? state.matrices.get(matrixId) : undefined;
           if (matrix) {
-            // Append unused columns in index order.
+            // Continue from the columns already attached rather than restarting at 0:
+            // for a `pairs` type the first source is the X axis, so pulling column 0 in
+            // would silently make an unrelated column the Y of a chart the user built
+            // from column 5.
             const used = new Set(sources.map((source) => source.columnIndex));
-            for (let index = 0; index < matrix.columnCount() && sources.length < needed; ++index) {
-              if (used.has(index)) continue;
+            const anchor = Math.min(...used);
+            const append = (index: number) => {
               const column = matrix.column(index);
               sources.push({
                 matrixId,
@@ -555,6 +615,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
                 label: columnLabel(column),
                 raw: column.data.slice(),
               });
+            };
+            for (let index = anchor; index < matrix.columnCount() && sources.length < needed; ++index) {
+              if (!used.has(index)) append(index);
+            }
+            // Only if the matrix ends before the requirement is met do we wrap around.
+            for (let index = 0; index < anchor && sources.length < needed; ++index) {
+              if (!used.has(index)) append(index);
             }
           }
         }
@@ -615,9 +682,22 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           const sources = card.config.sources.filter(
             (source) => !(source.matrixId === matrixId && source.columnIndex === columnIndex),
           );
-          // A chart with no columns has nothing to draw; keep at least one.
-          if (sources.length === 0) return card;
-          return { ...card, config: { ...card.config, sources } };
+          // A chart with no columns has nothing to draw; keep at least one. Also refuse to
+          // drop below what the *current type* needs: silently degrading a scatter to
+          // "needs at least 2 columns" destroys work the user cannot undo.
+          const floor = Math.max(1, minimumColumns(card.config.type));
+          if (sources.length < floor) return card;
+          // The X axis may have pointed at the column just removed.
+          const xAxisSource =
+            card.config.xAxisSource &&
+            card.config.xAxisSource.matrixId === matrixId &&
+            card.config.xAxisSource.columnIndex === columnIndex
+              ? null
+              : card.config.xAxisSource;
+          return {
+            ...card,
+            config: { ...card.config, sources, xAxisSource },
+          };
         }),
       }));
     },
@@ -894,8 +974,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         matrices,
         matrixIdByIdentity: new Map(),
         dependencies,
-        nextCardId: snapshot.nextCardId,
-        nextMatrixId: snapshot.nextMatrixId,
+        // Never trust the counters in the file: a hand-edited (or truncated) snapshot
+        // could otherwise hand a new card an id that collides with an existing one.
+        nextCardId: Math.max(
+          snapshot.nextCardId ?? 0,
+          snapshot.cards.reduce((max, card) => Math.max(max, card.id), 0) + 1,
+        ),
+        nextMatrixId: Math.max(
+          snapshot.nextMatrixId ?? 0,
+          [...matrices.keys()].reduce((max, id) => Math.max(max, id), 0) + 1,
+        ),
         selectedId: null,
         blockedCardId: null,
         blockNonce: 1,
@@ -904,7 +992,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       if (droppedEdges > 0) {
         get().showToast(
           'error',
-          `工作区含 ${droppedEdges} 条循环依赖，已忽略（保存文件可能被手工编辑过）`,
+          translatorFor(get().locale)('status.cycleDropped', { n: droppedEdges }),
         );
       }
     },
@@ -930,8 +1018,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
 export function useTranslator() {
   const locale = useWorkspace((s) => s.locale);
-  const t = createTranslator(locale);
-  return { t: (key: MessageKey, params?: Record<string, string | number>) => t(key, params), locale };
+  // `translatorFor` caches by locale, so `t` keeps one identity for the whole locale.
+  // Components put `t` in `useMemo`/`useCallback` dependency arrays; a fresh closure per
+  // render used to invalidate every memo that mentioned it.
+  const t = translatorFor(locale);
+  return { t, locale };
 }
 
 export function useCard(id: number): CardModel | undefined {

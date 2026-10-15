@@ -15,7 +15,7 @@ const dictionaries = {
     'menu.file': '文件',
     'menu.view': '视图',
     'menu.language': '语言',
-    'menu.newMatrix': '新建表格…',
+    'menu.newMatrix': '打开数据文件…',
     'menu.openWorkspace': '打开工作区…',
     'menu.saveWorkspace': '保存工作区',
     'menu.exportCsv': '导出当前表格为 CSV…',
@@ -24,27 +24,33 @@ const dictionaries = {
     'menu.cascade': '层叠',
     'menu.closeAll': '关闭全部卡片',
 
-    'status.ready': '就绪 — 在空白处点击右键 → 新建表格，或直接拖入数据文件',
+    'status.ready': '就绪 — 在空白处点击右键 → 打开数据文件，或直接拖入数据文件',
     'status.loaded': '已加载 {name}（{rows} 行 × {cols} 列）',
     'status.loadedMany': '已加载 {count} 个文件',
     'status.chartCreated': '已创建图表：{name}',
     'status.closeBlocked': '无法关闭：其他卡片依赖它，请先关闭这些卡片',
     'status.exported': '已导出 {name}（{size}）',
+    'status.exportedBatch': '已批量导出 {n} 个图表 SVG',
+    'status.exportPartial': '已导出 {done} 个，{failed} 个失败',
     'status.exportFailed': '导出失败：{error}',
     'status.saveFailed': '保存失败：{error}',
-    'status.needColumns': '该图型至少需要 {n} 列数据',
+    'status.needTrailingColumns': '「{type}」需要从该列起连续 {n} 列数据，此处只剩 {have} 列',
     'status.notVector': '注意：{format} 不是矢量格式，期刊投稿请用 SVG',
+    'status.cycle': '循环依赖：{path}',
+    'status.cycleDropped': '工作区含 {n} 条循环依赖，已忽略（保存文件可能被手工编辑过）',
+    'status.workspace': '已打开 {name}（{cards} 张卡片 · {matrices} 个矩阵）',
+    'status.cards': '{n} 张卡片',
 
     'empty.title': '还没有卡片',
-    'empty.hint': '点击右键新建表格，或把 txt / csv / tsv / xlsx 文件拖到这里',
-    'empty.button': '新建表格…',
+    'empty.hint': '点击按钮或右键打开数据文件，也可以把 txt / csv / tsv / xlsx 拖到这里',
+    'empty.button': '打开数据文件…',
+    'empty.dropHint': '松开即可导入文件',
 
     'card.matrix': '{name} — {rows}×{cols}',
     'card.matrixMulti': '{name} 等 {count} 个文件 — {rows}×{cols}',
     'card.chart': '{type} — {name}',
     'card.unlabeled': '未标注',
     'card.close': '关闭',
-    'card.activate': '置于顶层',
 
     'table.rowHeader': 'No.{n}',
     'table.readOnly': '只读',
@@ -54,6 +60,7 @@ const dictionaries = {
     'table.contextChart': '为「{name}」绘制{type}',
     'table.contextChartMenu': '绘制图表',
     'table.virtualHint': '虚拟滚动 — 只渲染可见行',
+    'table.invalidNumber': '「{value}」不是数值，已忽略该次编辑',
 
     'chart.smoothing': '平滑',
     'chart.mode.none': '关闭',
@@ -66,7 +73,6 @@ const dictionaries = {
     'chart.degree': '阶数',
     'chart.resetZoom': '重置缩放',
     'chart.points': '{n} 点',
-    'chart.empty': '没有可绘制的数据',
     'chart.needMoreColumns': '「{type}」需要至少 {n} 列：在表格中右键更多列头添加',
 
     'chart.type': '图型',
@@ -80,7 +86,7 @@ const dictionaries = {
     'chart.type.heatmap': '相关性热力图',
     'chart.type.errorBar': '均值±误差棒',
     'chart.hint.line': '按行号绘制一个或多个列的折线',
-    'chart.hint.scatter': '两列配对为 (X, Y) 散点，可叠加拟合线与置信带',
+    'chart.hint.scatter': '两列配对为 (X, Y) 散点，可叠加最小二乘拟合线',
     'chart.hint.regression': '散点 + 最小二乘拟合直线，标注斜率与 R²',
     'chart.hint.bar': '按行号的柱状图，支持分组/堆叠',
     'chart.hint.histogram': '对单列数值分箱统计频数分布',
@@ -91,11 +97,17 @@ const dictionaries = {
 
     'chart.mean': '均值',
     'chart.value': '数值',
+    'chart.density': '密度',
+    'chart.outliers': '离群点',
+    'chart.quartiles': '四分位',
+    'chart.correlation': 'r',
+    'chart.rowIndex': '行号',
+    'chart.vector': '矢量',
+    'chart.raster': '位图',
     'chart.axis': '坐标轴',
     'chart.logScale': '对数 Y 轴',
     'chart.secondAxis': '次坐标轴',
     'chart.fitLine': '拟合线',
-    'chart.confidence': '95% 置信带',
     'chart.bins': '分箱数',
     'chart.binsAuto': '自动',
     'chart.errorKind': '误差类型',
@@ -117,13 +129,9 @@ const dictionaries = {
     'chart.xAxis': 'X 轴',
     'chart.xAxisDefault': '行号 (No.N)',
 
-    'dialog.unsupported': '不支持的文件格式',
-    'dialog.unsupportedBody': '不支持「{name}」。支持：txt、csv、tsv、dat、xlsx',
     'dialog.loadFailed': '加载失败',
     'dialog.loadFailedBody': '无法加载「{name}」：{error}',
     'dialog.openWorkspaceFailed': '无法打开工作区文件',
-
-    'newMatrix.title': '新建表格',
 
     'card.formula': '公式 — {name}',
     'formula.hint': '可用列：',
@@ -142,7 +150,7 @@ const dictionaries = {
     'menu.file': 'File',
     'menu.view': 'View',
     'menu.language': 'Language',
-    'menu.newMatrix': 'New Table…',
+    'menu.newMatrix': 'Open Data Files…',
     'menu.openWorkspace': 'Open Workspace…',
     'menu.saveWorkspace': 'Save Workspace',
     'menu.exportCsv': 'Export Current Table as CSV…',
@@ -151,27 +159,33 @@ const dictionaries = {
     'menu.cascade': 'Cascade',
     'menu.closeAll': 'Close All Cards',
 
-    'status.ready': 'Ready — right-click the empty area → New Table, or drop data files here',
+    'status.ready': 'Ready — right-click the empty area → Open Data Files, or drop data files here',
     'status.loaded': 'Loaded {name} ({rows} rows × {cols} cols)',
     'status.loadedMany': 'Loaded {count} files',
     'status.chartCreated': 'Created chart: {name}',
     'status.closeBlocked': 'Cannot close: other cards depend on it. Close them first.',
     'status.exported': 'Exported {name} ({size})',
+    'status.exportedBatch': 'Exported {n} chart SVG(s)',
+    'status.exportPartial': 'Exported {done}, {failed} failed',
     'status.exportFailed': 'Export failed: {error}',
     'status.saveFailed': 'Save failed: {error}',
-    'status.needColumns': 'This chart type needs at least {n} columns',
+    'status.needTrailingColumns': '"{type}" needs {n} consecutive columns from this one; only {have} remain',
     'status.notVector': 'Note: {format} is not vector — use SVG for journal submission',
+    'status.cycle': 'Dependency cycle: {path}',
+    'status.cycleDropped': 'The workspace had {n} dependency cycle(s); they were ignored (the file may have been edited by hand)',
+    'status.workspace': 'Opened {name} ({cards} cards · {matrices} matrices)',
+    'status.cards': '{n} cards',
 
     'empty.title': 'No cards yet',
-    'empty.hint': 'Right-click to create a table, or drop txt / csv / tsv / xlsx files here',
-    'empty.button': 'New Table…',
+    'empty.hint': 'Open data files with the button or right-click, or drop txt / csv / tsv / xlsx here',
+    'empty.button': 'Open Data Files…',
+    'empty.dropHint': 'Release to import the files',
 
     'card.matrix': '{name} — {rows}×{cols}',
     'card.matrixMulti': '{name} and {count} more files — {rows}×{cols}',
     'card.chart': '{type} — {name}',
     'card.unlabeled': 'Unlabeled',
     'card.close': 'Close',
-    'card.activate': 'Bring to front',
 
     'table.rowHeader': 'No.{n}',
     'table.readOnly': 'read-only',
@@ -181,6 +195,7 @@ const dictionaries = {
     'table.contextChart': 'Draw {type} for "{name}"',
     'table.contextChartMenu': 'Draw chart',
     'table.virtualHint': 'Virtual scrolling — only visible rows are rendered',
+    'table.invalidNumber': '"{value}" is not a number; the edit was discarded',
 
     'chart.smoothing': 'Smoothing',
     'chart.mode.none': 'Off',
@@ -193,7 +208,6 @@ const dictionaries = {
     'chart.degree': 'Degree',
     'chart.resetZoom': 'Reset zoom',
     'chart.points': '{n} points',
-    'chart.empty': 'Nothing to plot',
     'chart.needMoreColumns': '"{type}" needs at least {n} columns: right-click more column headers in the table',
 
     'chart.type': 'Type',
@@ -207,7 +221,7 @@ const dictionaries = {
     'chart.type.heatmap': 'Correlation heatmap',
     'chart.type.errorBar': 'Mean ± error',
     'chart.hint.line': 'Plot one or more columns against the row index',
-    'chart.hint.scatter': 'Pair two columns as (X, Y), optionally with a fit line and band',
+    'chart.hint.scatter': 'Pair two columns as (X, Y), optionally with a least-squares fit line',
     'chart.hint.regression': 'Scatter plus a least-squares line, annotated with slope and R²',
     'chart.hint.bar': 'Column values against the row index, grouped or stacked',
     'chart.hint.histogram': 'Bin one column and count occurrences',
@@ -218,11 +232,17 @@ const dictionaries = {
 
     'chart.mean': 'Mean',
     'chart.value': 'Value',
+    'chart.density': 'Density',
+    'chart.outliers': 'Outliers',
+    'chart.quartiles': 'Quartiles',
+    'chart.correlation': 'r',
+    'chart.rowIndex': 'No.',
+    'chart.vector': 'vector',
+    'chart.raster': 'raster',
     'chart.axis': 'Axes',
     'chart.logScale': 'Log Y axis',
     'chart.secondAxis': 'Second axis',
     'chart.fitLine': 'Fit line',
-    'chart.confidence': '95% band',
     'chart.bins': 'Bins',
     'chart.binsAuto': 'Auto',
     'chart.errorKind': 'Error',
@@ -244,13 +264,9 @@ const dictionaries = {
     'chart.xAxis': 'X axis',
     'chart.xAxisDefault': 'Row index (No.N)',
 
-    'dialog.unsupported': 'Not Supported',
-    'dialog.unsupportedBody': 'Unsupported "{name}". Supported: txt, csv, tsv, dat, xlsx',
     'dialog.loadFailed': 'Load Failed',
     'dialog.loadFailedBody': 'Cannot load "{name}": {error}',
     'dialog.openWorkspaceFailed': 'Cannot open the workspace file',
-
-    'newMatrix.title': 'New Table',
 
     'card.formula': 'Formula — {name}',
     'formula.hint': 'Available columns: ',
@@ -281,6 +297,25 @@ export function createTranslator(locale: Locale): TranslateFn {
     }
     return text;
   };
+}
+
+/**
+ * One translator instance per locale.
+ *
+ * Components hand `t` to `useMemo`/`useCallback` dependency arrays, so returning a fresh
+ * closure on every render invalidated every memo that mentioned it — which made each
+ * chart rebuild its whole ECharts option (and re-apply it with `notMerge`) whenever any
+ * card moved. Caching by locale keeps the identity stable for the life of the locale.
+ */
+const translators = new Map<Locale, TranslateFn>();
+
+export function translatorFor(locale: Locale): TranslateFn {
+  let cached = translators.get(locale);
+  if (!cached) {
+    cached = createTranslator(locale);
+    translators.set(locale, cached);
+  }
+  return cached;
 }
 
 /** Pick a sensible default locale from the browser, defaulting to Chinese. */

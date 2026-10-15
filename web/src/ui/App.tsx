@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { invalidateLayout } from './cardMetrics.ts';
-import { createTranslator } from './i18n.ts';
+import { formatBytes, translatorFor } from './i18n.ts';
 import {
   downloadText,
   matrixToCsv,
@@ -37,7 +37,9 @@ export default function App() {
   const toSnapshot = useWorkspace((s) => s.toSnapshot);
   const loadSnapshot = useWorkspace((s) => s.loadSnapshot);
 
-  const t = createTranslator(locale);
+  // Cached per locale, so `t` is referentially stable and the callbacks below do not
+  // change identity on every render.
+  const t = translatorFor(locale);
 
   const [status, setStatus] = useState(() => t('status.ready'));
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -45,6 +47,7 @@ export default function App() {
   // Keep the status line in the active language until a new message replaces it.
   useEffect(() => {
     setStatus(t('status.ready'));
+    document.title = t('app.title');
   }, [locale]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The first card needs real canvas dimensions, which are only known after mount.
@@ -98,8 +101,9 @@ export default function App() {
     try {
       const snapshot = toSnapshot();
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-      downloadText(`data-workbench-${stamp}.json`, JSON.stringify(snapshot), 'application/json');
-      setStatus(t('status.exported', { name: `data-workbench-${stamp}.json` }));
+      const name = `data-workbench-${stamp}.json`;
+      const bytes = downloadText(name, JSON.stringify(snapshot), 'application/json');
+      setStatus(t('status.exported', { name, size: formatBytes(bytes) }));
     } catch (error) {
       showToast('error', t('status.saveFailed', {
         error: error instanceof Error ? error.message : String(error),
@@ -113,10 +117,10 @@ export default function App() {
     try {
       const snapshot = await readWorkspace(files[0]);
       loadSnapshot(snapshot);
-      setStatus(t('status.loaded', {
+      setStatus(t('status.workspace', {
         name: files[0].name,
-        rows: snapshot.matrices.length,
-        cols: snapshot.cards.length,
+        cards: snapshot.cards.length,
+        matrices: snapshot.matrices.length,
       }));
       invalidateLayout();
     } catch (error) {
@@ -138,8 +142,8 @@ export default function App() {
     if (!source || !matrix) return;
 
     const base = source.name.replace(/\.[^.]+$/, '');
-    downloadText(`${base}.csv`, matrixToCsv(matrix), 'text/csv;charset=utf-8');
-    setStatus(t('status.exported', { name: `${base}.csv` }));
+    const bytes = downloadText(`${base}.csv`, matrixToCsv(matrix), 'text/csv;charset=utf-8');
+    setStatus(t('status.exported', { name: `${base}.csv`, size: formatBytes(bytes) }));
   }, [t]);
 
   /** Export every chart card as an SVG file. */
@@ -172,7 +176,13 @@ export default function App() {
     }
 
     if (exported > 0) {
-      showToast('info', t('status.exported', { name: `${exported} SVG(s)` }));
+      const failed = chartCards.length - exported;
+      showToast(
+        failed > 0 ? 'error' : 'info',
+        failed > 0
+          ? t('status.exportPartial', { done: exported, failed })
+          : t('status.exportedBatch', { n: exported }),
+      );
     }
   }, [showToast, t]);
 

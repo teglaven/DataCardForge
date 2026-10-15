@@ -28,9 +28,10 @@ import {
   chartTypeDef,
   minimumColumns,
 } from '../../charts/chartTypes.ts';
-import { buildOption, type BuildContext } from '../../charts/chartOptions.ts';
+import { buildOption, ZOOM_COMPONENT_IDS, type BuildContext } from '../../charts/chartOptions.ts';
 import { exportChart, type ExportType } from '../../charts/export.ts';
 import { CardShell } from './CardShell.tsx';
+import { Popup } from './Popup.tsx';
 
 interface ChartCardProps {
   card: ChartCardModel;
@@ -49,7 +50,14 @@ const SMOOTHING_MODES: SmoothingMode[] = [
   'savitzkyGolay',
 ];
 
-type Panel = 'type' | 'options' | 'export' | null;
+type PanelKind = 'type' | 'options' | 'export';
+
+/** An open toolbar dropdown, pinned to the button that opened it in viewport coordinates. */
+interface OpenPanel {
+  kind: PanelKind;
+  x: number;
+  y: number;
+}
 
 export function ChartCard({
   card,
@@ -69,15 +77,14 @@ export function ChartCard({
   const matrices = useWorkspace((s) => s.matrices);
   const cards = useWorkspace((s) => s.cards);
   const showToast = useWorkspace((s) => s.showToast);
-  const locale = useWorkspace((s) => s.locale);
   const typeDef = useMemo(() => chartTypeDef(card.config.type), [card.config.type]);
   const tRef = useRef(t);
   tRef.current = t;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<echartsNamespace.ECharts | null>(null);
+  const [chart, setChart] = useState<echartsNamespace.ECharts | null>(null);
   const [echarts, setEcharts] = useState<typeof echartsNamespace | null>(null);
-  const [panel, setPanel] = useState<Panel>(null);
+  const [panel, setPanel] = useState<OpenPanel | null>(null);
   const [pixelRatio, setPixelRatio] = useState(2);
 
   const totalPoints = card.config.sources.reduce(
@@ -107,32 +114,33 @@ export function ChartCard({
     const el = containerRef.current;
     if (!el || !echarts || !drawable) return;
     // The SVG renderer is what makes `chartToSvgString` produce real vector output.
-    const chart = echarts.init(el, undefined, { renderer: 'svg', useDirtyRect: true });
-    chartRef.current = chart;
-    const observer = new ResizeObserver(() => chart.resize());
+    const instance = echarts.init(el, undefined, { renderer: 'svg', useDirtyRect: true });
+    setChart(instance);
+    const observer = new ResizeObserver(() => instance.resize());
     observer.observe(el);
     return () => {
       observer.disconnect();
-      chart.dispose();
-      chartRef.current = null;
+      instance.dispose();
+      setChart(null);
     };
   }, [echarts, drawable]);
 
   /** Localised strings handed to the (i18n-free) option builder. */
   const strings = useMemo<BuildContext['strings']>(
     () => ({
-      rowIndex: 'No.',
+      rowIndex: t('chart.rowIndex'),
       value: t('chart.value'),
       count: t('chart.points', { n: '' }).trim(),
-      density: 'Density',
-      correlation: 'r',
-      quartiles: 'IQR',
+      density: t('chart.density'),
+      correlation: t('chart.correlation'),
+      quartiles: t('chart.quartiles'),
       // The legend entry states which spread measure is drawn.
       mean: `${t('chart.mean')} ± ${t(errorKey(card))}`,
-      outliers: 'outliers',
+      outliers: t('chart.outliers'),
       secondAxis: t('chart.secondAxis'),
     }),
     // The legend name embeds the selected error kind, so it must rebuild with it.
+    // `t` is stable per locale (see `translatorFor`), so this only rebuilds when it must.
     [t, card.config.errorKind],
   );
 
@@ -145,32 +153,44 @@ export function ChartCard({
   );
 
   useEffect(() => {
-    const chart = chartRef.current;
     if (!chart || !option) return;
     // `notMerge` because switching chart type changes the axis kinds entirely.
+    // `chart` is in the deps on purpose: the instance is created asynchronously (after the
+    // lazy ECharts import), and the option must be applied the moment it exists. A locale
+    // change also lands here, because the option's labels come from `strings`.
     chart.setOption(option, { notMerge: true });
-  }, [option]);
+  }, [chart, option]);
 
-  // Redraw axis labels/tooltips when the language changes (option strings are locale-bound).
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (chart && option) chart.setOption(option, { notMerge: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locale]);
+  /**
+   * Open/close a toolbar dropdown, pinned just below its button in **viewport**
+   * coordinates. The popup is portalled to `document.body`: inside the card it would be
+   * positioned against the card's `transform` (the card is a react-rnd window) and clipped
+   * by `overflow: hidden`.
+   */
+  const togglePanel = useCallback(
+    (kind: PanelKind, event: React.MouseEvent) => {
+      // Read the geometry *before* scheduling the update: React nulls `currentTarget` once
+      // the handler returns, and the updater below can run after that. Doing the read inside
+      // the updater threw "Cannot read properties of null", which unmounted the whole app.
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+      setPanel((current) =>
+        current?.kind === kind ? null : { kind, x: rect.left, y: rect.bottom + 4 },
+      );
+    },
+    [],
+  );
 
-  useEffect(() => {
-    if (!panel) return;
-    const close = () => setPanel(null);
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setPanel(null);
-    };
-    window.addEventListener('click', close);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [panel]);
+  const dismissPanel = useCallback(() => setPanel(null), []);
+
+  /** Return both value axes to their full data range. */
+  const resetZoom = useCallback(() => {
+    if (!chart) return;
+    // `dataZoom` is always installed for the value-axis types, and a wheel over the plot
+    // zooms instead of scrolling. Without this the user has no way back to the full range.
+    for (const [dataZoomIndex] of ZOOM_COMPONENT_IDS.entries()) {
+      chart.dispatchAction({ type: 'dataZoom', dataZoomIndex, start: 0, end: 100 });
+    }
+  }, [chart]);
 
   // ── export ─────────────────────────────────────────────────────────────
 
@@ -186,7 +206,7 @@ export function ChartCard({
           background: '#ffffff',
         });
         showToast(
-          result.vector ? 'info' : 'info',
+          'info',
           t('status.exported', { name: result.fileName, size: formatBytes(result.bytes) }),
         );
         if (!result.vector && type === 'pdf') {
@@ -241,6 +261,23 @@ export function ChartCard({
     name: card.config.sources[0]?.label ?? t('card.unlabeled'),
   });
 
+  /**
+   * The X-axis dropdown's value, forced back to "row index" whenever the stored source is
+   * not among the offered columns. Without this the `<select>` silently falls back to its
+   * first option while the chart keeps using the stale column — the control and the drawn
+   * axis would disagree.
+   */
+  const xAxisSelectValue = (() => {
+    const source = card.config.xAxisSource;
+    if (!source) return '';
+    const value = `${source.matrixId}:${source.columnIndex}`;
+    return availableColumns.some(
+      (column) => column.matrixId === source.matrixId && column.columnIndex === source.columnIndex,
+    )
+      ? value
+      : '';
+  })();
+
   return (
     <CardShell
       card={card}
@@ -261,17 +298,20 @@ export function ChartCard({
           <div className="chart-card__tp">
             <button
               type="button"
-              className={`chart-card__tbutton card__control${panel === 'type' ? ' is-open' : ''}`}
+              className={`chart-card__tbutton card__control${panel?.kind === 'type' ? ' is-open' : ''}`}
               title={t(typeDef.hintKey)}
-              onClick={(event) => {
-                event.stopPropagation();
-                setPanel(panel === 'type' ? null : 'type');
-              }}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => togglePanel('type', event)}
             >
               {t(typeDef.labelKey)} ▾
             </button>
-            {panel === 'type' ? (
-              <div className="chart-card__popup" onClick={(event) => event.stopPropagation()}>
+            {panel?.kind === 'type' ? (
+              <Popup
+                x={panel.x}
+                y={panel.y}
+                className="chart-card__popup"
+                onDismiss={dismissPanel}
+              >
                 {CHART_TYPE_ORDER.map((id) => {
                   const def = chartTypeDef(id);
                   return (
@@ -291,25 +331,25 @@ export function ChartCard({
                     </button>
                   );
                 })}
-              </div>
+              </Popup>
             ) : null}
           </div>
 
           <div className="chart-card__tp">
             <button
               type="button"
-              className={`chart-card__tbutton card__control${panel === 'options' ? ' is-open' : ''}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                setPanel(panel === 'options' ? null : 'options');
-              }}
+              className={`chart-card__tbutton card__control${panel?.kind === 'options' ? ' is-open' : ''}`}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => togglePanel('options', event)}
             >
               {t('chart.axis')} ▾
             </button>
-            {panel === 'options' ? (
-              <div
+            {panel?.kind === 'options' ? (
+              <Popup
+                x={panel.x}
+                y={panel.y}
                 className="chart-card__popup chart-card__popup--wide"
-                onClick={(event) => event.stopPropagation()}
+                onDismiss={dismissPanel}
               >
                 {/* Log axis is meaningless for bar (zero-height) and correlation types. */}
                 {/* X-axis source selector — available for types that use row index by default. */}
@@ -318,7 +358,7 @@ export function ChartCard({
                     <span>{t('chart.xAxis')}</span>
                     <select
                       className="card__control"
-                      value={card.config.xAxisSource ? `${card.config.xAxisSource.matrixId}:${card.config.xAxisSource.columnIndex}` : ''}
+                      value={xAxisSelectValue}
                       onChange={(event) => {
                         const val = event.target.value;
                         if (!val) {
@@ -453,7 +493,17 @@ export function ChartCard({
                     </label>
                   </>
                 ) : null}
-              </div>
+                {/* A wheel over the plot zooms both axes; this is the way back. */}
+                {typeDef.id !== 'heatmap' ? (
+                  <button
+                    type="button"
+                    className="chart-card__popup-item"
+                    onClick={resetZoom}
+                  >
+                    {t('chart.resetZoom')}
+                  </button>
+                ) : null}
+              </Popup>
             ) : null}
           </div>
 
@@ -461,19 +511,19 @@ export function ChartCard({
             <button
               type="button"
               className={`chart-card__tbutton card__control${
-                panel === 'export' ? ' is-open' : ''
+                panel?.kind === 'export' ? ' is-open' : ''
               }`}
-              onClick={(event) => {
-                event.stopPropagation();
-                setPanel(panel === 'export' ? null : 'export');
-              }}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => togglePanel('export', event)}
             >
               {t('chart.export')} ▾
             </button>
-            {panel === 'export' ? (
-              <div
+            {panel?.kind === 'export' ? (
+              <Popup
+                x={panel.x}
+                y={panel.y}
                 className="chart-card__popup chart-card__popup--export"
-                onClick={(event) => event.stopPropagation()}
+                onDismiss={dismissPanel}
               >
                 {EXPORT_FORMATS.map((format) => (
                   <button
@@ -489,7 +539,9 @@ export function ChartCard({
                     {format.id === 'png'
                       ? t('chart.exportPng', { ratio: pixelRatio })
                       : t(format.labelKey)}
-                    {format.vector ? <em className="chart-card__vec">vector</em> : null}
+                    <em className="chart-card__vec">
+                      {format.vector ? t('chart.vector') : t('chart.raster')}
+                    </em>
                   </button>
                 ))}
                 <label className="chart-card__field chart-card__field--tight">
@@ -504,7 +556,7 @@ export function ChartCard({
                     <option value={4}>4×</option>
                   </select>
                 </label>
-              </div>
+              </Popup>
             ) : null}
           </div>
 
@@ -531,8 +583,10 @@ export function ChartCard({
                 className="chart-card__chip"
                 title={source.label}
               >
-                {source.label}
-                {card.config.sources.length > 1 ? (
+                {/* A span is required for the ellipsis: `text-overflow` has no effect on
+                    an anonymous flex item, so a long label would be cut mid-glyph. */}
+                <span className="chart-card__chip-label">{source.label}</span>
+                {card.config.sources.length > minimumColumns(card.config.type) ? (
                   <button
                     type="button"
                     className="chart-card__chip-x card__control"
@@ -546,6 +600,8 @@ export function ChartCard({
             ))}
             <select
               className="chart-card__add card__control"
+              aria-label={t('chart.addColumn')}
+              title={t('chart.addColumn')}
               value=""
               onChange={(event) => {
                 const value = event.target.value;

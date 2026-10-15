@@ -118,6 +118,9 @@ export interface BuiltChart {
   bounds: AxisBounds;
 }
 
+/** Ids of the `dataZoom` components the option installs, in draw order. */
+export const ZOOM_COMPONENT_IDS = ['zoom-x', 'zoom-y'] as const;
+
 export function buildSeries(context: BuildContext): SeriesOption[] {
   switch (context.config.type) {
     case 'line':
@@ -565,8 +568,10 @@ function heatmapSeries(context: BuildContext): SeriesOption[] {
   const data: Array<[number, number, number]> = [];
   for (let row = 0; row < matrix.length; ++row) {
     for (let col = 0; col < matrix[row].length; ++col) {
-      const value = Number.isFinite(matrix[row][col]) ? matrix[row][col] : 0;
-      data.push([col, row, Number(value.toFixed(4))]);
+      // `pearson()` returns NaN where a correlation is *undefined* (a constant column has
+      // no variance, so there is nothing to correlate). ECharts skips NaN cells, which
+      // keeps the distinction visible; coercing to 0 used to paint it as "no correlation".
+      data.push([col, row, matrix[row][col]]);
     }
   }
 
@@ -579,7 +584,7 @@ function heatmapSeries(context: BuildContext): SeriesOption[] {
         show: matrix.length <= 8,
         formatter: (params: { value: unknown }) => {
           const value = params.value as [number, number, number];
-          return value[2].toFixed(2);
+          return Number.isFinite(value[2]) ? value[2].toFixed(2) : '—';
         },
         fontSize: 9,
       },
@@ -703,7 +708,7 @@ export function buildOption(context: BuildContext): EChartsOption {
             ? config.xAxisSource!.label
             : config.type === 'scatter' || config.type === 'regression'
               ? undefined
-              : 'No.',
+              : strings.rowIndex,
           nameLocation: 'end' as const,
           axisLabel: { fontSize: 10 },
           splitLine: { show: true, lineStyle: { color: 'rgba(128,128,128,0.18)' } },
@@ -772,8 +777,11 @@ export function buildOption(context: BuildContext): EChartsOption {
     dataZoom: isHeatmap
       ? []
       : [
-          { type: 'inside', xAxisIndex: 0, filterMode: 'none' },
-          { type: 'inside', yAxisIndex: 0, filterMode: 'none' },
+          // Both axes are zoomable by wheel/drag. `filterMode: 'none'` keeps the data
+          // extent intact so a zoom is purely a view change and is fully reversible —
+          // see the "reset zoom" control in the axes panel.
+          { id: 'zoom-x', type: 'inside', xAxisIndex: 0, filterMode: 'none' },
+          { id: 'zoom-y', type: 'inside', yAxisIndex: 0, filterMode: 'none' },
         ],
     xAxis,
     yAxis: isHeatmap ? heatmapYAxis : primaryYAxis,

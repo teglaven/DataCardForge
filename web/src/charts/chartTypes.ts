@@ -16,7 +16,7 @@
  *   --------------|--------------------|------------------------------------------
  *   line          | ✅ line            |
  *   scatter       | ✅ scatter         |
- *   regression    | ✅ line + custom   | band is a stacked-category trick
+ *   regression    | ✅ scatter + line  | fit line annotated with slope and R²
  *   bar           | ✅ bar             |
  *   histogram     | ✅ bar (pre-binned)| binning in core/stats.ts
  *   boxplot       | ✅ boxplot         | outliers drawn by ECharts itself

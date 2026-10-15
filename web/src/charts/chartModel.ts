@@ -37,8 +37,6 @@ export interface ChartConfig {
   secondAxis: boolean;
   /** Overlay an OLS fit (scatter / regression types). */
   showFitLine: boolean;
-  /** Overlay a 95% confidence band around the fit. */
-  showConfidenceBand: boolean;
   /** Bin count for the histogram; `0` means "choose automatically". */
   binCount: number;
   /** Which spread the error bars show. */
@@ -57,7 +55,6 @@ export function defaultChartConfig(type: ChartTypeId, sources: ChartSource[]): C
     logScale: false,
     secondAxis: false,
     showFitLine: true,
-    showConfidenceBand: true,
     binCount: 0,
     errorKind: 'sd',
     layout: 'grouped',

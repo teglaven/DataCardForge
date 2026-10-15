@@ -327,13 +327,29 @@ describe('heatmap', () => {
     expect(diagonal.every(([, , value]) => value === 1)).toBe(true);
   });
 
-  it('reports an undefined correlation as 0 rather than NaN', () => {
-    // A constant column produces NaN, which must not leak into the chart data.
+  it('keeps an undefined correlation as NaN so it is not drawn as "no correlation"', () => {
+    // A constant column has no variance, so its correlation is *undefined* — not 0.
+    // Coercing NaN to 0 used to paint it with the neutral colour of the diverging scale,
+    // i.e. it claimed "uncorrelated" where the data cannot say anything at all.
     const series = buildSeries(
       context('heatmap', [source('A', [1, 1, 1]), source('B', [1, 2, 3])]),
     );
     const data = (series[0] as { data: Array<[number, number, number]> }).data;
-    for (const [, , value] of data) expect(Number.isFinite(value)).toBe(true);
+    expect(data).toHaveLength(4);
+    // The diagonal is defined; the two cross terms must stay NaN.
+    expect(data.filter(([x, y]) => x === y).every(([, , v]) => v === 1)).toBe(true);
+    expect(data.filter(([x, y]) => x !== y).every(([, , v]) => Number.isNaN(v))).toBe(true);
+  });
+
+  it('labels an undefined correlation with an em dash, not 0.00', () => {
+    const series = buildSeries(
+      context('heatmap', [source('A', [1, 1, 1]), source('B', [1, 2, 3])]),
+    );
+    const label = (
+      series[0] as { label: { formatter: (params: { value: unknown }) => string } }
+    ).label;
+    expect(label.formatter({ value: [0, 1, NaN] })).toBe('—');
+    expect(label.formatter({ value: [0, 0, 1] })).toBe('1.00');
   });
 });
 

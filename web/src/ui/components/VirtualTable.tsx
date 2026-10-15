@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { MatrixData } from '../../core/MatrixData.ts';
-import { formatCell } from '../../core/numeric.ts';
+import { formatCell, isNumeric, parseNumeric } from '../../core/numeric.ts';
 import { invalidateLayout } from '../cardMetrics.ts';
 
 const ROW_HEIGHT = 22;
@@ -40,9 +40,13 @@ export interface VirtualTableProps {
   /** Click on a column header (used to select / highlight a column). */
   onHeaderClick?: (columnIndex: number) => void;
   highlightColumn?: number | null;
+  /** Columns of this table that feed the currently selected chart. */
+  sourceColumns?: readonly number[];
   onMetrics?: (metrics: TableMetrics) => void;
   /** Change a cell value in editable mode. */
   onCellChange?: (row: number, col: number, value: number) => void;
+  /** Called with the raw text when an edit cannot be read as a number. */
+  onInvalidEdit?: (raw: string) => void;
 }
 
 export function VirtualTable({
@@ -52,8 +56,10 @@ export function VirtualTable({
   onHeaderContextMenu,
   onHeaderClick,
   highlightColumn = null,
+  sourceColumns = [],
   onMetrics,
   onCellChange,
+  onInvalidEdit,
 }: VirtualTableProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
@@ -61,6 +67,8 @@ export function VirtualTable({
   const [viewportHeight, setViewportHeight] = useState(320);
   const [columnWidths, setColumnWidths] = useState<number[]>([]);
   const [editing, setEditing] = useState<{ row: number; col: number } | null>(null);
+  /** Set by Escape so the unmounting input's `blur` does not commit the abandoned text. */
+  const abandonedRef = useRef(false);
 
   const rowCount = matrix.rowCount();
   const columnCount = matrix.columnCount();
@@ -144,7 +152,31 @@ export function VirtualTable({
     visibleRows.push(row);
   }
 
+  /**
+   * Commit an edit.
+   *
+   * The parse is the same strict grammar the display side uses (`parseNumeric`), not
+   * `Number()`: `Number('')` is 0, `Number('0x10')` is 16 and `Number('Infinity')` is
+   * Infinity — so clearing a field used to write a real zero and typing a hex literal or
+   * "Infinity" stored a value that silently poisoned every statistic downstream.
+   * An empty field means "missing" (NaN); anything else that is not a number is reported
+   * instead of being dropped without explanation.
+   */
+  const commit = (row: number, col: number, raw: string) => {
+    const text = raw.trim();
+    if (text === '') {
+      onCellChange?.(row, col, NaN);
+      return;
+    }
+    if (!isNumeric(text)) {
+      onInvalidEdit?.(text);
+      return;
+    }
+    onCellChange?.(row, col, parseNumeric(text));
+  };
+
   const gridTemplate = `${ROW_HEADER_WIDTH}px ${columnWidths.map((w) => `${w}px`).join(' ')}`;
+  const sourceSet = new Set(sourceColumns);
 
   return (
     <div className="vtable">
@@ -160,17 +192,19 @@ export function VirtualTable({
               key={c}
               className={`vtable__colhead${
                 highlightColumn === c ? ' vtable__colhead--highlight' : ''
-              }`}
+              }${sourceSet.has(c) ? ' vtable__colhead--source' : ''}`}
               title={matrix.columnLabel(c) || matrix.column(c).posName}
               onClick={() => onHeaderClick?.(c)}
               onContextMenu={(event) => onHeaderContextMenu?.(event, c)}
             >
-              {matrix.columnLabel(c) || matrix.column(c).posName}
+              {/* A real box: `text-overflow` cannot act on an anonymous flex item. */}
+              <span className="vtable__colhead-label">
+                {matrix.columnLabel(c) || matrix.column(c).posName}
+              </span>
             </div>
           ))}
         </div>
       </div>
-
       {/* Body: single scroll container; rows are absolutely positioned inside. */}
       <div className="vtable__viewport" ref={viewportRef} onScroll={handleScroll}>
         <div
@@ -201,13 +235,22 @@ export function VirtualTable({
                       defaultValue={Number.isNaN(value) ? '' : String(value)}
                       autoFocus
                       onBlur={(event) => {
-                        const parsed = Number(event.target.value);
-                        if (!Number.isNaN(parsed)) onCellChange?.(row, c, parsed);
+                        if (abandonedRef.current) {
+                          abandonedRef.current = false;
+                          setEditing(null);
+                          return;
+                        }
+                        commit(row, c, event.target.value);
                         setEditing(null);
                       }}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') event.currentTarget.blur();
-                        if (event.key === 'Escape') setEditing(null);
+                        if (event.key === 'Escape') {
+                          // Discard: the input unmounts, and whichever of blur/unmount
+                          // fires must not commit the text the user just rejected.
+                          abandonedRef.current = true;
+                          setEditing(null);
+                        }
                       }}
                     />
                   );

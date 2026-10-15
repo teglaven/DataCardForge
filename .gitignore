@@ -23,14 +23,16 @@ Thumbs.db
 npm-debug.log*
 
 # ── Private notes (Obsidian vault, never published) ────────────────────────
-data-workbench/docs/private/
+docs/docs/private/
 
 # ── Obsidian local state ────────────────────────────────────────────────────
-data-workbench/docs/.obsidian/workspace*
+docs/docs/.obsidian/workspace*
 
 # ── Local end-to-end test runtime (rootless Chromium + its .so deps) ───────
 # Reproducible machine-local scaffolding for scripts/smoke.mjs, never published.
 .local-libs/
 .pw-browsers/
 .npm-cache/
-docs/docs/private/
+
+# ── Local Playwright probes used for UI auditing (never published) ──────────
+web/.probe/

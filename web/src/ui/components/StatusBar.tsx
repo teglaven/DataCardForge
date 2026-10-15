@@ -27,9 +27,7 @@ export function StatusBar({ message, cardCount }: StatusBarProps) {
   return (
     <div className="statusbar">
       <span className="statusbar__message">{toast ? toast.message : message}</span>
-      <span className="statusbar__meta">
-        {cardCount} {cardCount === 1 ? 'card' : 'cards'}
-      </span>
+      <span className="statusbar__meta">{t('status.cards', { n: cardCount })}</span>
       {toast?.kind === 'error' ? <span className="statusbar__error">!</span> : null}
       <span className="statusbar__hint">{t('table.virtualHint')}</span>
     </div>

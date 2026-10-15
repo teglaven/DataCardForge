@@ -5,9 +5,13 @@
  * columns by name. Each expression produces a column in the result matrix, which is
  * displayed in a read-only virtual table below the formula editor.
  *
- * The result matrix lives in the store's `matrices` map and can be charted like any
- * other matrix — charts created from it automatically follow when the source file
- * switches or the formula changes.
+ * The result matrix lives in the store's `matrices` map and is recomputed whenever the
+ * source card's active file changes or the source file's cells are edited (see
+ * `refreshDependentCharts`).
+ *
+ * A formula column is *not* yet a chart source: charts are built from a matrix card's
+ * columns (`addChartCard` requires a `MatrixCardModel`). This used to be described as if it
+ * already worked.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -18,6 +22,9 @@ import { useTranslator, useWorkspace } from '../workspaceStore.ts';
 import type { FormulaCardModel } from '../types.ts';
 import { CardShell } from './CardShell.tsx';
 import { VirtualTable, type TableMetrics } from './VirtualTable.tsx';
+
+/** How long to wait after the last keystroke before re-evaluating every formula. */
+const FORMULA_DEBOUNCE_MS = 250;
 
 interface FormulaCardProps {
   card: FormulaCardModel;
@@ -48,6 +55,37 @@ export function FormulaCard({
   const [errors, setErrors] = useState<Map<number, string>>(new Map());
   const metricsRef = useRef<TableMetrics | null>(null);
 
+  /**
+   * The editor keeps its own draft and only commits after a pause.
+   *
+   * `setFormula` re-evaluates the whole expression over every row and installs a fresh
+   * result matrix, so committing on each keystroke ran 10 000-row evaluations once per
+   * character — and re-rendered every card in the workspace each time.
+   */
+  const [draft, setDraft] = useState(() => card.formulas.map((formula) => ({ ...formula })));
+  const identityRef = useRef({ id: card.id, count: card.formulas.length });
+
+  // Re-sync only when the card itself or the number of formulas changes; re-syncing on
+  // every store update would fight the user's typing.
+  useEffect(() => {
+    const previous = identityRef.current;
+    if (previous.id === card.id && previous.count === card.formulas.length) return;
+    identityRef.current = { id: card.id, count: card.formulas.length };
+    setDraft(card.formulas.map((formula) => ({ ...formula })));
+  }, [card.id, card.formulas]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      draft.forEach((formula, index) => {
+        const current = card.formulas[index];
+        if (!current) return;
+        if (current.name === formula.name && current.expression === formula.expression) return;
+        setFormula(card.id, index, formula.name, formula.expression);
+      });
+    }, FORMULA_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [draft, card.formulas, card.id, setFormula]);
+
   const handleMetrics = useCallback(
     (metrics: TableMetrics) => {
       metricsRef.current = metrics;
@@ -63,12 +101,12 @@ export function FormulaCard({
     return () => observer.disconnect();
   }, [resultMatrix]);
 
-  // Validate expressions and collect errors.
+  // Validate the draft, so an error appears as soon as the expression is wrong.
   useEffect(() => {
     const newErrors = new Map<number, string>();
-    for (let i = 0; i < card.formulas.length; i++) {
+    for (let i = 0; i < draft.length; i++) {
       try {
-        compile(card.formulas[i].expression, sourceColumnNames);
+        compile(draft[i].expression, sourceColumnNames);
       } catch (e) {
         if (e instanceof ExpressionError) {
           newErrors.set(i, e.message);
@@ -76,11 +114,14 @@ export function FormulaCard({
       }
     }
     setErrors(newErrors);
-  }, [card.formulas, sourceColumnNames]);
+  }, [draft, sourceColumnNames]);
 
   const rows = resultMatrix?.rowCount() ?? 0;
   const cols = resultMatrix?.columnCount() ?? 0;
-  const title = t('card.formula', { name: `F${card.id}` });
+  // Was `F${card.id}` — the internal card counter leaking into the title.
+  const title = t('card.formula', {
+    name: draft[0]?.name || card.formulas[0]?.name || t('card.unlabeled'),
+  });
   const badge = `${card.formulas.length} ${t('formula.columns')} · ${rows} ${t('formula.rows')}`;
 
   return (
@@ -107,7 +148,7 @@ export function FormulaCard({
               {sourceColumnNames.length > 8 ? `, … (+${sourceColumnNames.length - 8})` : ''}
             </span>
           </div>
-          {card.formulas.map((formula, index) => (
+          {draft.map((formula, index) => (
             <div key={index} className={`formula-card__row${errors.has(index) ? ' formula-card__row--error' : ''}`}>
               <input
                 type="text"
@@ -115,7 +156,9 @@ export function FormulaCard({
                 value={formula.name}
                 placeholder={t('formula.namePlaceholder')}
                 onChange={(e) =>
-                  setFormula(card.id, index, e.target.value, formula.expression)
+                  setDraft((rows) =>
+                    rows.map((row, i) => (i === index ? { ...row, name: e.target.value } : row)),
+                  )
                 }
               />
               <span className="formula-card__eq">=</span>
@@ -126,10 +169,14 @@ export function FormulaCard({
                 placeholder={t('formula.exprPlaceholder')}
                 spellCheck={false}
                 onChange={(e) =>
-                  setFormula(card.id, index, formula.name, e.target.value)
+                  setDraft((rows) =>
+                    rows.map((row, i) =>
+                      i === index ? { ...row, expression: e.target.value } : row,
+                    ),
+                  )
                 }
               />
-              {card.formulas.length > 1 ? (
+              {draft.length > 1 ? (
                 <button
                   type="button"
                   className="formula-card__remove card__control"
@@ -147,9 +194,11 @@ export function FormulaCard({
           <button
             type="button"
             className="formula-card__add card__control"
-            onClick={() =>
-              setFormula(card.id, card.formulas.length, `Col${card.formulas.length + 1}`, 'A')
-            }
+            onClick={() => {
+              const name = `Col${draft.length + 1}`;
+              setDraft((rows) => [...rows, { name, expression: 'A' }]);
+              setFormula(card.id, draft.length, name, 'A');
+            }}
           >
             + {t('formula.addColumn')}
           </button>

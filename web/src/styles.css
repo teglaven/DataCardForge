@@ -15,7 +15,9 @@
   --text-dim: #6a7280;
   --accent: #2f6fd0;
   --accent-soft: rgba(47, 111, 208, 0.12);
+  --on-accent: #ffffff;
   --danger: #c83232;
+  --on-danger: #ffffff;
   --shadow: 0 6px 18px rgba(20, 26, 38, 0.14);
   --shadow-active: 0 10px 28px rgba(20, 26, 38, 0.24);
   --row-height: 22px;
@@ -33,6 +35,10 @@
     --text-dim: #9aa3b0;
     --accent: #5c9ae8;
     --accent-soft: rgba(92, 154, 232, 0.18);
+    --on-accent: #10151c;
+    /* The light --danger is only 2.71:1 on this surface; errors were unreadable in dark. */
+    --danger: #ff7b72;
+    --on-danger: #2a0f0c;
     --shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
     --shadow-active: 0 10px 28px rgba(0, 0, 0, 0.55);
   }
@@ -40,6 +46,13 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* The app removed the UA ring in two places but never replaced it, so keyboard focus was
+   invisible or inconsistent. One rule restores it everywhere, keyboard-only. */
+:where(button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 html,
@@ -192,9 +205,19 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
-  /* Connections are a background visualization: never intercept input. */
+  /* Connections are a background visualization: never intercept input, and never paint
+     over a card. The cards sit at z-index 1..N in the same stacking context, so this layer
+     used to win every comparison (it was 900) and the curves were drawn across table cells
+     and title bars. The layer is now explicit about being *under* the cards, and the SVG
+     additionally punches a hole per card (see ConnectionLayer's mask) so no segment can
+     cross a card face. */
   pointer-events: none;
-  z-index: 900;
+  z-index: 1;
+}
+
+/* Establishes the stacking context that keeps every card above the connection layer. */
+.canvas__cards {
+  z-index: 2;
 }
 
 .connection path {
@@ -222,7 +245,11 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow);
-  overflow: hidden;
+  /* Deliberately NOT `overflow: hidden`: re-resizable positions its grab strips *outside*
+     the card box (`right: -10px; bottom: -10px`), so clipping here left only a ~7x7 sliver
+     of each corner reachable. The clipping is done by the title bar and body below, which
+     keeps the rounded silhouette. */
+  overflow: visible;
 }
 
 .card--active {
@@ -237,6 +264,9 @@ body {
   flex: 0 0 auto;
   height: 30px;
   padding: 0 6px 0 10px;
+  border-start-start-radius: 7px;
+  border-start-end-radius: 7px;
+  overflow: hidden;
   /* Flat title bar blended into the theme, as the Qt build flattened QMdiSubWindow. */
   background: var(--surface-alt);
   border-bottom: 1px solid var(--border);
@@ -258,7 +288,12 @@ body {
 }
 
 .card__badge {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--text-dim);
   font-family: var(--mono);
@@ -281,7 +316,7 @@ body {
 
 .card__close:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 .card__close--blocked {
@@ -294,6 +329,8 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  border-end-start-radius: 7px;
+  border-end-end-radius: 7px;
   /* Without this a flex child that sizes to content (the table canvas) would push the
      body taller instead of letting the inner scroll container do the scrolling. */
   overflow: hidden;
@@ -320,6 +357,32 @@ body {
   background: var(--surface-alt);
   border: 1px solid var(--border);
   border-radius: 5px;
+}
+
+/* Lock / unlock state for the active file. Without a control for it the whole
+   cell-editing path was unreachable: every matrix card was created read-only. */
+.matrix-card__lock {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.matrix-card__lock:hover {
+  border-color: var(--border-strong);
+}
+
+.matrix-card__lock--open {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .matrix-card__single-file {
@@ -366,7 +429,6 @@ body {
   will-change: transform;
 }
 
-.vtable__corner,
 .vtable__colhead {
   display: flex;
   align-items: center;
@@ -374,9 +436,17 @@ body {
   padding: 0 6px;
   border-right: 1px solid var(--border);
   overflow: hidden;
+  user-select: none;
+}
+
+/* The label is a real box so `text-overflow` can apply: on `display: flex` the text is an
+   anonymous item that cannot shrink below min-content, so the ellipsis never rendered and
+   a long sensor name was cut off mid-glyph on both sides. */
+.vtable__colhead-label {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  user-select: none;
+  min-width: 0;
 }
 
 .vtable__colhead {
@@ -387,6 +457,18 @@ body {
 
 .vtable__colhead:hover {
   background: var(--accent-soft);
+}
+
+/* A column that feeds the selected chart. Replaces the old SVG highlight box, which the
+   connection layer can no longer draw on top of the cards (it is a background layer). */
+.vtable__colhead--source {
+  background: var(--accent-soft);
+  box-shadow: inset 0 -2px 0 var(--accent), inset 0 2px 0 var(--accent);
+}
+
+.vtable__colhead--source .vtable__colhead-label {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .vtable__colhead--highlight {
@@ -463,11 +545,12 @@ body {
 
 .chart-card__plot {
   flex: 1 1 auto;
-  min-height: 0;
-  /* ECharts measures this element; give it a usable floor so a freshly created card
-     always has a non-zero drawing box. */
+  /* ECharts measures this element; keep a small floor so a freshly created card always has
+     a non-zero drawing box. 80px was too tall to coexist with the footer once the chip and
+     smoothing rows wrap at the 280px minimum width — and because `min-block-size` beats
+     `min-height`, the earlier `min-height: 0` never took effect at all. */
+  min-height: 48px;
   height: 100%;
-  min-block-size: 80px;
 }
 
 .chart-card__empty {
@@ -527,14 +610,16 @@ body {
   color: var(--text-dim);
 }
 
-/* Dropdown panels. `z-index` must clear the connection layer (900). */
+/* Dropdown panels. These are portalled to <body> and positioned from the button's
+   viewport rect (`components/Popup.tsx`): inside the card they would resolve against the
+   card's own transform and be clipped by its `overflow`. */
 .chart-card__popup {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
   z-index: 3000;
   min-width: 150px;
-  max-height: 320px;
+  /* The x-axis selector is sized by its longest option, which is a file name. */
+  max-width: min(320px, calc(100vw - 24px));
+  max-height: min(320px, calc(100vh - 24px));
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -587,8 +672,14 @@ body {
   font-size: 10px;
   padding: 1px 5px;
   border-radius: 8px;
-  color: #ffffff;
+  color: var(--on-accent);
   background: var(--accent);
+}
+
+.chart-card__field select,
+.chart-card__field input {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .chart-card__field {
@@ -641,6 +732,13 @@ body {
   color: var(--text-dim);
 }
 
+.chart-card__chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .chart-card__chip {
   display: inline-flex;
   align-items: center;
@@ -670,7 +768,7 @@ body {
 }
 
 .chart-card__chip-x:hover {
-  color: #ffffff;
+  color: var(--on-danger);
   background: var(--danger);
 }
 
@@ -889,7 +987,7 @@ body {
 }
 
 .formula-card__remove:hover {
-  color: #fff;
+  color: var(--on-danger);
   background: var(--danger);
 }
 
@@ -965,7 +1063,7 @@ body {
   pointer-events: auto;
   font: inherit;
   padding: 7px 18px;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--accent);
   border: 0;
   border-radius: 6px;
@@ -1000,12 +1098,25 @@ body {
 
 .statusbar__meta,
 .statusbar__hint {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--mono);
 }
 
+/* The hint is the least important item in the bar: drop it before the message, which
+   carries load errors and "cannot close" warnings, is squeezed to nothing. */
+@media (max-width: 720px) {
+  .statusbar__hint {
+    display: none;
+  }
+}
+
 .statusbar__hint {
-  opacity: 0.7;
+  /* Was opacity:0.7, which measured 2.76:1 on the surface. */
+  color: var(--text-dim);
 }
 
 .statusbar__error {

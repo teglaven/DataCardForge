@@ -107,7 +107,13 @@ export async function parseFiles(
   return { loaded, failures };
 }
 
-/** Serialise a matrix as CSV, quoting only when needed. */
+/**
+ * Serialise a matrix as CSV, quoting only when needed.
+ *
+ * A UTF-8 BOM is prepended: without it Excel (the tool most of this data comes from and
+ * goes back to) reads the file in the system code page and mangles non-ASCII column
+ * headers — which is every annotated column in a Chinese-language lab.
+ */
 export function matrixToCsv(matrix: MatrixData): string {
   const rows = matrix.rowCount();
   const cols = matrix.columnCount();
@@ -128,7 +134,7 @@ export function matrixToCsv(matrix: MatrixData): string {
     lines.push(cells.join(','));
   }
 
-  return lines.join('\n');
+  return `\ufeff${lines.join('\n')}`;
 }
 
 function csvField(value: string): string {
@@ -136,8 +142,8 @@ function csvField(value: string): string {
   return value;
 }
 
-/** Trigger a browser download for text or binary payloads. */
-export function downloadBlob(filename: string, blob: Blob): void {
+/** Trigger a browser download for text or binary payloads. Returns the byte length. */
+export function downloadBlob(filename: string, blob: Blob): number {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -147,14 +153,17 @@ export function downloadBlob(filename: string, blob: Blob): void {
   anchor.remove();
   // Give the browser a moment to start the download before revoking.
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return blob.size;
 }
 
 export function downloadText(
   filename: string,
   text: string,
   mime = 'text/plain;charset=utf-8',
-): void {
-  downloadBlob(filename, new Blob([text], { type: mime }));
+): number {
+  // `Blob.size` counts the BOM as the UTF-8 bytes it is, which is what the user's file
+  // manager will report.
+  return downloadBlob(filename, new Blob([text], { type: mime }));
 }
 
 /** Read and validate a workspace JSON file. */

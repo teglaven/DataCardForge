@@ -162,7 +162,9 @@ describe('matrixToCsv', () => {
     mat.appendColumn('Pos.2', [3, 4]);
 
     const csv = matrixToCsv(mat);
-    const lines = csv.split('\n');
+    // A UTF-8 BOM so Excel reads non-ASCII headers as UTF-8 instead of the system code page.
+    expect(csv.startsWith('\ufeff')).toBe(true);
+    const lines = csv.slice(1).split('\n');
     expect(lines[0]).toBe('温度,Pos.2');
     expect(lines[1]).toBe('1.5,3');
     expect(lines[2]).toBe('2,4');
@@ -172,7 +174,7 @@ describe('matrixToCsv', () => {
     const mat = new MatrixData();
     mat.appendColumn('Pos.1', [1]);
     mat.setColumnAnnotation(0, 'a,b "c"');
-    expect(matrixToCsv(mat).split('\n')[0]).toBe('"a,b ""c"""');
+    expect(matrixToCsv(mat).slice(1).split('\n')[0]).toBe('"a,b ""c"""');
   });
 
   it('writes NaN as an empty field', () => {

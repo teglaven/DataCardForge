@@ -15,10 +15,20 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { headerAnchor, cardTopAnchor, subscribeLayout, getLayoutVersion } from './cardMetrics.ts';
+import {
+  headerAnchor,
+  cardTopAnchor,
+  cardRect,
+  subscribeLayout,
+  getLayoutVersion,
+  type Rect,
+} from './cardMetrics.ts';
 import { isChartCard, isMatrixCard, type CardModel } from './types.ts';
 
-const COLOR_GREY = 'rgb(160, 160, 160)';
+// The grey was rgb(160,160,160), which measures 2.27:1 against the canvas and 2.61:1
+// against a card surface — below the 3:1 non-text threshold — so an idle connection was
+// nearly invisible. 107/114/128 keeps the same neutral hue at ~4.6:1 on white.
+const COLOR_GREY = 'rgb(107, 114, 128)';
 const COLOR_RED = 'rgb(200, 50, 50)';
 const COLOR_BLUE = 'rgb(40, 120, 220)';
 
@@ -61,7 +71,6 @@ export function useConnectionGeometry(cards: CardModel[], selectedId: number | n
 
   return useMemo(() => {
     const out: Connection[] = [];
-    const byId = new Map(cards.map((c) => [c.id, c]));
 
     for (const card of cards) {
       if (!isChartCard(card)) continue;
@@ -105,9 +114,28 @@ export function useConnectionGeometry(cards: CardModel[], selectedId: number | n
       }
     }
 
-    void byId;
     return out;
   }, [cards, selectedId, tick]);
+}
+
+/**
+ * Canvas-relative rectangles of every card, refreshed whenever the layout could change.
+ *
+ * These become the holes in the connection mask: the lines belong to the desktop *behind*
+ * the cards, so they must not be painted across a card's face. The `.connection-layer`
+ * rule already claims that, but it sat at `z-index: 900` while cards sit at `z-index: 1…N`
+ * in the same stacking context — so the SVG won every comparison and the curves ran over
+ * table cells and title bars.
+ */
+function useCardRects(cards: CardModel[]): Rect[] {
+  const version = useSyncLayoutVersion();
+  // `cardRect` reads the live DOM, so the memo is keyed on the layout version as well as
+  // the card list — a drag or resize bumps the version without changing `cards`.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(
+    () => cards.map((card) => cardRect(card.id)).filter((rect): rect is Rect => rect !== null),
+    [cards, version],
+  );
 }
 
 function useSyncLayoutVersion(): number {
@@ -186,6 +214,7 @@ export function ConnectionLayer({
   blockNonce,
 }: ConnectionLayerProps) {
   const connections = useConnectionGeometry(cards, selectedId);
+  const rects = useCardRects(cards);
   const hidden = useBlockedBlink(blockedCardId, blockNonce);
 
   const isHidden = (conn: Connection): boolean =>
@@ -194,43 +223,56 @@ export function ConnectionLayer({
   const background = connections.filter((c) => !c.highlighted && !isHidden(c));
   const foreground = connections.filter((c) => c.highlighted && !isHidden(c));
 
+  // One mask, reused by both line groups: white everywhere, a black hole per card. The
+  // lines therefore stop at every card edge, exactly like lines drawn on the MDI desktop.
+  // The anchor dots and the source-column highlight are drawn *outside* the mask, because
+  // they are deliberately meant to be readable on top of the card they refer to.
+  const maskId = 'connection-card-cutout';
+
   return (
     <svg className="connection-layer" aria-hidden="true">
-      <g>
+      <defs>
+        <mask id={maskId} maskUnits="userSpaceOnUse">
+          <rect x="0" y="0" width="100%" height="100%" fill="#ffffff" />
+          {rects.map((rect, index) => (
+            <rect
+              key={index}
+              x={rect.left}
+              y={rect.top}
+              width={rect.width}
+              height={rect.height}
+              fill="#000000"
+            />
+          ))}
+        </mask>
+      </defs>
+      <g mask={`url(#${maskId})`}>
         {background.map((conn) => (
           <g key={conn.key} className="connection connection--bg">
             <path d={connectionPath(conn.from, conn.to)} stroke={conn.color} strokeWidth={1.5} />
-            <circle cx={conn.from.x} cy={conn.from.y} r={3} fill={conn.color} />
           </g>
         ))}
       </g>
-      <g>
+      <g mask={`url(#${maskId})`}>
         {foreground.map((conn) => (
           <g key={conn.key} className="connection connection--fg">
             <path d={connectionPath(conn.from, conn.to)} stroke={conn.color} strokeWidth={3} />
-            <circle cx={conn.from.x} cy={conn.from.y} r={5} fill={conn.color} />
-            {conn.sourceVisible && conn.sourceColumnWidth > 0 ? (
-              <rect
-                x={conn.from.x - conn.sourceColumnWidth / 2}
-                y={conn.from.y}
-                width={conn.sourceColumnWidth}
-                height={22}
-                rx={3}
-                className="connection__header-box"
-                style={{ stroke: conn.color, fill: withAlpha(conn.color, 0.16) }}
-              />
-            ) : null}
           </g>
+        ))}
+      </g>
+      {/* Unmasked: the end points only. The source column itself is marked in the DOM by
+          `MatrixCard` (`vtable__colhead--source`), because this SVG now paints *behind* the
+          cards — an in-SVG highlight rect or box around a header would be occluded. */}
+      <g>
+        {background.map((conn) => (
+          <circle key={conn.key} cx={conn.from.x} cy={conn.from.y} r={3} fill={conn.color} />
+        ))}
+        {foreground.map((conn) => (
+          <circle key={conn.key} cx={conn.from.x} cy={conn.from.y} r={5} fill={conn.color} />
         ))}
       </g>
     </svg>
   );
-}
-
-function withAlpha(color: string, alpha: number): string {
-  const match = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(color);
-  if (!match) return color;
-  return `rgba(${match[1]}, ${match[2]}, ${match[3]}, ${alpha})`;
 }
 
 export { COLOR_GREY, COLOR_RED, COLOR_BLUE };

@@ -35,16 +35,16 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 ## Implemented Features (web)
 
 ### File Loading
-- **File → New Table**, **right-click the empty area**, or **drop files onto the canvas**
+- **File → Open Data Files**, **right-click the empty area**, or **drop files onto the canvas**
 - Multiple files create only **one card**; a selector at the top of the card switches the displayed file
 - Supports TXT / CSV / TSV / DAT / XLSX; CSV parsing handles quoted fields and sniffs the delimiter
 - **Automatic header detection**: if the first row is not purely numeric it is treated as column titles (annotations) rather than data
-- File-backed tables are read-only; unparseable cells show `—` instead of being silently turned into 0
+- File-backed tables start **read-only**; the lock button in the card's file row unlocks editing. Unparseable cells show `—` instead of being silently turned into 0, and a value that is not a number is refused with an explanation rather than dropped
 - Parsing runs in a **Web Worker**, so dropping a 10 000-row file no longer freezes the interface (falls back inline where workers are unavailable)
 - Re-opening the same file reuses its parse only when the **bytes match** (`size` + `lastModified`); a different file that merely shares the name gets a fresh parse — never stale measurements under a current label
 
 ### Plotting (ChartCard)
-- Right-click a column header → **pick the chart type directly** (types needing more columns are disabled)
+- Right-click a column header → **pick the chart type directly** (types that would run past the last column are disabled, with the reason in the tooltip)
 - **9 scientific/statistical chart types**, all rendered as SVG and therefore **all exportable as true vector**:
   - Line, scatter, **regression** (OLS with slope, **R²** and n)
   - Bar (grouped/stacked), **histogram** (Sturges auto-binning or explicit)
@@ -53,11 +53,11 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
   - **Mean ± error bars** (**SD / SE / 95% CI**, adjustable cap width)
   - **Correlation heatmap** (pairwise **Pearson** matrix, diverging palette)
 - The type can be switched at any time inside the card; one chart can hold **several columns** (scatter/regression pair them as (X, Y))
-- Log Y axis / second axis / fit line / confidence band appear only where the type supports them
+- Log Y axis / second axis / fit line / X-axis source / reset-zoom appear only where the type supports them
 - **Smoothing controls** at the bottom: moving average / exponential / median / Savitzky–Golay, redrawing live and keeping their settings when the data source changes
 - **Export**: **SVG (true vector — the live DOM tree serialised, no embedded bitmap)** / PNG (1×/2×/4×) / PDF (raster wrapper, explicitly labelled as non-vector in the UI)
 - All dependent charts update automatically when the file switches; old data is kept when a column no longer exists
-- Zoom / pan, legend (fit-line names stay out of it)
+- Zoom / pan (both axes, wheel or drag) with a **Reset zoom** control in the axes panel; legend keeps fit-line names out of it
 
 > The statistics live in `core/stats.ts` as pure functions with 40 unit tests, matching
 > NumPy/R conventions (linear-interpolation quantiles, Bessel-corrected variance, Silverman

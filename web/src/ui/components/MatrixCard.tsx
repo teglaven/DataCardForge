@@ -24,6 +24,7 @@ import { setTableMetrics, invalidateLayout } from '../cardMetrics.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
 import type { MatrixCardModel } from '../types.ts';
 import { CardShell } from './CardShell.tsx';
+import { Popup } from './Popup.tsx';
 import { VirtualTable, type TableMetrics } from './VirtualTable.tsx';
 
 interface MatrixCardProps {
@@ -33,9 +34,11 @@ interface MatrixCardProps {
   closeBlocked: boolean;
   onClose: () => void;
   onCloseBlocked: () => void;
-  onOpenChart: (columnIndex: number, type: ChartTypeId) => void;
+  onOpenChart: (columnIndex: number, type: ChartTypeId) => number | null;
   onOpenFormula: () => void;
   onActivate: () => void;
+  /** Columns of the displayed matrix that feed the currently selected chart. */
+  sourceColumns?: readonly number[];
 }
 
 export function MatrixCard({
@@ -48,11 +51,13 @@ export function MatrixCard({
   onOpenChart,
   onOpenFormula,
   onActivate,
+  sourceColumns = [],
 }: MatrixCardProps) {
   const { t } = useTranslator();
   const setBounds = useWorkspace((s) => s.setBounds);
   const setActiveSource = useWorkspace((s) => s.setActiveSource);
   const editCell = useWorkspace((s) => s.editCell);
+  const setEditable = useWorkspace((s) => s.setEditable);
   const showToast = useWorkspace((s) => s.showToast);
 
   const [menu, setMenu] = useState<{ x: number; y: number; column: number } | null>(null);
@@ -125,6 +130,7 @@ export function MatrixCard({
             value={card.activeSource}
             onChange={(event) => setActiveSource(card.id, Number(event.target.value))}
             title={activeSourceName}
+            aria-label={activeSourceName}
           >
             {card.sources.map((source, index) => (
               <option key={source.name} value={index}>
@@ -138,14 +144,52 @@ export function MatrixCard({
           </div>
         )}
 
+        {/* Lock / unlock. Without this the whole cell-editing path was unreachable: every
+            matrix card was created read-only and nothing in the UI could change that. */}
+        <button
+          type="button"
+          className={`matrix-card__lock card__control${
+            card.readOnly ? '' : ' matrix-card__lock--open'
+          }`}
+          title={card.readOnly ? t('table.editable') : t('table.readOnly')}
+          aria-label={card.readOnly ? t('table.editable') : t('table.readOnly')}
+          aria-pressed={!card.readOnly}
+          onClick={() => setEditable(card.id, card.readOnly)}
+        >
+          {/* Inline SVG, not an emoji: a font without the glyph would render a blank box. */}
+          {card.readOnly ? (
+            <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M4.5 7V5a3.5 3.5 0 1 1 7 0v2"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+              <rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" />
+            </svg>
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M11.5 1.9l2.6 2.6L5.6 13H3v-2.6z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+        </button>
+
         {matrix && cols > 0 ? (
           <VirtualTable
             matrix={matrix}
             readOnly={card.readOnly}
             rowLabel={(n) => t('table.rowHeader', { n })}
             highlightColumn={highlightColumn}
+            sourceColumns={sourceColumns}
             onMetrics={handleMetrics}
             onCellChange={(row, col, value) => editCell(card.id, row, col, value)}
+            onInvalidEdit={(raw) => showToast('error', t('table.invalidNumber', { value: raw }))}
             onHeaderClick={(column) =>
               setHighlightColumn((current) => (current === column ? null : column))
             }
@@ -160,100 +204,67 @@ export function MatrixCard({
       </div>
 
       {menu ? (
-        <ColumnContextMenu
+        <Popup
           x={menu.x}
           y={menu.y}
-          columnName={
-            matrix ? matrix.columnLabel(menu.column) || matrix.column(menu.column).posName : ''
-          }
-          columnCount={cols}
+          className="context-menu context-menu--list"
           onDismiss={() => setMenu(null)}
-          onSelect={(type) => {
-            onOpenChart(menu.column, type);
-            const columnName = matrix ? matrix.columnLabel(menu.column) : '';
-            showToast('info', t('status.chartCreated', { name: columnName }));
-            setMenu(null);
-          }}
-          onOpenFormula={() => {
-            onOpenFormula();
-            setMenu(null);
-          }}
-        />
-      ) : null}
-    </CardShell>
-  );
-}
-
-interface ColumnContextMenuProps {
-  x: number;
-  y: number;
-  columnName: string;
-  /** Column count of the matrix currently displayed, used to disable impossible types. */
-  columnCount: number;
-  onSelect: (type: ChartTypeId) => void;
-  onOpenFormula: () => void;
-  onDismiss: () => void;
-}
-
-/**
- * Right-click menu on a column header: pick the chart type to create from this column.
- *
- * Types that need more columns than the matrix has are disabled with an explanation,
- * rather than creating a card that cannot draw anything.
- */
-function ColumnContextMenu({
-  x,
-  y,
-  columnName,
-  columnCount,
-  onSelect,
-  onOpenFormula,
-  onDismiss,
-}: ColumnContextMenuProps) {
-  const { t } = useTranslator();
-
-  useEffect(() => {
-    const close = () => onDismiss();
-    window.addEventListener('click', close);
-    window.addEventListener('keydown', close);
-    return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('keydown', close);
-    };
-  }, [onDismiss]);
-
-  return (
-    <div
-      className="context-menu context-menu--list"
-      style={{ left: x, top: y }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <div className="context-menu__title">
-        {t('table.contextChartMenu')} · {columnName}
-      </div>
-      {CHART_TYPE_ORDER.map((id) => {
-        const def = chartTypeDef(id);
-        return (
+        >
+          <div className="context-menu__title">
+            {t('table.contextChartMenu')} ·{' '}
+            {matrix ? matrix.columnLabel(menu.column) || matrix.column(menu.column).posName : ''}
+          </div>
+          {CHART_TYPE_ORDER.map((id) => {
+            const def = chartTypeDef(id);
+            // A chart is built from this column *and the ones after it*, so the test is
+            // against the remaining columns — not the matrix's total. Testing the total
+            // let the last column offer "scatter", which then created nothing at all.
+            const remaining = cols - menu.column;
+            const enough = minimumColumns(id) <= remaining;
+            return (
+              <button
+                key={id}
+                type="button"
+                className="context-menu__item"
+                title={enough ? t(def.hintKey) : t('status.needTrailingColumns', {
+                  type: t(def.labelKey),
+                  n: minimumColumns(id),
+                  have: remaining,
+                })}
+                disabled={!enough}
+                onClick={() => {
+                  const created = onOpenChart(menu.column, id);
+                  if (created === null) {
+                    showToast('error', t('status.needTrailingColumns', {
+                      type: t(def.labelKey),
+                      n: minimumColumns(id),
+                      have: remaining,
+                    }));
+                  } else {
+                    showToast('info', t('status.chartCreated', {
+                      name: matrix ? matrix.columnLabel(menu.column) : '',
+                    }));
+                  }
+                  setMenu(null);
+                }}
+              >
+                {t(def.labelKey)}
+              </button>
+            );
+          })}
+          <div className="context-menu__separator" />
           <button
-            key={id}
             type="button"
             className="context-menu__item"
-            title={t(def.hintKey)}
-            disabled={minimumColumns(id) > columnCount}
-            onClick={() => onSelect(id)}
+            onClick={() => {
+              onOpenFormula();
+              setMenu(null);
+            }}
           >
-            {t(def.labelKey)}
+            {t('menu.newFormula')}
           </button>
-        );
-      })}
-      <div className="context-menu__separator" />
-      <button
-        type="button"
-        className="context-menu__item"
-        onClick={() => onOpenFormula()}
-      >
-        {t('menu.newFormula')}
-      </button>
-    </div>
+        </Popup>
+      ) : null}
+    </CardShell>
   );
 }
