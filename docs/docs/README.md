@@ -6,6 +6,7 @@
 ## 导航
 
 - 📌 **决策记录** (`decisions/`) — 已经拍板、影响后续的方向性结论
+  - [[2026-10-15-max-headroom-principle|兜底原则（最大余量）]] ← **核心架构原则**
   - [[2026-10-15-qt-implementation-removed|彻底移除 Qt 实现]] ← **当前仓库形态**
   - [[2026-10-14-frontend-web-chosen|前端选型定为 Web]] ← **当前前端方案**
   - [[2026-10-14-chart-library-audit|图表库保持 ECharts]] ← 统计图型与矢量导出审计

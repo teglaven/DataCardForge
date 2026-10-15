@@ -11,6 +11,7 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 - **Card model**: everything is a card — data card (file) → function card (transform) → output card (plot / export)
 - **Strict separation**: data and behavior are separated; tables are never mutated; every transformation produces a new card
 - **Connection subordination**: connections are only the visualization of data dependencies, normally kept low-key (background layer), and never interfere with card layout or interaction — cards are the protagonists, connections the supporting cast
+- **Maximum headroom**: the core requirement is not "cheap implementation bought at the price of performance" but **the highest possible fallback capacity — operators never hit a wall, and any degradation / skip / "not possible" must be visible**. Compute tiers (TS → WASM → backend) are an automatic escalation path the operator never chooses; the deciding question is "will the operator hit a wall", not "where is the crossover". Full reasoning: [decision record](docs/decisions/2026-10-15-max-headroom-principle.md)
 - **Column-oriented matrix**: rows = samples (`No.N`), columns = variables (`Pos.N`), contiguous storage, high performance
 - **Extensible**: computation system + adapter interfaces — the community can contribute long-tail features
 
@@ -130,17 +131,19 @@ All extension points are on the web side — there is no second implementation t
 
 ## Short-term Goals
 
-> **Current priority: element-wise formula computation.** The frontend is settled and the Qt/Eigen
-> backend is gone, so the next step is decided on the web side alone. Before choosing between a
-> pure-TS expression engine and a WASM linear-algebra build, answer the user-level question first:
-> do people need *column arithmetic* (`(A-B)/C`, `MOV(A,5)`, `IF(...)`) or actual *matrix algebra*?
+> **Current priority: element-wise formula computation + the headroom principle.** The frontend is
+> settled and the Qt/Eigen backend is gone, so the next step is decided on the web side alone.
+> **The maximum-headroom principle was adopted on 2026-10-15** ([decision record](docs/decisions/2026-10-15-max-headroom-principle.md)):
+> the selection question is "will the operator hit a wall", not "where is the crossover" — the tiers
+> (TS → WASM → backend) are an automatic escalation path, the backend exists to **remove ceilings**,
+> not to be faster, and every degradation must be visible.
 > See [docs/log/2026-10-15.md](docs/log/2026-10-15.md).
 
 - [x] **Frontend decision** → **Web chosen** (2026-10-14)
 - [x] **Qt implementation removed** → repo is now a single web-first monorepo (2026-10-15)
 - [x] **Dependency cycle detection** → `DependencyGraph` refuses loops and deduplicates edges (2026-10-15)
 - [ ] **Element-wise formula computation**: evaluate formulas on every matrix element (SUM / AVG / MIN / MAX / IF); more complex logic goes to the **FunctionCard**
-- [ ] Linear-algebra backend (**unresolved**): the old "Eigen integration" item lost its carrier when the C++ tree was deleted — re-scope it only if real demand exists
+- [ ] Compute **fallback tier** (native backend, or WASM): promoted from "unresolved" to **required** by the [maximum-headroom principle](docs/decisions/2026-10-15-max-headroom-principle.md) — it exists to **remove ceilings** (algorithm coverage, memory limits, worst-case compute), not to be faster; the **cross-tier test fixtures must land first** (differential tests before the engine)
 - [ ] Data **editing** capability (non-file-backed cards, double-click edit + formula evaluation). Note: `VirtualTable` has the inline-edit branch but `MatrixCard` does not yet pass `onCellChange`, and nothing calls `setCell()` — the path is *not* wired, contrary to earlier notes here
 - [ ] Connection arrows / red-blue bidirectional highlight
 - [ ] **Selectable X axis**: charts can pick a column as the X-axis source (default remains the row number `No.N`)
