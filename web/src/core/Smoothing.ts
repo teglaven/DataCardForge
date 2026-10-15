@@ -78,8 +78,16 @@ export function medianFilter(raw: readonly number[], window: number): number[] {
  * Savitzky–Golay polynomial smoothing (zero-phase). Even windows are bumped to the
  * next odd value; invalid parameters return a copy. O(n · window) after coefficients.
  */
+/** Largest polynomial order the UI offers; beyond this the normal equations are unusable. */
+export const MAX_SG_DEGREE = 5;
+
 export function savitzkyGolay(raw: readonly number[], window: number, degree: number): number[] {
-  if (window < 3 || degree < 1 || degree >= window) return raw.slice();
+  // Clamp the order instead of trusting the caller. The UI used to pass whatever was typed
+  // into the Degree field, and `sgCoefficients(101, 60)` is ill-conditioned: the filtered
+  // output blew up from ±2 to ±90 and the chart became a solid noise band.
+  // Only the upper bound is clamped — `degree < 1` keeps its documented no-op behaviour.
+  const order = Math.min(MAX_SG_DEGREE, Math.floor(degree) || 0);
+  if (window < 3 || order < 1 || order >= window) return raw.slice();
 
   let w = window;
   if (w % 2 === 0) w += 1; // ensure odd
@@ -87,7 +95,7 @@ export function savitzkyGolay(raw: readonly number[], window: number, degree: nu
   const n = raw.length;
   if (n === 0) return [];
 
-  const coeffs = sgCoefficients(w, degree);
+  const coeffs = sgCoefficients(w, order);
   const half = Math.floor(w / 2);
 
   const out = new Array<number>(n);

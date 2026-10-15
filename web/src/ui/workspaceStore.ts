@@ -14,6 +14,7 @@
  */
 import { create } from 'zustand';
 
+import { canvasSize } from './cardMetrics.ts';
 import { DependencyGraph } from '../core/DependencyGraph.ts';
 import { MatrixData } from '../core/MatrixData.ts';
 import { DEFAULT_SMOOTHING, type SmoothingOptions } from '../core/Smoothing.ts';
@@ -60,6 +61,34 @@ export const MIN_CARD_HEIGHT = 240;
 
 /** Deliberately coarse epsilon: float noise from drag/resize must not re-render. */
 const GEOM_EPSILON = 0.01;
+
+/** Keep a new card at least this far from the canvas edge. */
+const CARD_MARGIN = 8;
+
+/**
+ * Place a new card near `preferred`, but inside the card plane.
+ *
+ * A chart was previously positioned unconditionally at `table.x + table.width + 32`. With
+ * the table parked near the right edge that put the whole card outside the canvas (measured
+ * box 1472–2032 against a 0–1440 plane): invisible, while the status bar still announced
+ * "Created chart: …". `bounds="parent"` only constrains *dragging*, never the initial
+ * position, so the clamp has to happen here.
+ */
+function placeWithinCanvas(
+  preferred: { x: number; y: number },
+  size: { width: number; height: number },
+): { x: number; y: number } {
+  const canvas = canvasSize();
+  if (canvas.width <= 0 || canvas.height <= 0) return preferred;
+  const maxX = Math.max(CARD_MARGIN, canvas.width - size.width - CARD_MARGIN);
+  const maxY = Math.max(CARD_MARGIN, canvas.height - size.height - CARD_MARGIN);
+  return {
+    // Fall back to the cascade default when the preferred spot is off-plane only on one
+    // axis, so a chart never ends up half-outside the canvas either.
+    x: Math.min(Math.max(CARD_MARGIN, preferred.x), maxX),
+    y: Math.min(Math.max(CARD_MARGIN, preferred.y), maxY),
+  };
+}
 
 export interface Toast {
   id: number;
@@ -383,15 +412,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       if (sources.length < minimumColumns(type)) return null;
 
       const cardId = state.nextCardId;
+      const chartSize = { width: 560, height: 400 };
       const card: ChartCardModel = {
         kind: 'chart',
         id: cardId,
         title: '',
-        // Offset from the source card so the new chart is visibly its child.
-        x: matrixCard.x + matrixCard.width + 32,
-        y: matrixCard.y + 24,
-        width: 560,
-        height: 400,
+        // Offset from the source card so the new chart is visibly its child, clamped so it
+        // always lands on the card plane.
+        ...placeWithinCanvas(
+          { x: matrixCard.x + matrixCard.width + 32, y: matrixCard.y + 24 },
+          chartSize,
+        ),
+        width: chartSize.width,
+        height: chartSize.height,
         z: topZ() + 1,
         createdAt: Date.now(),
         config: defaultChartConfig(type, sources),
@@ -726,14 +759,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const matrices = new Map(state.matrices);
       matrices.set(resultMatrixId, resultMatrix);
 
+      const formulaSize = { width: 520, height: 380 };
       const card: FormulaCardModel = {
         kind: 'formula',
         id: cardId,
         title: '',
-        x: sourceCard.x + 40,
-        y: sourceCard.y + sourceCard.height + 32,
-        width: 520,
-        height: 380,
+        ...placeWithinCanvas(
+          { x: sourceCard.x + 40, y: sourceCard.y + sourceCard.height + 32 },
+          formulaSize,
+        ),
+        width: formulaSize.width,
+        height: formulaSize.height,
         z: topZ() + 1,
         createdAt: Date.now(),
         sourceCardId,

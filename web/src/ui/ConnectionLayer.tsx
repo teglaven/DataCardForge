@@ -190,12 +190,21 @@ export function useBlockedBlink(blockedCardId: number | null, nonce: number): Se
   }, [active, visible]);
 }
 
-/** Cubic bezier path using the exact control offsets from the Qt painter. */
+/**
+ * Cubic bezier path using the control offsets from the Qt painter, lifted but clamped.
+ *
+ * The original offsets (`from.y - 30`, `to.y - 80`) are kept, but a control point is never
+ * allowed above the top of the canvas: with the chart card high on the plane (or in the
+ * tiled layout) `to.y - 80` went negative and the curve bowed out of the canvas, where the
+ * `.canvas { overflow: hidden }` clipped it away. Because a cubic bezier is contained in the
+ * convex hull of its control points, clamping both lift values to >= 0 keeps the whole
+ * curve inside the plane.
+ */
 export function connectionPath(from: { x: number; y: number }, to: { x: number; y: number }): string {
   const c1x = from.x;
-  const c1y = from.y - 30;
+  const c1y = Math.max(0, from.y - 30);
   const c2x = to.x;
-  const c2y = to.y - 80;
+  const c2y = Math.max(0, to.y - 80);
   return `M ${from.x} ${from.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${to.x} ${to.y}`;
 }
 
@@ -260,17 +269,11 @@ export function ConnectionLayer({
           </g>
         ))}
       </g>
-      {/* Unmasked: the end points only. The source column itself is marked in the DOM by
-          `MatrixCard` (`vtable__colhead--source`), because this SVG now paints *behind* the
-          cards — an in-SVG highlight rect or box around a header would be occluded. */}
-      <g>
-        {background.map((conn) => (
-          <circle key={conn.key} cx={conn.from.x} cy={conn.from.y} r={3} fill={conn.color} />
-        ))}
-        {foreground.map((conn) => (
-          <circle key={conn.key} cx={conn.from.x} cy={conn.from.y} r={5} fill={conn.color} />
-        ))}
-      </g>
+      {/* No end-point dots: this SVG paints *behind* the cards now, so a marker at either
+          end was occluded by the very card it referred to. Both ends are already conveyed —
+          the line meets each card's edge, and the source column is marked on its header cell
+          by `MatrixCard` (`vtable__colhead--source`), which is real DOM and therefore above
+          the card's own background. */}
     </svg>
   );
 }

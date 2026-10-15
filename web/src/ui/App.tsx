@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { invalidateLayout } from './cardMetrics.ts';
+import { canvasSize, invalidateLayout } from './cardMetrics.ts';
 import { formatBytes, translatorFor } from './i18n.ts';
 import {
   downloadText,
@@ -190,7 +190,11 @@ export default function App() {
    * Tile / cascade need the live canvas size, not the window size, and must re-measure
    * connection anchors once the DOM has applied the new geometry.
    */
-  const canvasSize = () => {
+  const canvasBounds = () => {
+    // The card plane, not the app shell: the shell includes the menu bar and the status
+    // bar, so measuring it made tiled cards taller than the canvas they live in.
+    const size = canvasSize();
+    if (size.width > 0 && size.height > 0) return size;
     const rect = shellRef.current?.getBoundingClientRect();
     return { width: rect?.width ?? window.innerWidth, height: rect?.height ?? window.innerHeight };
   };
@@ -200,7 +204,7 @@ export default function App() {
   };
 
   const onTile = useCallback(() => {
-    const { width, height } = canvasSize();
+    const { width, height } = canvasBounds();
     tileCards(width, height);
     afterBulkLayoutChange();
   }, [tileCards]);

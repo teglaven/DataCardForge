@@ -77,6 +77,8 @@ export interface BuildContext {
     density: string;
     correlation: string;
     quartiles: string;
+    /** Axis name for a histogram's value axis (bin centres), not the row index. */
+    binCentre: string;
     /** Legend name for the mean/error series, e.g. `Mean ± SD`. */
     mean: string;
     outliers: string;
@@ -704,11 +706,16 @@ export function buildOption(context: BuildContext): EChartsOption {
       : {
           type: 'value' as const,
           scale: true,
+          // The x axis is only "the row index" for the types that really plot against it.
+          // A histogram plots bin *centres* and a scatter/regression plots the first column
+          // of each pair, so labelling those "No." was simply wrong.
           name: hasExplicitX
             ? config.xAxisSource!.label
-            : config.type === 'scatter' || config.type === 'regression'
-              ? undefined
-              : strings.rowIndex,
+            : config.type === 'histogram'
+              ? strings.binCentre
+              : config.type === 'scatter' || config.type === 'regression'
+                ? config.sources[0]?.label
+                : strings.rowIndex,
           nameLocation: 'end' as const,
           axisLabel: { fontSize: 10 },
           splitLine: { show: true, lineStyle: { color: 'rgba(128,128,128,0.18)' } },

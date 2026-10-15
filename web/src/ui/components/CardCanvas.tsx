@@ -99,17 +99,28 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
 
         if (isMatrixCard(card)) {
           const source = card.sources[card.activeSource];
-          // Which of this table's columns feed the selected chart. The connection overlay
-          // is painted *behind* the cards, so the "this column is in use" marker has to be
-          // a style on the header cell rather than an SVG rectangle.
+          // Which of this table's columns feed a chart. The connection overlay paints
+          // *behind* the cards, so the "this column is in use" marker must be a style on the
+          // header cell rather than an SVG rectangle.
+          //
+          // Marked for the selected chart, and also for every chart that depends on this
+          // table when the table itself is selected — otherwise selecting the table (the
+          // case where its lines turn red) left nothing at all identifying the linked
+          // column.
           const sourceColumns: number[] = [];
-          const selected = cards.find((entry) => entry.id === selectedId);
-          if (selected && isChartCard(selected) && source) {
-            for (const entry of selected.config.sources) {
-              if (entry.matrixId === source.matrixId) sourceColumns.push(entry.columnIndex);
+          const dependents = dependencies.getDependents(card.id);
+          const tableSelected = selectedId === card.id;
+          if (source) {
+            for (const entry of cards) {
+              if (!isChartCard(entry)) continue;
+              const relevant = entry.id === selectedId || (tableSelected && dependents.includes(entry.id));
+              if (!relevant) continue;
+              for (const chartSource of entry.config.sources) {
+                if (chartSource.matrixId === source.matrixId) sourceColumns.push(chartSource.columnIndex);
+              }
+              const xAxis = entry.config.xAxisSource;
+              if (xAxis && xAxis.matrixId === source.matrixId) sourceColumns.push(xAxis.columnIndex);
             }
-            const xAxis = selected.config.xAxisSource;
-            if (xAxis && xAxis.matrixId === source.matrixId) sourceColumns.push(xAxis.columnIndex);
           }
           return (
             <MatrixCard

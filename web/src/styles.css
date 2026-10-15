@@ -229,10 +229,6 @@ body {
   opacity: 0.75;
 }
 
-.connection__header-box {
-  stroke-width: 2;
-}
-
 /* ── Cards ──────────────────────────────────────────────────────────── */
 
 .card {
@@ -690,6 +686,22 @@ body {
   font-size: 12px;
   color: var(--text-dim);
   white-space: nowrap;
+}
+
+.chart-card__note {
+  margin: 2px 0 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  white-space: normal;
+}
+
+.chart-card__warn {
+  margin: 2px 0 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--danger);
+  white-space: normal;
 }
 
 .chart-card__field--tight {

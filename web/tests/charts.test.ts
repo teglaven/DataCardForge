@@ -36,6 +36,7 @@ const strings: BuildContext['strings'] = {
   value: 'Value',
   count: 'Count',
   density: 'Density',
+  binCentre: 'Bin centre',
   correlation: 'r',
   quartiles: 'IQR',
   mean: 'Mean ± SD',

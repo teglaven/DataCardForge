@@ -69,15 +69,22 @@ export function Popup({ x, y, className, flip = true, onDismiss, children }: Pop
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onDismiss();
     };
+    // Ignore scrolls that originate inside the popup: a capture-phase listener on `window`
+    // also sees them, and a `<input type="number">` whose text overflows its box (the Bins
+    // field is 56px wide) emits one per keystroke — which closed the panel mid-edit.
+    const onScroll = (event: Event) => {
+      if (ref.current?.contains(event.target as Node)) return;
+      onDismiss();
+    };
     window.addEventListener('mousedown', onPointerDown);
     window.addEventListener('keydown', onKey);
     window.addEventListener('resize', onDismiss);
-    window.addEventListener('scroll', onDismiss, true);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       window.removeEventListener('mousedown', onPointerDown);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', onDismiss);
-      window.removeEventListener('scroll', onDismiss, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [onDismiss]);
 

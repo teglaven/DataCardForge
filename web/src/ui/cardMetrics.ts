@@ -119,6 +119,20 @@ export function clearTableMetrics(id: number): void {
   invalidateLayout();
 }
 
+/**
+ * Size of the card plane, in CSS px.
+ *
+ * `Tile`/`Cascade` and new-card placement must measure *this*, not the window or the app
+ * shell: the shell also contains the menu bar and the status bar, so sizing cards from it
+ * made every tiled card ~48px taller than the canvas and pushed its bottom edge (and the
+ * south-east resize handle) off-screen.
+ */
+export function canvasSize(): { width: number; height: number } {
+  if (!canvasElement) return { width: 0, height: 0 };
+  const rect = canvasElement.getBoundingClientRect();
+  return { width: rect.width, height: rect.height };
+}
+
 function canvasRect(): Rect {
   if (!canvasElement) return { left: 0, top: 0, width: 0, height: 0 };
   const r = canvasElement.getBoundingClientRect();

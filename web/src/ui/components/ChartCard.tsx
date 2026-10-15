@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // the initial bundle just for its types.
 import type * as echartsNamespace from 'echarts';
 
-import { applySmoothing, type SmoothingMode } from '../../core/Smoothing.ts';
+import { applySmoothing, MAX_SG_DEGREE, type SmoothingMode } from '../../core/Smoothing.ts';
 import { formatBytes } from '../i18n.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
 import { isChartCard, isMatrixCard, type ChartCardModel } from '../types.ts';
@@ -87,12 +87,45 @@ export function ChartCard({
   const [panel, setPanel] = useState<OpenPanel | null>(null);
   const [pixelRatio, setPixelRatio] = useState(2);
 
-  const totalPoints = card.config.sources.reduce(
+  // A `single`-arity type plots only the first column, so counting every attached column in
+  // the badge made a histogram claim "2 × 10000 points" while drawing one series.
+  const drawnSources =
+    typeDef.columnArity === 'single' ? card.config.sources.slice(0, 1) : card.config.sources;
+  const totalPoints = drawnSources.reduce(
     (max, source) => Math.max(max, source.raw.length),
     0,
   );
+  const seriesCount =
+    typeDef.columnArity === 'pairs'
+      ? Math.floor(card.config.sources.length / 2) + (card.config.sources.length % 2)
+      : drawnSources.length;
   const needed = minimumColumns(card.config.type);
   const drawable = card.config.sources.length >= needed;
+
+  /**
+   * Data facts the axes panel has to state, because the chart cannot:
+   *  - a log axis silently discards every sample <= 0;
+   *  - `yAxisIndexFor` puts every odd-indexed series on the right axis, and nothing in the
+   *    chart shows which ones they are.
+   */
+  const nonPositiveCount = useMemo(() => {
+    if (!card.config.logScale) return 0;
+    let count = 0;
+    for (const source of card.config.sources) {
+      for (const value of source.raw) if (Number.isFinite(value) && value <= 0) count += 1;
+    }
+    return count;
+  }, [card.config.logScale, card.config.sources]);
+
+  const secondAxisLabels = useMemo(
+    () =>
+      card.config.secondAxis
+        ? card.config.sources
+            .filter((_, index) => index % 2 === 1)
+            .map((source) => source.label)
+        : [],
+    [card.config.secondAxis, card.config.sources],
+  );
 
   // ── ECharts lifecycle ──────────────────────────────────────────────────
 
@@ -132,6 +165,7 @@ export function ChartCard({
       value: t('chart.value'),
       count: t('chart.points', { n: '' }).trim(),
       density: t('chart.density'),
+      binCentre: t('chart.binCentre'),
       correlation: t('chart.correlation'),
       quartiles: t('chart.quartiles'),
       // The legend entry states which spread measure is drawn.
@@ -255,7 +289,7 @@ export function ChartCard({
     return options;
   }, [cards, matrices, card.config.sources]);
 
-  const badge = `${card.config.sources.length} × ${t('chart.points', { n: totalPoints })}`;
+  const badge = `${seriesCount} × ${t('chart.points', { n: totalPoints })}`;
   const title = t('card.chart', {
     type: t(typeDef.labelKey),
     name: card.config.sources[0]?.label ?? t('card.unlabeled'),
@@ -453,11 +487,21 @@ export function ChartCard({
                       max={200}
                       className="card__control chart-card__number"
                       value={card.config.binCount}
-                      onChange={(event) =>
-                        setChartConfig(card.id, { binCount: Number(event.target.value) })
-                      }
+                      onChange={(event) => {
+                        // The chart clamps to 1..200 anyway; storing the raw text meant the
+                        // field showed a number (99999, -5) that had no effect on the render.
+                        const raw = Number(event.target.value);
+                        const clamped = Number.isFinite(raw)
+                          ? Math.min(200, Math.max(0, Math.floor(raw)))
+                          : 0;
+                        setChartConfig(card.id, { binCount: clamped });
+                      }}
                     />
-                    <em>{card.config.binCount === 0 ? t('chart.binsAuto') : ''}</em>
+                    <em>
+                      {card.config.binCount === 0
+                        ? t('chart.binsAuto')
+                        : t('chart.binsUsed', { n: card.config.binCount })}
+                    </em>
                   </label>
                 ) : null}
                 {card.config.type === 'errorBar' ? (
@@ -492,6 +536,16 @@ export function ChartCard({
                       />
                     </label>
                   </>
+                ) : null}
+                {card.config.logScale && nonPositiveCount > 0 ? (
+                  <p className="chart-card__warn">
+                    {t('chart.logDropsNonPositive', { n: nonPositiveCount })}
+                  </p>
+                ) : null}
+                {secondAxisLabels.length > 0 ? (
+                  <p className="chart-card__note">
+                    {t('chart.secondAxisOn', { names: secondAxisLabels.join(', ') })}
+                  </p>
                 ) : null}
                 {/* A wheel over the plot zooms both axes; this is the way back. */}
                 {typeDef.id !== 'heatmap' ? (
@@ -564,11 +618,16 @@ export function ChartCard({
           <span className="chart-card__hint">{t(typeDef.hintKey)}</span>
         </div>
 
-        {/* Plot area */}
+        {/* Plot area.
+
+            The two branches carry explicit `key`s so React cannot recycle one DOM node for
+            the other. Without them the node was reused on the plot -> empty transition and
+            the text React had just written was wiped by zrender's `SVGPainter.dispose()`
+            (`root.innerHTML = ''`), leaving a blank "needs N columns" message. */}
         {drawable ? (
-          <div className="chart-card__plot" ref={containerRef} />
+          <div key="plot" className="chart-card__plot" ref={containerRef} />
         ) : (
-          <div className="chart-card__empty">
+          <div key="empty" className="chart-card__empty">
             {t('chart.needMoreColumns', { type: t(typeDef.labelKey), n: needed })}
           </div>
         )}
@@ -577,6 +636,11 @@ export function ChartCard({
         <div className="chart-card__footer">
           <div className="chart-card__columns">
             <span className="chart-card__label">{t('chart.columns')}</span>
+            {typeDef.columnArity === 'single' && card.config.sources.length > 1 ? (
+              <span className="chart-card__note">
+                {t('chart.onlyFirstColumn', { name: drawnSources[0]?.label ?? '' })}
+              </span>
+            ) : null}
             {card.config.sources.map((source) => (
               <span
                 key={`${source.matrixId}:${source.columnIndex}`}
@@ -694,9 +758,15 @@ export function ChartCard({
                   min={1}
                   max={5}
                   value={card.smoothing.degree}
-                  onChange={(event) =>
-                    setSmoothing(card.id, { ...card.smoothing, degree: Number(event.target.value) })
-                  }
+                  onChange={(event) => {
+                    // `min`/`max` on a number input only constrain the spinner, not typing:
+                    // 60 used to reach `sgCoefficients` and blow the series up to ±90.
+                    const raw = Number(event.target.value);
+                    const degree = Number.isFinite(raw)
+                      ? Math.min(MAX_SG_DEGREE, Math.max(1, Math.floor(raw)))
+                      : 1;
+                    setSmoothing(card.id, { ...card.smoothing, degree });
+                  }}
                 />
               </label>
             ) : null}
