@@ -6,18 +6,21 @@
 ## 导航
 
 - 📌 **决策记录** (`decisions/`) — 已经拍板、影响后续的方向性结论
-  - [[2026-10-15-max-headroom-principle|兜底原则（最大余量）]] ← **核心架构原则**
+  - [[2026-10-17-backend-owns-compute|后端持有数据与计算（B 方案）]] ← **最新分层裁定：浏览器纯交互，修订 T1 基线**
+  - [[2026-10-15-max-headroom-principle|兜底原则（最大余量）]] ← **核心架构原则**（分层表已被 10-17 决策修订，契约仍有效）
   - [[2026-10-15-qt-implementation-removed|彻底移除 Qt 实现]] ← **当前仓库形态**
   - [[2026-10-14-frontend-web-chosen|前端选型定为 Web]] ← **当前前端方案**
   - [[2026-10-14-chart-library-audit|图表库保持 ECharts]] ← 统计图型与矢量导出审计
-  - [[2026-08-07-backend-first-frontend-paused|后端先行，前端搁置]]（其中"前端暂停"部分已被上面取代）
+  - [[2026-08-07-backend-first-frontend-paused|后端先行，前端搁置]]（其中"前端暂停"部分已被上面取代；"后端先行"部分被 10-17 决策复活并扩展）
   - [[2026-08-07-connection-subordination|连线从属原则]]
 - ⚖️ **架构权衡** (`architecture/`) — 尚未拍板、需要继续论证的对比
+  - [[backend-protocol-v1|后端协议 v1]] ← B 方案的传输/资源/错误/夹具契约
   - [[frontend-imgui-vs-web|前端选型：ImGui vs Web]]（权重已反转，见 10-14 决策）
 - 🕳️ **踩坑记录** (`lessons/`) — 实测中遇到的坑与规避方法
   - [[implot-v1.1-api|ImPlot v1.1 API 大改]]
   - [[imgui-docking-pushstylecolor|ImGui Docking 下 PushStyleColor 的坑]]
 - 📅 **开发日志** (`log/`) — 按日期记录进展
+  - [[2026-10-17|2026-10-17]]（B 方案拍板 + 工具链核实 + 阶段 0：决策/协议/跨层夹具）
   - [[2026-10-15|2026-10-15]]（仓库治理 + 移除 Qt + 修复 A/B/D/E/F）
   - [[2026-10-14|2026-10-14]]（前端定为 Web + `web/` 实现落地）
   - [[2026-08-07|2026-08-07]]

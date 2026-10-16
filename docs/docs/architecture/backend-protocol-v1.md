@@ -1,0 +1,94 @@
+# 后端协议 v1（backend-protocol-v1）
+
+- **日期**：2026-10-17 · **状态**：v1 草案，随阶段 1 实现同步修订
+- **出处**：[[../decisions/2026-10-17-backend-owns-compute|B 方案决策]]
+- **原则**：服务端只发结构化数据与错误码；文案、布局、渲染全在浏览器。
+
+## 传输形态
+
+- **HTTP/1.1，`127.0.0.1` 上的本地服务**（默认端口 37811，可配置）。
+- 控制消息 = JSON（`application/json`）；矩阵载荷 = 二进制帧（见下）。
+- 节点状态推送 = 长轮询 `GET /api/events?since=<seq>`（服务端挂起至有新事件或超时 25 s）。
+  WebSocket 升级留待需要更低延迟时再做，**不改变消息语义**。
+- 无鉴权（本机单用户工具）。跨机部署前必须先补 token，属已知缺口。
+
+## 握手与版本
+
+```
+GET /api/hello
+→ { "protocol": 1, "build": "<git-sha>", "capabilities": ["expr.v1", "matrix.v1"],
+    "limits": { "maxWindowRows": 5000 } }
+```
+
+前端在页面加载时调用。**protocol 不匹配 ⇒ 显式横幅"后端版本不兼容"，拒绝进入工作区**；
+连接失败 ⇒ 显式横幅"计算后端不可达 + 重试按钮"，绝不空白（契约 1 的具体化）。
+
+## 资源模型
+
+| 资源 | 权威 | 说明 |
+|---|---|---|
+| Matrix | 服务端 | `{id, revision, rows, cols, columns:[{name,annotation}]}`；revision 每次内容变更 +1 |
+| Node | 服务端 | 计算节点：`{id, kind:"function", inputs:[{varName, mode:"cell"\|"matrix", source:{matrixId}\|{nodeId}}], formula, resultMatrixId, state}` |
+| Card | 浏览器 | 几何/层叠/标题，以 `nodeId` 对齐 Node |
+| Event | 服务端 | 单调递增 `seq` 的状态流 |
+
+`mode` 由变量声明决定（默认按首字母大小写初始化，UI 可见可改——A/a 显示细节仍商榷中，
+协议只保证 mode 是显式字段，永不靠猜）。
+
+## 端点
+
+### 矩阵
+- `POST /api/matrices` （JSON：列名+数据，小表/上传解析结果入库）→ `{matrixId, revision}`
+- `POST /api/matrices/raw` （二进制帧，见"载荷编码"）→ 同上
+- `GET /api/matrices/{id}/window?start=&count=` → 二进制帧（可视行窗口）
+- `DELETE /api/matrices/{id}`
+
+### 节点
+- `POST /api/nodes` `{kind, inputs, formula}` → `{nodeId, resultMatrixId}`
+  - 输入绑定成环 ⇒ `409 {code:"cycle", path:[...]}`，**整批原子拒绝**（N 条边要么全加要么全不加）。
+- `PATCH /api/nodes/{id}` `{formula?, inputs?}` → 触发重算调度
+- `DELETE /api/nodes/{id}` — 有依赖者时 `409 {code:"hasDependents"}`（关闭保护的服务端侧）
+- `POST /api/nodes/{id}/cancel` — 长任务取消
+
+### 事件
+- `GET /api/events?since=<seq>&timeout=25` → `[{seq, nodeId?, matrixId?, state, code?, params?}]`
+  - `state ∈ dirty | computing | done | error`（前端指示灯：灰/黄/绿/红）
+
+## 载荷编码（二进制帧）
+
+```
+magic   u32 = 0x44434D31 ("DCM1")
+rows    u32
+cols    u32
+data    f64[rows*cols]  (column-major)
+names   JSON string（UTF-8，长度 u32 前缀）：列名数组
+```
+小端。NaN 原样传输（IEEE 754），前端渲染为 `—` 的既有约定不变。
+
+## 结构化错误
+
+```
+HTTP 4xx/5xx + { "code": "...", "params": {...}, "position"?: number }
+```
+
+沿用 `expression.ts` 现有码表并扩展：
+`unexpectedChar unknownFunction expectedCloseAfterArgs badArgCount unknownColumn
+expectedClose unexpectedToken trailingToken shapeMismatch singular matrixRequired
+notImplemented backendUnavailable hasDependents cycle`
+
+**服务端永不发送面向用户的句子**；前端用 i18n key `formula.error.<code>` /
+`backend.error.<code>` 渲染。未知 code ⇒ 前端显示通用兜底句 + 原始 code（可见，不静默）。
+
+## 差分测试契约
+
+`web/tests/fixtures/xlayer/*.json` 是唯一裁判格式，TS 参考实现与 C++ 引擎必须跑同一套：
+
+```json
+{ "name": "zscore", "columns": [{"name":"A","data":[1,2,3,4]}],
+  "expression": "(A - AVG(A)) / STD(A)",
+  "expect": [-1.3416407865, -0.4472135955, 0.4472135955, 1.3416407865],
+  "tol": 1e-9 }
+```
+
+错误用例用 `"error": {"code": "...", "position": N}` 替代 `expect`。
+CI 门禁：夹具在两侧必须同时全绿。
