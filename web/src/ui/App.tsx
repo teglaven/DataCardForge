@@ -36,6 +36,8 @@ export default function App() {
   const closeAllCards = useWorkspace((s) => s.closeAllCards);
   const toSnapshot = useWorkspace((s) => s.toSnapshot);
   const loadSnapshot = useWorkspace((s) => s.loadSnapshot);
+  const connectBackend = useWorkspace((s) => s.connectBackend);
+  const backendStatus = useWorkspace((s) => s.backend);
 
   // Cached per locale, so `t` is referentially stable and the callbacks below do not
   // change identity on every render.
@@ -60,6 +62,12 @@ export default function App() {
     if (shellRef.current) observer.observe(shellRef.current);
     return () => observer.disconnect();
   }, []);
+
+  // B-plan handshake on load. Offline is a VISIBLE banner with a retry —
+  // docs/decisions/2026-10-17-backend-owns-compute.md contract 1 ("绝不空白").
+  useEffect(() => {
+    void connectBackend();
+  }, [connectBackend]);
 
   /** Parse dropped / picked files and open them as one multi-file matrix card. */
   const ingestFiles = useCallback(
@@ -246,6 +254,18 @@ export default function App() {
         onCascade={onCascade}
         onCloseAll={onCloseAll}
       />
+      {backendStatus.state !== 'online' && backendStatus.state !== 'unknown' ? (
+        <div className="backend-banner" role="alert">
+          <span>
+            {backendStatus.state === 'mismatch'
+              ? t('backend.mismatch', { detail: backendStatus.error ?? '' })
+              : t('backend.offline')}
+          </span>
+          <button type="button" className="card__control" onClick={() => void connectBackend()}>
+            {t('backend.retry')}
+          </button>
+        </div>
+      ) : null}
       <CardCanvas
         onNewTable={() => void onNewTable()}
         onFilesDropped={(files: File[]) => void ingestFiles(files)}

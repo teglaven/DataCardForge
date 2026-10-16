@@ -1,0 +1,236 @@
+/**
+ * Backend transport client (B-plan: docs/decisions/2026-10-17-backend-owns-compute.md).
+ *
+ * The browser is a pure interaction surface; every number is computed server-side.
+ * This module speaks protocol v1 (docs/architecture/backend-protocol-v1.md):
+ * JSON control messages over HTTP plus DCM1 binary frames for matrix windows.
+ *
+ * Availability contract: the backend being unreachable is VISIBLE, never silent.
+ * `hello()` resolves with `{ ok: false }` instead of throwing so callers can show the
+ * banner and retry; nothing here ever falls back to local compute.
+ */
+
+export const PROTOCOL_VERSION = 1;
+const DEFAULT_BASE = '/api';
+
+export interface HelloInfo {
+  ok: boolean;
+  protocol?: number;
+  build?: string;
+  capabilities?: string[];
+  maxWindowRows?: number;
+  /** Human-diagnosable reason for failure (code-style detail, not user prose). */
+  error?: string;
+}
+
+export interface MatrixRegisterResult {
+  ok: boolean;
+  matrixId?: number;
+  revision?: number;
+  code?: string;
+}
+
+export interface NodeCreateResult {
+  ok: boolean;
+  nodeId?: number;
+  resultMatrixId?: number;
+  state?: NodeStateName;
+  /** Structured refusal data when ok=false (cycle path etc.). Never user prose. */
+  code?: string;
+  cyclePath?: number[];
+}
+
+export type NodeStateName = 'dirty' | 'computing' | 'done' | 'error';
+
+export interface NodeEvent {
+  seq: number;
+  nodeId?: number;
+  matrixId?: number;
+  state?: NodeStateName;
+  code?: string;
+  params?: Record<string, unknown>;
+}
+
+export interface MatrixWindow {
+  ok: boolean;
+  rows?: number;
+  columns?: number;
+  names?: string[];
+  /** column-major Float64 view into `buffer`. */
+  data?: Float64Array[];
+  buffer?: ArrayBuffer;
+  code?: string;
+}
+
+export interface PortBindingDto {
+  varName: string;
+  mode: 'cell' | 'matrix';
+  sourceMatrixId?: number;
+  sourceNodeId?: number;
+}
+
+async function jsonRequest<T>(base: string, path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(base + path, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  const text = await res.text();
+  let parsed: unknown = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`bad JSON from ${path}: ${text.slice(0, 80)}`);
+  }
+  if (!res.ok) {
+    const p = parsed as { code?: string; params?: Record<string, unknown> };
+    const err = new Error(p.code ?? `http ${res.status}`) as Error & { code?: string; params?: Record<string, unknown> };
+    err.code = p.code ?? `http ${res.status}`;
+    err.params = p.params;
+    throw err;
+  }
+  return parsed as T;
+}
+
+export class BackendClient {
+  private base: string;
+
+  constructor(base = DEFAULT_BASE) {
+    this.base = base;
+  }
+
+  /** Handshake. Never throws: failure shape is { ok:false, error } for the banner. */
+  async hello(): Promise<HelloInfo> {
+    try {
+      const info = await jsonRequest<{
+        protocol: number;
+        build: string;
+        capabilities: string[];
+        limits: { maxWindowRows: number };
+      }>(this.base, '/hello');
+      if (info.protocol !== PROTOCOL_VERSION) {
+        return { ok: false, error: `protocol-mismatch:${info.protocol}` };
+      }
+      return {
+        ok: true,
+        protocol: info.protocol,
+        build: info.build,
+        capabilities: info.capabilities,
+        maxWindowRows: info.limits.maxWindowRows,
+      };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** Register a freshly parsed table. Non-finite cells travel as string sentinels. */
+  async registerMatrix(name: string, columns: Array<{ posName: string; annotation: string; data: number[] }>): Promise<MatrixRegisterResult> {
+    const payload = {
+      name,
+      columns: columns.map((c) => ({
+        posName: c.posName,
+        annotation: c.annotation,
+        data: c.data.map((v) =>
+          Number.isNaN(v) ? 'NaN' : v === Infinity ? 'Infinity' : v === -Infinity ? '-Infinity' : v,
+        ),
+      })),
+    };
+    try {
+      const r = await jsonRequest<{ matrixId: number; revision: number }>(this.base, '/matrices', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return { ok: true, matrixId: r.matrixId, revision: r.revision };
+    } catch (e) {
+      return { ok: false, code: (e as { code?: string }).code ?? 'backendUnavailable' };
+    }
+  }
+
+  async createNode(inputs: PortBindingDto[], formula: string): Promise<NodeCreateResult> {
+    try {
+      const r = await jsonRequest<{ nodeId: number; resultMatrixId: number; state: NodeStateName }>(
+        this.base,
+        '/nodes',
+        { method: 'POST', body: JSON.stringify({ inputs, formula }) },
+      );
+      return { ok: true, ...r };
+    } catch (e) {
+      const err = e as { code?: string; params?: { path?: number[] } };
+      return { ok: false, code: err.code ?? 'backendUnavailable', cyclePath: err.params?.path };
+    }
+  }
+
+  async patchNode(nodeId: number, patch: { formula?: string; inputs?: PortBindingDto[] }): Promise<NodeCreateResult> {
+    try {
+      const r = await jsonRequest<{ nodeId: number; state: NodeStateName }>(this.base, `/nodes/${nodeId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+      return { ok: true, ...r };
+    } catch (e) {
+      const err = e as { code?: string; params?: { path?: number[] } };
+      return { ok: false, code: err.code ?? 'backendUnavailable', cyclePath: err.params?.path };
+    }
+  }
+
+  async deleteNode(nodeId: number): Promise<{ ok: boolean; code?: string }> {
+    try {
+      await jsonRequest(this.base, `/nodes/${nodeId}`, { method: 'DELETE' });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, code: (e as { code?: string }).code ?? 'backendUnavailable' };
+    }
+  }
+
+  /** Long-poll node events newer than `since`. Resolves empty on timeout. */
+  async events(since: number, signal?: AbortSignal): Promise<NodeEvent[]> {
+    try {
+      return await jsonRequest<NodeEvent[]>(this.base, `/events?since=${since}&timeout=25`, { signal });
+    } catch {
+      return [];
+    }
+  }
+
+  /** Fetch a row window as a decoded DCM1 frame. */
+  async window(matrixId: number, start: number, count: number): Promise<MatrixWindow> {
+    try {
+      const res = await fetch(`${this.base}/matrices/${matrixId}/window?start=${start}&count=${count}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { code?: string };
+        return { ok: false, code: body.code ?? `http ${res.status}` };
+      }
+      const buffer = await res.arrayBuffer();
+      return decodeMatrixFrame(buffer);
+    } catch {
+      return { ok: false, code: 'backendUnavailable' };
+    }
+  }
+}
+
+/** DCM1: magic u32, rows u32, cols u32, namesLen u32, f64[rows*cols] column-major, names JSON. */
+export function decodeMatrixFrame(buffer: ArrayBuffer): MatrixWindow {
+  const view = new DataView(buffer);
+  if (buffer.byteLength < 16 || view.getUint32(0, true) !== 0x44434d31) {
+    return { ok: false, code: 'badFrame' };
+  }
+  const rows = view.getUint32(4, true);
+  const cols = view.getUint32(8, true);
+  const namesLen = view.getUint32(12, true);
+  const expected = 16 + cols * rows * 8 + namesLen;
+  if (buffer.byteLength < expected) return { ok: false, code: 'truncatedFrame' };
+  const data: Float64Array[] = [];
+  let offset = 16;
+  for (let c = 0; c < cols; c++) {
+    const col = new Float64Array(rows);
+    for (let r = 0; r < rows; r++) col[r] = view.getFloat64(offset + r * 8, true);
+    data.push(col);
+    offset += rows * 8;
+  }
+  const namesJson = new TextDecoder('utf-8').decode(new Uint8Array(buffer, offset, namesLen));
+  let names: string[] = [];
+  try {
+    names = JSON.parse(namesJson) as string[];
+  } catch {
+    /* keep names empty rather than failing the whole frame */
+  }
+  return { ok: true, rows, columns: cols, names, data, buffer };
+}

@@ -36,8 +36,21 @@ import {
   type WorkspaceSnapshot,
 } from './types.ts';
 import { translatorFor, detectLocale, type Locale } from './i18n.ts';
+import { BackendClient } from '../backend/client.ts';
 
 export { lineColor };
+
+/**
+ * Compute-backend availability (B-plan). Unreachable is a VISIBLE state with a reason —
+ * the UI renders a banner from this; nothing ever falls back to local compute silently.
+ */
+export interface BackendStatus {
+  state: 'unknown' | 'online' | 'offline' | 'mismatch';
+  build?: string;
+  protocol?: number;
+  /** Structured detail for the banner (code-style, not user prose). */
+  error?: string;
+}
 
 /**
  * Display label for a column: the file's annotation when present, otherwise `Pos.N`.
@@ -169,6 +182,15 @@ interface WorkspaceState {
   showToast: (kind: Toast['kind'], message: string) => void;
   clearToast: () => void;
 
+  // ── compute backend (B-plan: docs/decisions/2026-10-17-backend-owns-compute.md) ──
+  backend: BackendStatus;
+  /** Handshake with the compute backend; result is stored in `backend`, never silent. */
+  connectBackend: () => Promise<void>;
+  /** Register a freshly parsed matrix server-side; records the node/matrix id mapping. */
+  registerMatrixWithBackend: (name: string, columns: MatrixSnapshot['columns']) => Promise<number | null>;
+  /** Server matrix id for a local matrix id, once registered (null while offline). */
+  backendMatrixId: (localMatrixId: number) => number | null;
+
   // ── persistence ─────────────────────────────────────────────────────
   toSnapshot: () => WorkspaceSnapshot;
   loadSnapshot: (snapshot: WorkspaceSnapshot) => void;
@@ -177,6 +199,10 @@ interface WorkspaceState {
 }
 
 let toastCounter = 0;
+
+/** Singleton transport client + local→server matrix id map (B-plan registration). */
+const backendClient = new BackendClient();
+const backendMatrixIds = new Map<number, number>();
 
 function nearlyEqual(a: number, b: number): boolean {
   return Math.abs(a - b) < GEOM_EPSILON;
@@ -350,6 +376,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         matrices.set(matrixId, entry.matrix);
         if (key !== null) matrixIdByIdentity.set(key, matrixId);
         sources.push({ name: entry.name, matrixId });
+
+        // Register server-side too (B-plan: the backend holds the authoritative copy).
+        // Fire-and-forget: file loading must never wait on the network; a failed
+        // registration flips `backend` to offline and the banner appears.
+        void (async () => {
+          const columns = entry.matrix.columns().map((c) => ({
+            posName: c.posName,
+            annotation: c.annotation,
+            data: c.data,
+          }));
+          const id = await get().registerMatrixWithBackend(entry.name, columns);
+          if (id !== null) backendMatrixIds.set(matrixId, id);
+        })();
       }
 
       // Cascade placement, so stacked cards do not land exactly on top of each other.
@@ -929,6 +968,31 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     clearToast() {
       set({ toast: null });
     },
+
+    // ── compute backend ───────────────────────────────────────────────
+
+    backend: { state: 'unknown' },
+    connectBackend: async () => {
+      const info = await backendClient.hello();
+      if (info.ok) {
+        set({ backend: { state: 'online', build: info.build, protocol: info.protocol } });
+      } else if (info.error?.startsWith('protocol-mismatch')) {
+        set({ backend: { state: 'mismatch', error: info.error } });
+      } else {
+        set({ backend: { state: 'offline', error: info.error ?? 'unreachable' } });
+      }
+    },
+
+    registerMatrixWithBackend: async (name, columns) => {
+      const result = await backendClient.registerMatrix(name, columns);
+      if (!result.ok || result.matrixId === undefined) {
+        set({ backend: { state: 'offline', error: result.code ?? 'unreachable' } });
+        return null;
+      }
+      return result.matrixId;
+    },
+
+    backendMatrixId: (localMatrixId) => backendMatrixIds.get(localMatrixId) ?? null,
 
     // ── persistence ───────────────────────────────────────────────────
 

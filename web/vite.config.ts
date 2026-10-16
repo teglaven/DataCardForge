@@ -14,6 +14,15 @@ export default defineConfig({
   optimizeDeps: {
     include: ['@e965/xlsx'],
   },
+  server: {
+    proxy: {
+      // B-plan: forward /api/* to the C++ compute backend (default port 37811).
+      '/api': {
+        target: 'http://127.0.0.1:37811',
+        changeOrigin: true,
+      },
+    },
+  },
   build: {
     target: 'es2022',
     sourcemap: true,

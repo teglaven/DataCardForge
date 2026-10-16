@@ -25,6 +25,9 @@ const dictionaries = {
     'menu.closeAll': '关闭全部卡片',
 
     'status.ready': '就绪 — 在空白处点击右键 → 打开数据文件，或直接拖入数据文件',
+    'backend.offline': '计算后端不可达 — 数值计算全部在后端进行，请启动后端后重试',
+    'backend.mismatch': '计算后端版本不兼容（{detail}）— 请更新后端或前端',
+    'backend.retry': '重试连接',
     'status.loaded': '已加载 {name}（{rows} 行 × {cols} 列）',
     'status.loadedMany': '已加载 {count} 个文件',
     'status.chartCreated': '已创建图表：{name}',
@@ -173,6 +176,9 @@ const dictionaries = {
     'menu.closeAll': 'Close All Cards',
 
     'status.ready': 'Ready — right-click the empty area → Open Data Files, or drop data files here',
+    'backend.offline': 'Compute backend unreachable — all numeric computation runs server-side; start the backend and retry',
+    'backend.mismatch': 'Compute backend version mismatch ({detail}) — update the backend or frontend',
+    'backend.retry': 'Retry connection',
     'status.loaded': 'Loaded {name} ({rows} rows × {cols} cols)',
     'status.loadedMany': 'Loaded {count} files',
     'status.chartCreated': 'Created chart: {name}',

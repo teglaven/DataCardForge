@@ -33,6 +33,22 @@ jobs:
       - name: Production build
         run: npm run build
 
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install C++ toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build libeigen3-dev
+
+      - name: Configure & build backend
+        run: |
+          cmake -S backend -B backend/build -G Ninja
+          cmake --build backend/build
+
+      - name: Run cross-tier fixtures + node registry tests
+        run: ctest --test-dir backend/build --output-on-failure
+
   e2e-smoke:
     runs-on: ubuntu-latest
     needs: typecheck-and-test
