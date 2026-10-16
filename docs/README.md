@@ -11,29 +11,32 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 - **Card model**: everything is a card — data card (file) → function card (transform) → output card (plot / export)
 - **Strict separation**: data and behavior are separated; tables are never mutated; every transformation produces a new card
 - **Connection subordination**: connections are only the visualization of data dependencies, normally kept low-key (background layer), and never interfere with card layout or interaction — cards are the protagonists, connections the supporting cast
-- **Maximum headroom**: the core requirement is not "cheap implementation bought at the price of performance" but **the highest possible fallback capacity — operators never hit a wall, and any degradation / skip / "not possible" must be visible**. Compute tiers (TS → WASM → backend) are an automatic escalation path the operator never chooses; the deciding question is "will the operator hit a wall", not "where is the crossover". Full reasoning: [decision record](docs/decisions/2026-10-15-max-headroom-principle.md)
+- **Backend-owns-compute (B-plan)**: all numeric / statistical / matrix computation runs in the **C++/Eigen backend**; the browser is a **pure interaction surface** (rendering, input, layout). The backend being unreachable is a **visible state with a retry button**, never silent. This supersedes the earlier T1-browser-baseline tier table while preserving the three contracts of the [maximum-headroom principle](docs/decisions/2026-10-15-max-headroom-principle.md): visible degradation, cross-tier semantic consistency (differential fixtures), bounded worst-case. Full reasoning: [decision record](docs/decisions/2026-10-17-backend-owns-compute.md)
 - **Column-oriented matrix**: rows = samples (`No.N`), columns = variables (`Pos.N`), contiguous storage, high performance
 - **Extensible**: computation system + adapter interfaces — the community can contribute long-tail features
 
-## Frontend: Web
+## Architecture
 
-> ✅ **Decision of 2026-10-14: the frontend is Web.** The main implementation lives in [`web/`](../web/README.md):
-> **React 19 + Vite 8 + TypeScript 7 + ECharts 6 (SVG renderer)**.
-> Full rationale, trade-offs and verification are in the [decision record](docs/decisions/2026-10-14-frontend-web-chosen.md).
+```
+┌─────────────────────────────────────────────────────┐
+│                   Browser (Web)                     │
+│  React 19 · ECharts 6 · zustand · VirtualTable      │
+│  Card layout · Ports · Connections · Status lamps   │
+│  Pure interaction — NO numeric computation          │
+└──────────────────────┬──────────────────────────────┘
+                       │ HTTP + JSON + DCM1 binary
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│              Compute Backend (C++17)                │
+│  Eigen 3.4 · Expression engine · Dependency graph   │
+│  Matrix store · Node scheduler · Event bus          │
+│  All numeric / statistical / matrix computation     │
+└─────────────────────────────────────────────────────┘
+```
 
-**Why Web**: the August trade-off study weighted "large-table performance" heavily and treated "vector export" as a *possible* requirement. Re-evaluating flipped those weights — the end goal of scientific/industrial work is a figure that goes into a report, and **SVG vector export** is native on the web while the ImGui route would need a hand-built export pipeline; Chinese IME is the same story. The performance concern did not survive measurement: with virtual scrolling a 10 000-row table renders **23 row nodes**, and ECharts' LTTB downsampling handles 10⁵-point series.
+The frontend speaks [protocol v1](docs/architecture/backend-protocol-v1.md): JSON control messages over HTTP plus DCM1 binary frames for matrix windows. Long-poll event stream pushes node state changes (dirty → computing → done | error) to drive the four-state status lamps.
 
-> 🗑️ **The Qt implementation was removed on 2026-10-15.** `src/widgets/`, `ui/`, `i18n/`,
-> `imguitest/`, `third_party/`, `CMakeLists.txt` and the whole C++ build tree are gone from the
-> working tree; nothing here compiles as C++ any more. The behaviour they encoded — connection
-> geometry, red/blue/grey colours, close-protection rules — is now specified by the TypeScript
-> sources and their tests, not by a parallel implementation.
->
-> The decision to delete (rather than keep as a reference) and the reasoning are recorded in
-> [docs/decisions/2026-10-15-qt-implementation-removed.md](docs/decisions/2026-10-15-qt-implementation-removed.md).
-> Full history of the C++ code remains recoverable from the pre-removal backup described there.
-
-## Implemented Features (web)
+## Implemented Features
 
 ### File Loading
 - **File → Open Data Files**, **right-click the empty area**, or **drop files onto the canvas**
@@ -43,6 +46,7 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 - File-backed tables start **read-only**; the lock button in the card's file row unlocks editing. Unparseable cells show `—` instead of being silently turned into 0, and a value that is not a number is refused with an explanation rather than dropped
 - Parsing runs in a **Web Worker**, so dropping a 10 000-row file no longer freezes the interface (falls back inline where workers are unavailable)
 - Re-opening the same file reuses its parse only when the **bytes match** (`size` + `lastModified`); a different file that merely shares the name gets a fresh parse — never stale measurements under a current label
+- Loaded matrices are **automatically registered with the compute backend** (fire-and-forget; UI never blocks on network)
 
 ### Plotting (ChartCard)
 - Right-click a column header → **pick the chart type directly** (types that would run past the last column are disabled, with the reason in the tooltip)
@@ -64,6 +68,19 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 > NumPy/R conventions (linear-interpolation quantiles, Bessel-corrected variance, Silverman
 > bandwidth, t-distribution confidence intervals, Tukey outliers).
 
+### Compute Backend (C++/Eigen)
+
+The backend holds **authoritative copies** of all data, dependency graphs, and compute definitions. The browser keeps only revision-keyed read-only display caches.
+
+- **Expression engine**: full semantic port of the TS reference (`expression.ts`) — 38 cross-tier differential fixtures guarantee identical results. Supports arithmetic, comparisons, aggregations (SUM/AVG/MIN/MAX/MEDIAN/STD with NaN skipping and Bessel-corrected STD), element-wise math (ABS/SQRT/LOG/LN/LOG10/EXP/POW/ROUND/FLOOR/CEIL/SIGN), moving window (MOV/EMA), conditionals (IF)
+- **Matrix-mode evaluation**: when any input variable is declared matrix-mode, `*` becomes matrix multiplication; additional functions: `TRANSPOSE`, `DET`, `INV`, `SOLVE`, `MMUL` (explicit matmul), `EMUL` (explicit element-wise multiply). Shape mismatches produce structured `shapeMismatch` errors — never silent garbage
+- **Dependency graph**: per-port edges, atomic cycle refusal (N edges either all register or none), result-matrix-aware cascade via `resultOwner_` map
+- **Node state machine**: dirty → computing → done | error, pushed via monotonic-seq event stream
+- **Protocol v1**: HTTP/1.1 + JSON control plane + DCM1 binary matrix frames + long-poll events. Version handshake on connect; mismatch → visible banner
+
+> Cross-tier test fixtures (`web/tests/fixtures/xlayer/`) are the single judge format.
+> Both the TS reference and C++ engine must pass the same JSON — CI enforces this.
+
 ### Connection Visualization (ConnectionLayer)
 - Red = source table selected; blue = target chart selected; gray = neither selected
 - Highlighted lines are thick and **on top** (above the cards); normal lines are thin and gray, below the cards (dual layers)
@@ -77,88 +94,132 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 - Cards drag, resize and stack freely, plus **Tile / Cascade / Close All**
 - A table that still feeds a chart **refuses to close**, and its connections blink to explain why
 - Runtime **Chinese/English switching**, **workspace persistence** (layout + dependencies + data), and CSV export of the current table
+- **Backend availability banner**: when the compute backend is unreachable or version-mismatched, a visible alert bar appears with a retry button — never a blank screen
 
 ## Scope & Limitations
 
 - Internal data is stored as **IEEE 754 double** (~15–17 significant digits), consistent with Excel's native numeric model
 - Suitable for batch processing and visualization of **floating-point numeric** data (sensors, measurements, experiments)
 - > ⚠️ **Not suitable** for scenarios requiring exact decimal arithmetic (e.g., financial / accounting amounts) or arbitrary-precision computation — Excel and most similar tools cannot satisfy these either
+- The compute backend is a **required dependency** — without it, file loading and chart rendering still work locally, but formula evaluation and matrix operations are unavailable (with a visible banner)
 
 ## Tech Stack
 
 | Component | Purpose | Notes |
 |-----------|---------|-------|
 | React 19 + Vite 8 | UI framework and build | TypeScript 7 `strict` |
-| ECharts 6 | Line charts | **SVG renderer**, vector export |
+| ECharts 6 | Charts | **SVG renderer**, vector export |
 | react-rnd | Card drag / resize | |
 | zustand | State (card table + dependency graph) | |
 | @e965/xlsx | Excel read | Loaded on demand |
 | Hand-rolled virtual scrolling | Large-table rendering | No third-party dependency |
 | Web Worker (`src/loaders/parse.worker.ts`) | Off-thread file parsing | Keeps the UI responsive on large files |
-| *(not included)* | Eigen / linear algebra | **No longer a dependency** — removed with the C++ tree on 2026-10-15; re-scope only if demand is proven |
+| **C++17 / g++ 15** | Compute backend language | CMake 4 + Ninja |
+| **Eigen 3.4** | Linear algebra / matrix operations | Header-only, `/usr/include/eigen3` |
+| POSIX sockets | Backend HTTP server | Zero third-party networking deps |
 
-## Building
+## Building & Running
 
+### Prerequisites
+
+**Frontend** (Node.js 22+):
 ```bash
-cd web
-npm install
-npm run dev        # dev server
-npm run build      # type check + production build → web/dist/
-npm test           # unit tests (vitest)
+cd web && npm install
 ```
 
-End-to-end smoke test (run `npm run preview` first):
+**Backend** (Ubuntu / Debian):
+```bash
+sudo apt-get install build-essential cmake ninja-build libeigen3-dev
+```
+
+> On other platforms: any C++17 compiler + CMake 3.24+ + Eigen 3.4 headers will work.
+> The toolchain is verified on Ubuntu 26.04 with g++ 15.2, cmake 4.2, ninja 1.13.
+
+### One-command dev
 
 ```bash
+./scripts/dev.sh          # builds backend + starts both servers
+```
+
+This runs `cmake --build backend/build`, starts `dc_backend` on port 37811, and launches `vite dev` with `/api` proxied to the backend. Ctrl-C kills both.
+
+### Manual steps
+
+```bash
+# Backend
+cmake -S backend -B backend/build -G Ninja
+cmake --build backend/build
+./backend/build/dc_backend --port 37811
+
+# Frontend (in another terminal)
+cd web
+npm run dev               # dev server at http://localhost:5173
+npm run build             # type check + production build → web/dist/
+npm test                  # unit tests (vitest, includes cross-tier fixtures)
+```
+
+### Tests
+
+```bash
+# Frontend: typecheck + 247 unit tests (including 38 cross-tier differential fixtures)
+cd web && npm run typecheck && npm test
+
+# Backend: 3 ctest suites (38 expression + 14 matrix + node registry)
+cd backend && ctest --test-dir build --output-on-failure
+
+# End-to-end smoke (run `npm run preview` first)
 node web/scripts/smoke.mjs http://127.0.0.1:4173
 ```
 
-See [`web/README.md`](../web/README.md) for details.
+### CI
 
-> The old Qt/CMake build steps are gone with the code they built. If you need to rebuild them,
-> recover the pre-removal tree as described in
-> [docs/decisions/2026-10-15-qt-implementation-removed.md](docs/decisions/2026-10-15-qt-implementation-removed.md).
+GitHub Actions runs three jobs on every push/PR:
+1. **typecheck-and-test**: `npm ci` → typecheck → vitest → production build
+2. **backend-test**: `apt install toolchain` → cmake build → ctest (cross-tier fixtures + node registry)
+3. **e2e-smoke**: Playwright Chromium against `vite preview`
 
 ## Architecture Extension Points
 
-All extension points are on the web side — there is no second implementation to keep in sync:
-
+- `backend/src/expression.cpp` → expression engine (cell-mode + matrix-mode evaluators)
+- `backend/src/matrix_value.h` → MatVal type wrapping Eigen::MatrixXd with shape enforcement
+- `backend/src/nodes.cpp` → compute node registry, dependency graph, scheduler
+- `backend/src/http_server.cpp` → protocol v1 HTTP endpoints
+- `web/src/backend/client.ts` → frontend transport client (protocol v1)
 - `web/src/loaders/` → adapters for new file formats (`FileLoader`)
-- `web/src/core/MatrixData.ts` → internal data model (column-oriented storage)
-- `web/src/core/DependencyGraph.ts` + `workspaceStore` → dependency graph, cycle detection, red-blue highlight
+- `web/src/core/MatrixData.ts` → client-side data model (display cache under B-plan)
 - `web/src/ui/ConnectionLayer.tsx` → connection visualization
-- `web/src/ui/components/MatrixCard.tsx` / `ChartCard.tsx` → individual cards
+- `web/tests/fixtures/xlayer/` → cross-tier differential test fixtures (single judge format)
 
 ## Short-term Goals
 
-> **Current priority: element-wise formula computation + the headroom principle.** The frontend is
-> settled and the Qt/Eigen backend is gone, so the next step is decided on the web side alone.
-> **The maximum-headroom principle was adopted on 2026-10-15** ([decision record](docs/decisions/2026-10-15-max-headroom-principle.md)):
-> the selection question is "will the operator hit a wall", not "where is the crossover" — the tiers
-> (TS → WASM → backend) are an automatic escalation path, the backend exists to **remove ceilings**,
-> not to be faster, and every degradation must be visible.
-> See [docs/log/2026-10-15.md](docs/log/2026-10-15.md).
-
 - [x] **Frontend decision** → **Web chosen** (2026-10-14)
-- [x] **Qt implementation removed** → repo is now a single web-first monorepo (2026-10-15)
+- [x] **Qt UI implementation removed** → repo is now web-first (2026-10-15)
 - [x] **Dependency cycle detection** → `DependencyGraph` refuses loops and deduplicates edges (2026-10-15)
-- [ ] **Element-wise formula computation**: evaluate formulas on every matrix element (SUM / AVG / MIN / MAX / IF); more complex logic goes to the **FunctionCard**
-- [ ] Compute **fallback tier** (native backend, or WASM): promoted from "unresolved" to **required** by the [maximum-headroom principle](docs/decisions/2026-10-15-max-headroom-principle.md) — it exists to **remove ceilings** (algorithm coverage, memory limits, worst-case compute), not to be faster; the **cross-tier test fixtures must land first** (differential tests before the engine)
-- [ ] Data **editing** capability (non-file-backed cards, double-click edit + formula evaluation). Note: `VirtualTable` has the inline-edit branch but `MatrixCard` does not yet pass `onCellChange`, and nothing calls `setCell()` — the path is *not* wired, contrary to earlier notes here
+- [x] **Maximum-headroom principle adopted** → visible degradation contract (2026-10-15)
+- [x] **B-plan decided** → backend owns compute, browser is pure interaction (2026-10-17)
+- [x] **Cross-tier differential fixtures** → 38 expression cases, single JSON judge format (2026-10-17)
+- [x] **C++/Eigen compute backend skeleton** → expression engine port, node registry, HTTP API, protocol v1 (2026-10-17)
+- [x] **Frontend transport client** → backend handshake, matrix registration, event polling, visible offline banner (2026-10-17)
+- [x] **One-command dev + CI gate** → `scripts/dev.sh`, vite proxy, GitHub Actions backend-test job (2026-10-17)
+- [x] **Eigen matrix operators** → matmul, transpose, det, inv, solve + matrix-mode expression evaluator + 14 matrix fixtures (2026-10-17)
+- [ ] **Function card UI**: three-pane layout (left: variable blocks + input ports + mode badges; top-right: formula editor; bottom-right: result grid + output port)
+- [ ] **VirtualTable windowed data source**: large matrices fetched by visible-row window, not loaded whole
+- [ ] **Port anchors**: per-port connection endpoints in `cardMetrics` + `ConnectionLayer`
+- [ ] **Four-state status lamps**: driven by node state events (gray/yellow/green/red)
+- [ ] Data **editing** capability (non-file-backed cards, double-click edit + formula evaluation)
 - [ ] Connection arrows / red-blue bidirectional highlight
-- [ ] **Selectable X axis**: charts can pick a column as the X-axis source (default remains the row number `No.N`)
-- [ ] Batch export (CSV / images / Excel tables) — CSV and single-chart SVG already work
-- [x] Scatter, bar and multi-axis charts (delivered with the 9 statistical types, 2026-10-14)
 - [ ] **Card beautification**: unify card styling, spacing, colors, and layout
-- [ ] CI: typecheck + unit tests + end-to-end smoke (today these run only from one hand-built local environment)
 
 ## Long-term Roadmap
 
 > The items below are only directional ideas and may change at any time; if you have suggestions, feel free to open an [issue](https://github.com/teglaven/DataCardForge/issues).
 
-- [ ] **FunctionCard**: feed matrix data into functions written in Python / C++, producing new cards (changes the data flow and determines the persistence format)
-- [ ] **ExtensionCard**: a **quick parameter-setting + live-preview** panel dedicated to a specific parent card; can only be created from the parent card and is treated as its child window, closing with it. Solves the "more cards ⇒ more scattered settings" bottleneck (supports wheel-driven fast parameter tweaking + live preview, e.g. segmented-fitting term count, smoothing window, etc.)
+- [ ] **Conditional filter card**: slice matrices by row/column predicates before feeding into function cards
+- [ ] **ExtensionCard**: a **quick parameter-setting + live-preview** panel dedicated to a specific parent card; can only be created from the parent card and is treated as its child window, closing with it
+- [ ] **Implicit equation solving**: extract B from A=B relations where B cannot be isolated analytically (recorded limitation of current single-formula-per-card design)
 - [ ] More smoothing modes; consider supporting smoothing via formula / function cards
+- [ ] **Parallel multi-function-card execution**: backend scheduler with job IDs, cancellation, out-of-order completion
+- [ ] **WebSocket upgrade**: replace long-poll with persistent connection for lower-latency state push
 - [x] **i18n**: Chinese / English UI switching (implemented in the web frontend)
 - [x] **Persistence** of all cards in the main window (web: card layout + dependencies + data)
 
@@ -178,5 +239,8 @@ The full license text is available in the [LICENSE](LICENSE) file.
 |-----------|---------|-------|
 | React / Vite / ECharts / zustand / react-rnd | MIT / Apache-2.0 | Web frontend dependencies |
 | @e965/xlsx | Apache-2.0 | SheetJS community build |
+| Eigen 3.4 | MPL-2.0 | Header-only linear algebra (backend) |
+
 *(The Qt-era dependencies — Qt 6, QCustomPlot, OpenXLSX, fast_float — left the project with the
-C++ tree on 2026-10-15 and are no longer shipped or linked.)*
+Qt UI tree on 2026-10-15 and are no longer shipped or linked. The C++ compute backend introduced
+on 2026-10-17 uses only Eigen and the standard library.)*

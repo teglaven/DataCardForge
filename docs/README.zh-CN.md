@@ -11,28 +11,32 @@
 - **卡片模型**：所有东西都是卡片 —— 数据卡(文件) → 函数卡(变换) → 输出卡(绘图/导出)
 - **严格分离**：数据与行为分离，表永不改写，一切处理产出新卡片
 - **连线从属**：连线仅为数据依赖的可视化，常态低调（背景层），不干扰卡片布局与交互；卡片为主角，连线为配角
-- **兜底（最大余量）**：核心诉求不是"低成本换性能"，而是**尽可能高的兜底能力，不让操作人员感到痛苦**——最坏情况没有墙，任何降级/跳过/做不到都必须**可见**。性能分层（TS → WASM → 后端）是自动升级路径，操作人员永不选择层；判据是"会不会撞墙"，不是"交叉点在哪"。完整论证见 [决策记录](docs/decisions/2026-10-15-max-headroom-principle.md)
+- **后端持有计算（B 方案）**：所有数值/统计/矩阵计算在 **C++/Eigen 后端**执行；浏览器是**纯交互界面**（渲染、输入、布局）。后端不可达是**带重试按钮的可见状态**，绝不静默。这取代了早期的 T1 浏览器基线分层表，同时保留[兜底原则](docs/decisions/2026-10-15-max-headroom-principle.md)三条契约：可见降级、跨层语义一致（差分夹具）、最坏情况有界。完整论证见 [决策记录](docs/decisions/2026-10-17-backend-owns-compute.md)
 - **列式矩阵**：行=样本(No.N)，列=变量(Pos.N)，连续内存存储，高性能
 - **可扩展**：算子系统 + 适配器接口，社区可贡献长尾功能
 
-## 前端：Web
+## 架构
 
-> ✅ **2026-10-14 决策：前端定为 Web。** 主实现位于 [`web/`](../web/README.md)：
-> **React 19 + Vite 8 + TypeScript 7 + ECharts 6（SVG renderer）**。
-> 完整的选型理由、代价与验证方式见 [决策记录](docs/decisions/2026-10-14-frontend-web-chosen.md)。
+```
+┌─────────────────────────────────────────────────────┐
+│                   浏览器（Web）                      │
+│  React 19 · ECharts 6 · zustand · VirtualTable      │
+│  卡片布局 · 端口 · 连线 · 状态指示灯                  │
+│  纯交互——不做任何数值计算                            │
+└──────────────────────┬──────────────────────────────┘
+                       │ HTTP + JSON + DCM1 二进制帧
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│              计算后端（C++17）                        │
+│  Eigen 3.4 · 表达式引擎 · 依赖图                     │
+│  矩阵存储 · 节点调度器 · 事件总线                     │
+│  所有数值/统计/矩阵计算                              │
+└─────────────────────────────────────────────────────┘
+```
 
-**为什么是 Web**：8 月的权衡把"大数据表性能"置于高权重、把"矢量导出"当作可能的需求；重新评估后权重反转——科研/工业场景的终点是出图进报告，而 **SVG 矢量导出**在 Web 上是原生能力、在 ImGui 路线要自建管线；中文 IME 同理。性能顾虑已被证伪：虚拟滚动下 10 000 行只渲染 **23 个行节点**，图表用 ECharts 的 LTTB 降采样处理 10⁵ 点序列。
+前端使用[协议 v1](docs/architecture/backend-protocol-v1.md)：HTTP 上的 JSON 控制消息 + DCM1 二进制矩阵帧。长轮询事件流推送节点状态变更（dirty → computing → done | error），驱动四态指示灯。
 
-> 🗑️ **Qt 实现已于 2026-10-15 移除。** `src/widgets/`、`ui/`、`i18n/`、`imguitest/`、
-> `third_party/`、`CMakeLists.txt` 及整个 C++ 构建树已从工作区删除，本仓库不再有可编译的 C++ 代码。
-> 它们承载的行为——连线几何、红/蓝/灰配色、关闭保护规则——现在由 TypeScript 源码与其测试来定义，
-> 而不是一份并行的第二实现。
->
-> 「删除而非留作参照」这一决定的理由见
-> [docs/decisions/2026-10-15-qt-implementation-removed.md](docs/decisions/2026-10-15-qt-implementation-removed.md)。
-> 移除前的完整历史仍可从该文档所述的备份中恢复。
-
-## 已实现功能（Web 版）
+## 已实现功能
 
 ### 文件加载
 - 菜单 **文件 → 打开数据文件**、**右键空白区域**，或把文件直接**拖入画布**
@@ -42,6 +46,7 @@
 - 文件来源的表格默认**只读**，卡片文件行上的锁按钮可切换为可编辑；无法解析的单元格显示 `—`（不再静默变 0），非数值输入会被拒绝并给出提示而不是静默丢弃
 - 解析在 **Web Worker** 中进行，拖入万行文件不再冻结界面（无 Worker 环境自动回退到主线程）
 - 重新打开同一文件仅在**字节一致**（`size` + `lastModified`）时复用解析结果；同名但内容不同的文件会重新解析——绝不让旧测量数据顶着新标签出现
+- 加载的矩阵**自动注册到计算后端**（fire-and-forget，UI 不因网络阻塞）
 
 ### 绘图（ChartCard）
 - 右键列头 → **直接选图型**（从该列起列数不够的图型置灰，并在悬浮提示里说明还差几列）
@@ -56,16 +61,29 @@
 - 对数 Y 轴 / 次坐标轴 / 拟合线 / X 轴来源 / 重置缩放 等选项按图型自动提供
 - 底部**平滑控件**：滑动平均 / 指数平滑 / 中值滤波 / Savitzky–Golay，改变时实时重绘，设置在切换数据源时保持不变
 - **导出**：**SVG（真矢量，活 DOM 序列化、无内嵌位图）** / PNG（1×/2×/4×）/ PDF（位图封装，UI 明确标注非矢量）
-- 文件切换时所有依赖图表自动更新（含显式 X 轴与公式卡结果）；列不存在时保留旧数据，X 轴列不存在则回落到行号
+- 文件切换时所有依赖图表自动更新；列不存在时保留旧数据
 - 缩放 / 平移、图例（拟合线名不入图例）
 
 > 统计量实现在 `core/stats.ts`，纯函数、40 个单元测试，数值约定与 NumPy/R 一致
 > （线性插值分位数、Bessel 校正方差、Silverman 带宽、t 分布置信区间、Tukey 离群点）。
 
+### 计算后端（C++/Eigen）
+
+后端持有所有数据、依赖图和计算定义的**权威副本**。浏览器仅保留按 revision 键控的只读显示缓存。
+
+- **表达式引擎**：TS 参考实现的逐语义移植（`expression.ts`）——38 个跨层差分夹具保证结果完全一致。支持算术、比较、聚合（SUM/AVG/MIN/MAX/MEDIAN/STD，NaN 跳过 + Bessel 校正 STD）、逐元素数学函数（ABS/SQRT/LOG/LN/LOG10/EXP/POW/ROUND/FLOOR/CEIL/SIGN）、滑动窗口（MOV/EMA）、条件（IF）
+- **矩阵模式求值**：当任一输入变量声明为矩阵模式时，`*` 变为矩阵乘法；新增函数：`TRANSPOSE`、`DET`、`INV`、`SOLVE`、`MMUL`（显式矩阵乘）、`EMUL`（显式逐元素乘）。形状不匹配产生结构化 `shapeMismatch` 错误——绝不静默产出垃圾结果
+- **依赖图**：按端口的边、原子成环拒绝（N 条边要么全加要么全不加）、经 `resultOwner_` 映射的结果矩阵感知级联
+- **节点状态机**：dirty → computing → done | error，通过单调递增 seq 的事件流推送
+- **协议 v1**：HTTP/1.1 + JSON 控制面 + DCM1 二进制矩阵帧 + 长轮询事件。连接时版本握手；不匹配 → 可见横幅
+
+> 跨层测试夹具（`web/tests/fixtures/xlayer/`）是唯一裁判格式。
+> TS 参考实现和 C++ 引擎必须通过同一份 JSON——CI 强制执行。
+
 ### 连线可视化（ConnectionLayer）
 - 红色 = 源表格被选中；蓝色 = 目标图表被选中；灰色 = 都未选中
 - 高亮线粗且**置顶**显示（在卡片之上）；普通线细灰在卡片之下（双图层）
-- 卡片移动、缩放、**以及表格滚动**时连线实时跟踪（布局版本号驱动，非定时器轮询）——滚动才是让列头位移的主因，因此它和拖拽一样要触发锚点失效
+- 卡片移动、缩放、**以及表格滚动**时连线实时跟踪（布局版本号驱动，非定时器轮询）
 - 列滚出视口 → 连线自动接到窗口左/右边缘
 - 列可见时 → 用当前颜色半透明方框**框选列头**
 - 连线层 `pointer-events: none`，永不抢事件、不参与布局（**连线从属原则**天然满足）
@@ -75,87 +93,132 @@
 - 卡片自由拖拽、缩放、层叠，另有**平铺 / 层叠 / 关闭全部**
 - 有图表依赖的表格**拒绝关闭**，并闪烁对应连线提示
 - 运行时**中英切换**；**工作区持久化**（保存/恢复布局 + 依赖 + 数据）；表格导出 CSV
+- **后端可用性横幅**：当计算后端不可达或版本不匹配时，显示带重试按钮的警告条——绝不白屏
 
 ## 适用范围与限制
 
 - 内部数据采用 **IEEE 754 double**（约 15~17 位有效数字）存储，与 Excel 原生数值模型一致
 - 适用于传感器、测量、实验等**浮点数值**数据的批量处理与可视化
 - > ⚠️ **不适用**于需要十进制精确运算（如金融/会计金额）或任意精度计算的场景——此类需求 Excel 与多数同类工具同样无法满足
+- 计算后端是**必需依赖**——没有它时文件加载和图表渲染仍可本地工作，但公式求值和矩阵运算不可用（带可见横幅提示）
 
 ## 技术栈
 
 | 组件 | 用途 | 备注 |
 |------|------|------|
 | React 19 + Vite 8 | UI 框架与构建 | TypeScript 7 `strict` |
-| ECharts 6 | 折线统计图 | **SVG renderer**，矢量导出 |
+| ECharts 6 | 统计图表 | **SVG renderer**，矢量导出 |
 | react-rnd | 卡片拖拽/缩放 | |
 | zustand | 状态管理（卡片表 + 依赖图） | |
 | @e965/xlsx | Excel 读写 | 按需加载 |
 | 自研虚拟滚动 | 大表渲染 | 无第三方依赖 |
 | Web Worker（`src/loaders/parse.worker.ts`） | 解析离开主线程 | 大文件加载时界面不冻结 |
-| *（不含）* | Eigen / 线性代数 | **已不再是依赖**——随 C++ 代码树于 2026-10-15 移除，确有需求再立项 |
+| **C++17 / g++ 15** | 计算后端语言 | CMake 4 + Ninja |
+| **Eigen 3.4** | 线性代数/矩阵运算 | Header-only，`/usr/include/eigen3` |
+| POSIX sockets | 后端 HTTP 服务 | 零第三方网络依赖 |
 
-## 构建
+## 构建与运行
 
+### 前置依赖
+
+**前端**（Node.js 22+）：
 ```bash
-cd web
-npm install
-npm run dev        # 开发服务器
-npm run build      # 类型检查 + 生产构建 → web/dist/
-npm test           # 单元测试（vitest）
+cd web && npm install
 ```
 
-端到端冒烟测试（需要先 `npm run preview`）：
+**后端**（Ubuntu / Debian）：
+```bash
+sudo apt-get install build-essential cmake ninja-build libeigen3-dev
+```
+
+> 其他平台：任何 C++17 编译器 + CMake 3.24+ + Eigen 3.4 头文件均可。
+> 已在 Ubuntu 26.04（g++ 15.2、cmake 4.2、ninja 1.13）上验证。
+
+### 一键开发
 
 ```bash
+./scripts/dev.sh          # 构建后端 + 同时启动两个服务
+```
+
+该脚本执行 `cmake --build backend/build`，在 37811 端口启动 `dc_backend`，并启动 `vite dev`（`/api` 代理到后端）。Ctrl-C 同时终止两者。
+
+### 手动步骤
+
+```bash
+# 后端
+cmake -S backend -B backend/build -G Ninja
+cmake --build backend/build
+./backend/build/dc_backend --port 37811
+
+# 前端（另一个终端）
+cd web
+npm run dev               # 开发服务器 http://localhost:5173
+npm run build             # 类型检查 + 生产构建 → web/dist/
+npm test                  # 单元测试（vitest，含跨层夹具）
+```
+
+### 测试
+
+```bash
+# 前端：typecheck + 247 个单元测试（含 38 个跨层差分夹具）
+cd web && npm run typecheck && npm test
+
+# 后端：3 个 ctest 套件（38 表达式 + 14 矩阵 + 节点注册表）
+cd backend && ctest --test-dir build --output-on-failure
+
+# 端到端冒烟（需先 npm run preview）
 node web/scripts/smoke.mjs http://127.0.0.1:4173
 ```
 
-详见 [`web/README.md`](../web/README.md)。
+### CI
 
-> 旧 Qt/CMake 的构建步骤已随其代码一并删除。若确需重建，请按
-> [docs/decisions/2026-10-15-qt-implementation-removed.md](docs/decisions/2026-10-15-qt-implementation-removed.md)
-> 所述从移除前的备份中恢复工作树。
+GitHub Actions 在每次 push/PR 时运行三个 job：
+1. **typecheck-and-test**：`npm ci` → typecheck → vitest → production build
+2. **backend-test**：`apt install toolchain` → cmake build → ctest（跨层夹具 + 节点注册表）
+3. **e2e-smoke**：Playwright Chromium 对 `vite preview` 做冒烟测试
+
 ## 架构扩展点
 
-所有扩展点都在 Web 侧——已没有第二份实现需要同步维护：
-
+- `backend/src/expression.cpp` → 表达式引擎（cell 模式 + 矩阵模式评估器）
+- `backend/src/matrix_value.h` → MatVal 类型，封装 Eigen::MatrixXd 并强制形状检查
+- `backend/src/nodes.cpp` → 计算节点注册表、依赖图、调度器
+- `backend/src/http_server.cpp` → 协议 v1 HTTP 端点
+- `web/src/backend/client.ts` → 前端传输客户端（协议 v1）
 - `web/src/loaders/` → 新文件格式适配器（`FileLoader`）
-- `web/src/core/MatrixData.ts` → 内部数据模型（列式存储）
-- `web/src/core/DependencyGraph.ts` + `workspaceStore` → 依赖图、环检测、红蓝高亮
+- `web/src/core/MatrixData.ts` → 客户端数据模型（B 方案下为显示缓存）
 - `web/src/ui/ConnectionLayer.tsx` → 连线可视化
-- `web/src/ui/components/MatrixCard.tsx` / `ChartCard.tsx` → 各卡片
+- `web/tests/fixtures/xlayer/` → 跨层差分测试夹具（唯一裁判格式）
 
 ## 短期目标
 
-> **当前优先级：逐元素公式计算 + 兜底原则落地。** 前端已定、Qt/Eigen 后端已移除，下一步完全在 Web 侧决定。
-> **2026-10-15 起兜底（最大余量）原则确立**（见 [决策记录](docs/decisions/2026-10-15-max-headroom-principle.md)）：
-> 选型判据是"操作人员会不会撞墙"，不是"交叉点在哪"——分层（TS → WASM → 后端）是
-> 自动升级路径，后端的存在理由是**移除天花板**而非提速；任何降级必须可见。
-> 见 [docs/log/2026-10-15.md](docs/log/2026-10-15.md)。
-
 - [x] **前端方案决策** → **Web 确定**（2026-10-14）
-- [x] **彻底移除 Qt 实现** → 仓库收敛为单一 web-first monorepo（2026-10-15）
+- [x] **彻底移除 Qt UI 实现** → 仓库收敛为 web-first（2026-10-15）
 - [x] **依赖环检测** → `DependencyGraph` 拒绝成环并去除重复边（2026-10-15）
-- [ ] **逐元素公式计算**：对矩阵的每个元素执行公式求值（SUM / AVG / MIN / MAX / IF 等）；更复杂逻辑交给**函数卡**
-- [ ] 计算**兜底层**（原生后端 / 或 WASM）：按 [兜底原则](docs/decisions/2026-10-15-max-headroom-principle.md)
-  由"未决"转为**必建**——存在理由是移除天花板（算法覆盖、内存上限、最坏算力），不是提速；
-  动工前须先建**跨层测试夹具**（差分测试先于引擎）
-- [ ] 数据**编辑**能力（非文件来源卡片，双击编辑 + 公式求值）。注意：`VirtualTable` 有内联编辑分支，但 `MatrixCard` 尚未传 `onCellChange`、全仓无 `setCell()` 调用点——编辑通路**并未如旧文档所说接好**
+- [x] **兜底原则确立** → 可见降级契约（2026-10-15）
+- [x] **B 方案拍板** → 后端持有计算，浏览器纯交互（2026-10-17）
+- [x] **跨层差分夹具** → 38 个表达式用例，单一 JSON 裁判格式（2026-10-17）
+- [x] **C++/Eigen 计算后端骨架** → 表达式引擎移植、节点注册表、HTTP API、协议 v1（2026-10-17）
+- [x] **前端传输客户端** → 后端握手、矩阵注册、事件轮询、可见离线横幅（2026-10-17）
+- [x] **一键开发 + CI 门禁** → `scripts/dev.sh`、vite proxy、GitHub Actions backend-test job（2026-10-17）
+- [x] **Eigen 矩阵算子** → matmul/transpose/det/inv/solve + 矩阵模式表达式评估器 + 14 个矩阵夹具（2026-10-17）
+- [ ] **函数卡 UI**：三区布局（左：变量块 + 输入端口 + 模式徽章；右上：公式编辑器；右下：结果网格 + 输出端口）
+- [ ] **VirtualTable 窗口化数据源**：大矩阵按可视行窗口取数，不再整包加载
+- [ ] **端口锚点**：`cardMetrics` + `ConnectionLayer` 支持 per-port 连线端点
+- [ ] **四态指示灯**：由节点状态事件驱动（灰/黄/绿/红）
+- [ ] 数据**编辑**能力（非文件来源卡片，双击编辑 + 公式求值）
 - [ ] 连线的箭头 / 红蓝双向高亮
-- [ ] **选中 X 轴**：图表可选择某一列作为 X 轴数据源（默认仍为行号 `No.N`）
-- [ ] 批量导出（CSV / 图片 / Excel 表格）——CSV 与 SVG 单图已可用
-- [x] 散点、柱状、多轴（已随 9 种统计图型于 2026-10-14 交付）
 - [ ] **美化 card**：统一卡片样式、间距、配色与排版
-- [ ] CI：typecheck + 单元测试 + 端到端冒烟（目前这三项只能在一台手工搭好的本机环境上跑）
 
 ## 长期规划
 
 > 以下内容仅为方向性设想，可能随时变动；如有建议，欢迎提 [issue](https://github.com/teglaven/DataCardForge/issues)。
 
-- [ ] **函数卡（FunctionCard）**：将矩阵数据输入给 Python / C++ 编写的函数，产出新卡片（会改变数据流，决定持久化格式）
-- [ ] **扩展卡（ExtensionCard）**：专用于服务特定卡片的**快速参数设置 + 实时预览**面板，只能通过父卡片创建并视其为父窗口、随父卡关闭；解决"卡片一多、参数设置分散"的瓶颈（支持滚轮快速调参 + 实时预览，如分段拟合项数、平滑窗口等）
+- [ ] **条件筛选卡**：按行/列谓词切割矩阵后再喂入函数卡
+- [ ] **扩展卡（ExtensionCard）**：专用于服务特定卡片的**快速参数设置 + 实时预览**面板，只能通过父卡片创建并视其为父窗口、随父卡关闭
+- [ ] **隐式方程求解**：从 A=B 关系中提取无法解析隔离的 B（当前单公式设计的已知限制）
 - [ ] 平滑算法的更多模式，平滑算法考虑支持公式卡或者函数卡
+- [ ] **多函数卡并行执行**：后端调度器 + job ID + 取消 + 乱序完成
+- [ ] **WebSocket 升级**：用持久连接替代长轮询以降低状态推送延迟
 - [x] **多语言（i18n）**：中/英文界面切换（Web 版已实现）
 - [x] 工作区**持久化**（Web 版已实现卡片布局 + 依赖 + 数据的保存/恢复）
 
@@ -175,7 +238,7 @@ Data Workbench 是自由软件：您可以依据自由软件基金会（Free Sof
 |------|--------|------|
 | React / Vite / ECharts / zustand / react-rnd | MIT / Apache-2.0 | Web 前端依赖 |
 | @e965/xlsx | Apache-2.0 | SheetJS 社区构建 |
-*（Qt 时代的依赖——Qt 6、QCustomPlot、OpenXLSX、fast_float——已随 C++ 代码树于 2026-10-15 一并移除，
-本项目不再分发或链接它们。）*
+| Eigen 3.4 | MPL-2.0 | Header-only 线性代数（后端） |
 
-
+*（Qt 时代的依赖——Qt 6、QCustomPlot、OpenXLSX、fast_float——已随 Qt UI 代码树于 2026-10-15 一并移除，
+本项目不再分发或链接它们。2026-10-17 引入的 C++ 计算后端仅使用 Eigen 和标准库。）*
