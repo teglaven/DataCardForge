@@ -22,6 +22,7 @@ add_compile_definitions(DC_GIT_SHA="${DC_SHA}")
 add_library(dc_core
   src/json.cpp
   src/matrix_store.cpp
+  src/matrix_value.cpp
   src/expression.cpp
   src/nodes.cpp
 )
@@ -38,6 +39,8 @@ target_link_libraries(dc_fixture_run PRIVATE dc_core)
 enable_testing()
 add_test(NAME xlayer_fixtures
   COMMAND dc_fixture_run ${CMAKE_SOURCE_DIR}/../web/tests/fixtures/xlayer/expression.v1.json)
+add_test(NAME matrix_fixtures
+  COMMAND dc_fixture_run ${CMAKE_SOURCE_DIR}/../web/tests/fixtures/xlayer/matrix.v1.json)
 
 add_executable(dc_nodes_test tests/nodes_test.cpp)
 target_link_libraries(dc_nodes_test PRIVATE dc_core)

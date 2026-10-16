@@ -9,6 +9,7 @@
 
 #include "expression.h"
 #include "json.h"
+#include "matrix_value.h"
 
 using namespace dc;
 
@@ -130,6 +131,87 @@ int runFile(const std::string& path) {
   return failed == 0 ? 0 : 1;
 }
 
+int runMatrixFile(const std::string& path) {
+  std::ifstream in(path);
+  if (!in) { std::fprintf(stderr, "cannot open %s\n", path.c_str()); return 2; }
+  std::stringstream ss; ss << in.rdbuf();
+  Json root; std::string err;
+  if (!Json::parse(ss.str(), &root, &err)) { std::fprintf(stderr, "bad JSON: %s\n", err.c_str()); return 2; }
+
+  int passed = 0, failed = 0;
+  for (const auto& c : root["cases"].items()) {
+    const std::string name = c["name"].asString();
+
+    // Build MatVal inputs from shapes + flat column-major data.
+    std::vector<std::string> varNames;
+    std::vector<MatVal> inputs;
+    const auto& vars = c["vars"].items();
+    const auto& shapes = c["shapes"].items();
+    const auto& dataArray = c["data"].items();
+    for (size_t v = 0; v < vars.size(); ++v) {
+      varNames.push_back(vars[v].asString());
+      int64_t rows = static_cast<int64_t>(shapes[v].items()[0].asNumber());
+      int64_t cols = static_cast<int64_t>(shapes[v].items()[1].asNumber());
+      std::vector<double> flat;
+      for (const auto& d : dataArray[v].items()) flat.push_back(d.asNumber());
+      inputs.push_back(MatVal::fromFlat(flat.data(), rows, cols));
+    }
+
+    if (!c["error"].isNull()) {
+      const std::string wantCode = c["error"]["code"].asString();
+      try {
+        int64_t or_, oc;
+        ExprEngine::evaluateMatrix(c["expression"].asString(), varNames, inputs, &or_, &oc);
+        std::printf("FAIL %-24s expected error %s, got none\n", name.c_str(), wantCode.c_str());
+        ++failed;
+      } catch (const ShapeError& e) {
+        if (e.code == wantCode) ++passed;
+        else { std::printf("FAIL %-24s expected %s, got %s\n", name.c_str(), wantCode.c_str(), e.code.c_str()); ++failed; }
+      } catch (const ExpressionError& e) {
+        if (e.code == wantCode) ++passed;
+        else { std::printf("FAIL %-24s expected %s, got %s\n", name.c_str(), wantCode.c_str(), e.code.c_str()); ++failed; }
+      }
+      continue;
+    }
+
+    try {
+      int64_t outRows, outCols;
+      std::vector<double> got = ExprEngine::evaluateMatrix(
+          c["expression"].asString(), varNames, inputs, &outRows, &outCols);
+      int64_t wantRows = static_cast<int64_t>(c["expectShape"].items()[0].asNumber());
+      int64_t wantCols = static_cast<int64_t>(c["expectShape"].items()[1].asNumber());
+      if (outRows != wantRows || outCols != wantCols) {
+        std::printf("FAIL %-24s shape %lld×%lld != %lld×%lld\n", name.c_str(),
+                    (long long)outRows, (long long)outCols, (long long)wantRows, (long long)wantCols);
+        ++failed; continue;
+      }
+      const auto& wantJson = c["expect"].items();
+      double tol = c["tol"].isNumber() ? c["tol"].asNumber() : 0.0;
+      if (got.size() != wantJson.size()) {
+        std::printf("FAIL %-24s data len %zu != %zu\n", name.c_str(), got.size(), wantJson.size());
+        ++failed; continue;
+      }
+      bool ok = true;
+      for (size_t i = 0; i < wantJson.size(); ++i) {
+        double w = wantJson[i].asNumber();
+        if (!sameNumber(got[i], w, tol)) {
+          std::printf("FAIL %-24s [%zu] got %.17g want %.17g\n", name.c_str(), i, got[i], w);
+          ok = false; break;
+        }
+      }
+      if (ok) ++passed; else ++failed;
+    } catch (const ShapeError& e) {
+      std::printf("FAIL %-24s unexpected ShapeError: %s\n", name.c_str(), e.what());
+      ++failed;
+    } catch (const ExpressionError& e) {
+      std::printf("FAIL %-24s unexpected ExpressionError %s: %s\n", name.c_str(), e.code.c_str(), e.what());
+      ++failed;
+    }
+  }
+  std::printf("%s: %d passed, %d failed (%s)\n", failed == 0 ? "PASS" : "FAILED", passed, failed, path.c_str());
+  return failed == 0 ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -138,6 +220,13 @@ int main(int argc, char** argv) {
     return 2;
   }
   int worst = 0;
-  for (int i = 1; i < argc; ++i) worst = std::max(worst, runFile(argv[i]));
+  for (int i = 1; i < argc; ++i) {
+    std::string path = argv[i];
+    // Auto-detect matrix fixtures by filename convention.
+    if (path.find("matrix.") != std::string::npos)
+      worst = std::max(worst, runMatrixFile(path));
+    else
+      worst = std::max(worst, runFile(path));
+  }
   return worst;
 }

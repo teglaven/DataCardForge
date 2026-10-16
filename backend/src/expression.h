@@ -27,6 +27,9 @@ struct ExpressionError : std::runtime_error {
       : std::runtime_error(std::move(message)), code(std::move(code_)), position(pos) {}
 };
 
+// Forward declaration — full definition in matrix_value.h.
+class MatVal;
+
 class ExprEngine {
  public:
   // columnNames are matched case-insensitively ("Pos.N" additionally under "N").
@@ -35,6 +38,22 @@ class ExprEngine {
                                       const std::vector<std::string>& columnNames,
                                       const std::vector<std::vector<double>>& columns,
                                       size_t length);
+
+  /**
+   * Matrix-mode evaluation. Each input is a full matrix (rows×cols). The formula uses
+   * matrix semantics: `*` = matmul, TRANSPOSE/DET/INV/SOLVE available. Returns the
+   * result as a flat column-major vector with shape written to outRows/outCols.
+   *
+   * @param matrixModeVars  Set of variable names that are matrix-mode (uppercase first
+   *                        letter by convention, but explicitly declared in the port).
+   * @throws ShapeError     Dimension mismatch in matrix ops.
+   * @throws ExpressionError Parse/unknown-function errors (same codes as cell mode).
+   */
+  static std::vector<double> evaluateMatrix(
+      const std::string& expression,
+      const std::vector<std::string>& varNames,
+      const std::vector<MatVal>& inputs,
+      int64_t* outRows, int64_t* outCols);
 
   // Names actually referenced by the expression (original spelling, first occurrence),
   // matching CompiledExpression.references on the TS side.

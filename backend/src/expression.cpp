@@ -1,4 +1,5 @@
 #include "expression.h"
+#include "matrix_value.h"
 
 #include <algorithm>
 #include <cmath>
@@ -129,6 +130,14 @@ const std::unordered_map<std::string, FunctionSpec>& functions() {
       {"EXP", {1, 1}},   {"POW", {2, 2}},    {"ROUND", {1, 2}}, {"FLOOR", {1, 1}},
       {"CEIL", {1, 1}},  {"SIGN", {1, 1}},   {"MOV", {2, 2}},  {"EMA", {2, 2}},
       {"IF", {3, 3}},
+      // Matrix-mode functions (only meaningful when evaluateMatrix is used; cell-mode
+      // evaluate() will reject them as unknown — that's fine, they're matrix-only).
+      {"TRANSPOSE", {1, 1}},
+      {"DET", {1, 1}},
+      {"INV", {1, 1}},
+      {"SOLVE", {2, 2}},
+      {"MMUL", {2, 2}},
+      {"EMUL", {2, 2}},
   };
   return kFns;
 }
@@ -554,6 +563,257 @@ std::vector<std::string> ExprEngine::references(const std::string& expression,
   std::vector<std::string> refs;
   collectRefs(ast, &refs);
   return refs;
+}
+
+// ── matrix-mode evaluator ──────────────────────────────────────────────
+// Parallel AST walker that produces MatVal instead of vector<double>.
+// Reuses the same tokenizer/parser/AST; only the evaluation semantics differ.
+
+namespace {
+
+using MatEvalFn = std::function<MatVal(const std::vector<MatVal>&)>;
+
+MatEvalFn compileAstMatrix(const NodePtr& node) {
+  switch (node->kind) {
+    case NodeKind::Number: {
+      double v = node->number;
+      return [v](const std::vector<MatVal>&) {
+        return MatVal(Eigen::MatrixXd::Constant(1, 1, v));
+      };
+    }
+    case NodeKind::Column: {
+      int idx = node->column;
+      return [idx](const std::vector<MatVal>& inputs) { return inputs[idx]; };
+    }
+    case NodeKind::Unary: {
+      MatEvalFn inner = compileAstMatrix(node->children[0]);
+      return [inner](const std::vector<MatVal>& inputs) {
+        return MatVal::negate(inner(inputs));
+      };
+    }
+    case NodeKind::Binary: {
+      MatEvalFn l = compileAstMatrix(node->children[0]);
+      MatEvalFn r = compileAstMatrix(node->children[1]);
+      std::string op = node->op;
+      return [l, r, op](const std::vector<MatVal>& inputs) {
+        MatVal a = l(inputs);
+        MatVal b = r(inputs);
+        if (op == "+") return MatVal::add(a, b);
+        if (op == "-") return MatVal::sub(a, b);
+        if (op == "*") return MatVal::matmul(a, b);  // matrix mode: * = matmul
+        if (op == "/") return MatVal::divElementwise(a, b);
+        if (op == "%") return MatVal::modElementwise(a, b);
+        if (op == "^") return MatVal::powElementwise(a, b);
+        // Comparisons in matrix mode: element-wise, result is 0/1 matrix.
+        auto cmpOp = [&](const std::function<bool(double,double)>& fn) {
+          int64_t rows, cols;
+          MatVal::broadcastShapes(a, b, &rows, &cols);
+          Eigen::MatrixXd r(rows, cols);
+          for (int64_t i = 0; i < rows; ++i)
+            for (int64_t j = 0; j < cols; ++j)
+              r(i,j) = fn(a.eigen()(i,j), b.eigen()(i,j)) ? 1.0 : 0.0;
+          return MatVal(r);
+        };
+        if (op == ">")  return cmpOp([](double x, double y){ return x > y; });
+        if (op == "<")  return cmpOp([](double x, double y){ return x < y; });
+        if (op == ">=") return cmpOp([](double x, double y){ return x >= y; });
+        if (op == "<=") return cmpOp([](double x, double y){ return x <= y; });
+        if (op == "==") return cmpOp([](double x, double y){ return x == y; });
+        if (op == "!=") return cmpOp([](double x, double y){ return x != y; });
+        return MatVal();
+      };
+    }
+    case NodeKind::Call: {
+      std::vector<MatEvalFn> argFns;
+      for (const auto& a : node->children) argFns.push_back(compileAstMatrix(a));
+      const std::string name = node->name;
+
+      // Matrix-specific functions.
+      if (name == "TRANSPOSE") {
+        MatEvalFn inner = argFns[0];
+        return [inner](const std::vector<MatVal>& inputs) {
+          return MatVal::transpose(inner(inputs));
+        };
+      }
+      if (name == "DET") {
+        MatEvalFn inner = argFns[0];
+        return [inner](const std::vector<MatVal>& inputs) {
+          double d = MatVal::determinant(inner(inputs));
+          return MatVal(Eigen::MatrixXd::Constant(1, 1, d));
+        };
+      }
+      if (name == "INV") {
+        MatEvalFn inner = argFns[0];
+        return [inner](const std::vector<MatVal>& inputs) {
+          return MatVal::inverse(inner(inputs));
+        };
+      }
+      if (name == "SOLVE") {
+        MatEvalFn aFn = argFns[0], bFn = argFns[1];
+        return [aFn, bFn](const std::vector<MatVal>& inputs) {
+          return MatVal::solve(aFn(inputs), bFn(inputs));
+        };
+      }
+      if (name == "MMUL") {
+        MatEvalFn aFn = argFns[0], bFn = argFns[1];
+        return [aFn, bFn](const std::vector<MatVal>& inputs) {
+          return MatVal::matmul(aFn(inputs), bFn(inputs));
+        };
+      }
+      if (name == "EMUL") {
+        // Explicit element-wise multiply (for when * means matmul).
+        MatEvalFn aFn = argFns[0], bFn = argFns[1];
+        return [aFn, bFn](const std::vector<MatVal>& inputs) {
+          return MatVal::mulElementwise(aFn(inputs), bFn(inputs));
+        };
+      }
+
+      // Aggregations in matrix mode: reduce entire matrix to scalar, broadcast as 1×1.
+      if (aggregationNames().count(name) && !((name == "MIN" || name == "MAX") && argFns.size() > 1)) {
+        MatEvalFn inner = argFns[0];
+        return [inner, name](const std::vector<MatVal>& inputs) {
+          MatVal m = inner(inputs);
+          const auto& e = m.eigen();
+          double scalar = NAN;
+          if (name == "SUM") {
+            scalar = 0;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j))) scalar += e(i,j);
+          } else if (name == "AVG" || name == "MEAN") {
+            double s = 0; int64_t n = 0;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j))) { s += e(i,j); ++n; }
+            scalar = n > 0 ? s / n : NAN;
+          } else if (name == "MIN") {
+            double mv = INFINITY;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j)) && e(i,j) < mv) mv = e(i,j);
+            scalar = mv == INFINITY ? NAN : mv;
+          } else if (name == "MAX") {
+            double mv = -INFINITY;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j)) && e(i,j) > mv) mv = e(i,j);
+            scalar = mv == -INFINITY ? NAN : mv;
+          } else if (name == "MEDIAN") {
+            std::vector<double> sorted;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j))) sorted.push_back(e(i,j));
+            std::sort(sorted.begin(), sorted.end());
+            size_t mid = sorted.size() / 2;
+            scalar = sorted.empty() ? NAN
+                   : sorted.size() % 2 ? sorted[mid]
+                   : (sorted[mid-1] + sorted[mid]) / 2.0;
+          } else if (name == "STD") {
+            double s = 0; int64_t n = 0;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j))) { s += e(i,j); ++n; }
+            double mean = n > 0 ? s / n : NAN;
+            double ss = 0;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j))) ss += (e(i,j) - mean) * (e(i,j) - mean);
+            scalar = n > 1 ? std::sqrt(ss / (n - 1)) : 0.0;
+          }
+          return MatVal(Eigen::MatrixXd::Constant(1, 1, scalar));
+        };
+      }
+
+      // Element-wise math functions applied to every element of the matrix.
+      if (name == "ABS" || name == "SQRT" || name == "LOG" || name == "LN" ||
+          name == "LOG10" || name == "EXP" || name == "FLOOR" || name == "CEIL" ||
+          name == "SIGN" || name == "ROUND" || name == "POW") {
+        return [argFns, name](const std::vector<MatVal>& inputs) {
+          MatVal m = argFns[0](inputs);
+          const auto& e = m.eigen();
+          Eigen::MatrixXd r(e.rows(), e.cols());
+          if (name == "POW") {
+            MatVal exp = argFns[1](inputs);
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                r(i,j) = std::pow(e(i,j), exp.isScalar() ? exp.scalar() : exp.eigen()(i,j));
+          } else if (name == "ROUND") {
+            int digits = 0;
+            if (argFns.size() > 1) {
+              MatVal d = argFns[1](inputs);
+              digits = static_cast<int>(d.scalar());
+            }
+            double f = std::pow(10.0, digits);
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                r(i,j) = std::round(e(i,j) * f) / f;
+          } else {
+            auto fn = [&](double v) -> double {
+              if (name == "ABS") return std::fabs(v);
+              if (name == "SQRT") return std::sqrt(v);
+              if (name == "LOG" || name == "LN") return std::log(v);
+              if (name == "LOG10") return std::log10(v);
+              if (name == "EXP") return std::exp(v);
+              if (name == "FLOOR") return std::floor(v);
+              if (name == "CEIL") return std::ceil(v);
+              if (name == "SIGN") return (v > 0) - (v < 0);
+              return v;
+            };
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                r(i,j) = fn(e(i,j));
+          }
+          return MatVal(r);
+        };
+      }
+
+      // IF in matrix mode: element-wise conditional over matrices.
+      if (name == "IF") {
+        MatEvalFn condFn = argFns[0], trueFn = argFns[1], falseFn = argFns[2];
+        return [condFn, trueFn, falseFn](const std::vector<MatVal>& inputs) {
+          MatVal c = condFn(inputs);
+          MatVal t = trueFn(inputs);
+          MatVal f = falseFn(inputs);
+          int64_t rows = c.rows(), cols = c.cols();
+          Eigen::MatrixXd r(rows, cols);
+          for (int64_t i = 0; i < rows; ++i)
+            for (int64_t j = 0; j < cols; ++j) {
+              double cv = c.eigen()(i,j);
+              double tv = t.isScalar() ? t.scalar() : t.eigen()(i,j);
+              double fv = f.isScalar() ? f.scalar() : f.eigen()(i,j);
+              r(i,j) = cv != 0.0 ? tv : fv;
+            }
+          return MatVal(r);
+        };
+      }
+
+      // MOV/EMA not meaningful for matrices in v1; fall through to identity.
+      return [](const std::vector<MatVal>&) { return MatVal(); };
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+std::vector<double> ExprEngine::evaluateMatrix(
+    const std::string& expression,
+    const std::vector<std::string>& varNames,
+    const std::vector<MatVal>& inputs,
+    int64_t* outRows, int64_t* outCols) {
+  // Build column map: varName → index. Matrix mode uses exact-case matching
+  // (the variable declaration is explicit; no Pos.N aliasing needed).
+  std::unordered_map<std::string, int> colMap;
+  for (size_t i = 0; i < varNames.size(); ++i) {
+    colMap[toLower(varNames[i])] = static_cast<int>(i);
+  }
+  auto tokens = tokenize(expression);
+  NodePtr ast = parseAst(tokens, colMap);
+  MatEvalFn fn = compileAstMatrix(ast);
+  MatVal result = fn(inputs);
+  *outRows = result.rows();
+  *outCols = result.cols();
+  return result.toColumnMajor();
 }
 
 }  // namespace dc

@@ -1,0 +1,74 @@
+{
+  "comment": "Matrix-mode fixtures for the B-plan compute backend. Data arrays are COLUMN-MAJOR (matching the DCM1 wire format). evaluateMatrix() has no TS counterpart.",
+  "cases": [
+    { "name": "matmul-identity", "vars": ["A", "B"], "shapes": [[2,2],[2,2]],
+      "data": [[1,0,0,1], [2,0,0,3]],
+      "expression": "A * B",
+      "expectShape": [2,2], "expect": [2,0,0,3], "tol": 1e-12 },
+
+    { "name": "matmul-rect", "vars": ["A", "B"], "shapes": [[2,3],[3,2]],
+      "data": [[1,2,3,4,5,6], [7,8,9,10,11,12]],
+      "expression": "A * B",
+      "expectShape": [2,2], "expect": [76,100,103,136], "tol": 1e-12 },
+
+    { "name": "transpose", "vars": ["A"], "shapes": [[2,3]],
+      "data": [[1,2,3,4,5,6]],
+      "expression": "TRANSPOSE(A)",
+      "expectShape": [3,2], "expect": [1,3,5,2,4,6], "tol": 0 },
+
+    { "name": "det-2x2", "vars": ["A"], "shapes": [[2,2]],
+      "data": [[1,2,3,4]],
+      "expression": "DET(A)",
+      "expectShape": [1,1], "expect": [-2], "tol": 1e-12 },
+
+    { "name": "inv-2x2", "vars": ["A"], "shapes": [[2,2]],
+      "data": [[4,7,2,6]],
+      "expression": "INV(A)",
+      "expectShape": [2,2], "expect": [0.6,-0.7,-0.2,0.4], "tol": 1e-12 },
+
+    { "name": "solve-2x2", "vars": ["A", "b"], "shapes": [[2,2],[2,1]],
+      "data": [[2,1,1,3], [5,11]],
+      "expression": "SOLVE(A, b)",
+      "expectShape": [2,1], "expect": [0.8,3.4], "tol": 1e-12 },
+
+    { "name": "emul-elementwise", "vars": ["A", "B"], "shapes": [[2,2],[2,2]],
+      "data": [[1,2,3,4], [5,6,7,8]],
+      "expression": "EMUL(A, B)",
+      "expectShape": [2,2], "expect": [5,12,21,32], "tol": 0 },
+
+    { "name": "scalar-broadcast-add", "vars": ["A"], "shapes": [[2,3]],
+      "data": [[1,2,3,4,5,6]],
+      "expression": "A + 10",
+      "expectShape": [2,3], "expect": [11,12,13,14,15,16], "tol": 0 },
+
+    { "name": "sum-matrix", "vars": ["A"], "shapes": [[2,3]],
+      "data": [[1,2,3,4,5,6]],
+      "expression": "SUM(A)",
+      "expectShape": [1,1], "expect": [21], "tol": 0 },
+
+    { "name": "chained-transpose-matmul", "vars": ["A"], "shapes": [[2,3]],
+      "data": [[1,2,3,4,5,6]],
+      "expression": "A * TRANSPOSE(A)",
+      "expectShape": [2,2], "expect": [35,44,44,56], "tol": 1e-12 },
+
+    { "name": "err-shape-matmul", "vars": ["A", "B"], "shapes": [[2,3],[2,2]],
+      "data": [[1,2,3,4,5,6], [1,2,3,4]],
+      "expression": "A * B",
+      "error": { "code": "shapeMismatch" } },
+
+    { "name": "err-det-non-square", "vars": ["A"], "shapes": [[2,3]],
+      "data": [[1,2,3,4,5,6]],
+      "expression": "DET(A)",
+      "error": { "code": "shapeMismatch" } },
+
+    { "name": "err-inv-singular", "vars": ["A"], "shapes": [[2,2]],
+      "data": [[1,2,2,4]],
+      "expression": "INV(A)",
+      "error": { "code": "shapeMismatch" } },
+
+    { "name": "err-solve-dim", "vars": ["A", "b"], "shapes": [[2,2],[3,1]],
+      "data": [[1,0,0,1], [1,2,3]],
+      "expression": "SOLVE(A, b)",
+      "error": { "code": "shapeMismatch" } }
+  ]
+}
