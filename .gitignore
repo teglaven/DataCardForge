@@ -36,3 +36,9 @@ docs/docs/.obsidian/workspace*
 
 # ── Local Playwright probes used for UI auditing (never published) ──────────
 web/.probe/
+
+# ── Local agent/audit scratch space (probe scripts, stress logs, build trials)
+# Never published: reproducible assets get promoted into backend/tests/ or
+# scripts/ before they count as a regression defence (see docs/docs/history.md
+# §6.1-2 "可复跑 ≠ 在别人机器上能复跑").
+work/
