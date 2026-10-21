@@ -46,12 +46,33 @@ add_executable(dc_nodes_test tests/nodes_test.cpp)
 target_link_libraries(dc_nodes_test PRIVATE dc_core)
 add_test(NAME node_registry COMMAND dc_nodes_test)
 
+# Both opt-in gates below need a Python interpreter, and find_package must run BEFORE
+# the add_test calls that expand ${Python3_EXECUTABLE} — otherwise the variable is empty,
+# the command degenerates to the bare script path, and ctest fails with BAD_COMMAND
+# ("permission denied"). Learned the hard way while wiring the fuzz gate.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+
+# Differential fuzz: random expressions evaluated by BOTH engines (C++ here, the TS
+# reference via web/scripts/diff_fuzz.mjs importing src/core/expression.ts itself), with
+# numeric results AND structured errors (code/position/params) compared. Fixed fixtures
+# cover hand-written cases; this keeps discovering new divergences. Opt-in like http_stress:
+# without DC_RUN_FUZZ=1 the gate exits 101 and ctest records "Not Run" — CI stays fast and
+# deterministic. Seeds are explicit (--seed); divergences print a minimal repro.
+add_executable(dc_diff_run tests/diff_run.cpp)
+target_link_libraries(dc_diff_run PRIVATE dc_core)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME diff_fuzz
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/fuzz_gate.py
+            --script ${CMAKE_SOURCE_DIR}/../web/scripts/diff_fuzz.mjs
+            --cpp-bin $<TARGET_FILE:dc_diff_run> --iters 2000)
+  set_tests_properties(diff_fuzz PROPERTIES SKIP_RETURN_CODE 101)
+endif()
+
 # Stress gate: hammer the HTTP server with malformed requests and assert the process
 # survives (the 2026-10-18 audit found std::stoul terminating the whole process from a
 # detached connection thread). Opt-in via DC_RUN_STRESS=1 so CI stays fast: without it
 # the script exits 101 and ctest records "Not Run" instead of a silent pass. It always
 # binds a throwaway port — never 37811, where the systemd service lives.
-find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   add_test(NAME http_stress
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/stress/stress_test.py
