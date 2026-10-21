@@ -42,6 +42,46 @@ bool isIdentStart(char c) {
 }
 bool isIdentChar(char c) { return isIdentStart(c) || isDigit(c) || c == '.'; }
 
+// JS `Math.round`, which the TS reference uses for ROUND: half rounds toward +Infinity,
+// whereas std::round rounds half away from zero (Math.round(-1.5) = -1 but
+// std::round(-1.5) = -2), and a result landing in [-0.5, 0) is -0 rather than +0.
+// Both differences are observable across tiers and were found by the differential fuzz.
+inline double jsRound(double x) {
+  if (!std::isfinite(x) || x == 0.0) return x;
+  const double r = std::floor(x + 0.5);
+  return (r == 0.0 && x < 0.0) ? -0.0 : r;
+}
+
+// JS `Math.min` / `Math.max`, which the TS reference uses for MIN/MAX and for the MOV
+// window bounds: any NaN operand wins (std::min/max instead return the other operand
+// whenever the NaN comes second), and ±0 is ordered so min(-0,+0) = -0, max(-0,+0) = +0.
+inline double jsMin(double a, double b) {
+  if (std::isnan(a) || std::isnan(b)) return NAN;
+  if (a == 0.0 && b == 0.0) return (std::signbit(a) || std::signbit(b)) ? -0.0 : 0.0;
+  return std::min(a, b);
+}
+
+inline double jsMax(double a, double b) {
+  if (std::isnan(a) || std::isnan(b)) return NAN;
+  if (a == 0.0 && b == 0.0) return (std::signbit(a) && std::signbit(b)) ? -0.0 : 0.0;
+  return std::max(a, b);
+}
+
+// JS `Math.pow` (and `**`), which the TS reference uses for POW and for the `^` operator,
+// differs from std::pow on two points the language specs settle differently:
+//   * a NaN exponent yields NaN even for base 1 — C99 explicitly returns 1 for
+//     pow(+1, y) "for any y, even a NaN" (found by the differential fuzz:
+//     POW(POW(B != A, LN(A)), B) collapsed to 1 on the C++ side while TS produced NaN);
+//   * base ±1 with an infinite exponent yields NaN — C99 returns 1.
+// Order follows the ECMAScript algorithm, so NaN exponent wins over a NaN base.
+inline double jsPow(double base, double exp) {
+  if (std::isnan(exp)) return NAN;
+  if (exp == 0.0) return 1.0;  // covers ±0, and applies even when the base is NaN
+  if (std::isnan(base)) return NAN;
+  if ((base == 1.0 || base == -1.0) && std::isinf(exp)) return NAN;
+  return std::pow(base, exp);
+}
+
 std::vector<Token> tokenize(const std::string& input) {
   static const std::string kOps = "+-*/^%";
   static const std::vector<std::string> kCompares = {">=", "<=", "==", "!=", ">", "<"};
@@ -355,7 +395,7 @@ EvalFn compileAst(const NodePtr& node) {
           else if (op == "*") out[i] = x * y;
           else if (op == "/") out[i] = x / y;
           else if (op == "%") out[i] = std::fmod(x, y);
-          else if (op == "^") out[i] = std::pow(x, y);
+          else if (op == "^") out[i] = jsPow(x, y);
           else if (op == ">") out[i] = x > y ? 1.0 : 0.0;
           else if (op == "<") out[i] = x < y ? 1.0 : 0.0;
           else if (op == ">=") out[i] = x >= y ? 1.0 : 0.0;
@@ -422,8 +462,11 @@ EvalFn compileAst(const NodePtr& node) {
           for (size_t i = 0; i < len; ++i) {
             double result = arrays[0][i];
             for (size_t a = 1; a < arrays.size(); ++a) {
-              double x = arrays[a][i];
-              result = wantMin ? std::min(result, x) : std::max(result, x);
+              // jsMin/jsMax carry the Math.min/Math.max semantics the TS reference relies
+              // on (NaN wins, ±0 ordered) — std::min/max returned the non-NaN operand
+              // whenever the NaN came second, so MIN(EXP(8.96), LN(B)) yielded 7785.36
+              // instead of NaN. Found by the differential fuzz gate.
+              result = wantMin ? jsMin(result, arrays[a][i]) : jsMax(result, arrays[a][i]);
             }
             out[i] = result;
           }
@@ -446,14 +489,24 @@ EvalFn compileAst(const NodePtr& node) {
             else if (name == "LOG" || name == "LN") out[i] = std::log(a0);
             else if (name == "LOG10") out[i] = std::log10(a0);
             else if (name == "EXP") out[i] = std::exp(a0);
-            else if (name == "POW") out[i] = std::pow(a0, a1);
+            else if (name == "POW") out[i] = jsPow(a0, a1);
             else if (name == "FLOOR") out[i] = std::floor(a0);
             else if (name == "CEIL") out[i] = std::ceil(a0);
-            else if (name == "SIGN") out[i] = (a0 > 0) - (a0 < 0);
+            else if (name == "SIGN") {
+              // Must match Math.sign exactly (the TS side is the reference): NaN → NaN,
+              // ±0 → ±0, otherwise ±1. The previous `(a0 > 0) - (a0 < 0)` returned 0 for
+              // NaN (both comparisons false), silently breaking NaN propagation — found by
+              // the differential fuzz (diff_fuzz gate), not by the hand-written fixtures.
+              if (std::isnan(a0) || a0 == 0.0) out[i] = a0;
+              else out[i] = (a0 > 0) - (a0 < 0);
+            }
             else if (name == "ROUND") {
-              int digits = static_cast<int>(a1);
-              double f = std::pow(10.0, digits);
-              out[i] = std::round(a0 * f) / f;
+              // Faithful port of the TS reference `Math.round(v * f) / f` with `f = 10 ** d`:
+              // the exponent is used as-is (the previous static_cast<int> truncated
+              // fractional digits — ROUND(6.66, 6.62) diverged), and the rounding must be
+              // Math.round, not std::round (see jsRound).
+              const double f = jsPow(10.0, a1);
+              out[i] = jsRound(a0 * f) / f;
             }
           }
           return out;
@@ -465,16 +518,24 @@ EvalFn compileAst(const NodePtr& node) {
         EvalFn windowFn = argFns[1];
         return [dataFn, windowFn](const std::vector<std::vector<double>>& cols, size_t len) {
           std::vector<double> data = dataFn(cols, len);
-          long long w = llround(windowFn(cols, len)[0]);
-          if (w <= 1) return data;
-          long long half = w / 2;
+          // Faithful port of the TS reference, which stays in doubles end to end:
+          // `const w = Math.round(x); if (w <= 1) return data; const half = Math.floor(w/2);`
+          // with `lo = Math.max(0, j-half)` and `hi = Math.min(len, j+half+1)`.
+          // Using llround() here was undefined behaviour for a non-finite window
+          // (llround(NaN/±Inf) is unspecified; on x86 it returned LLONG_MIN, so `w <= 1`
+          // held and the smoothing silently became a no-op while the TS side averaged the
+          // whole series). A NaN window must also yield NaN cells, exactly like the TS side.
+          const double w = jsRound(windowFn(cols, len)[0]);
+          if (w <= 1) return data;  // NaN compares false and falls through, as in the TS side
+          const double half = std::floor(w / 2);
           std::vector<double> out(len);
-          for (long long j = 0; j < static_cast<long long>(len); ++j) {
-            long long lo = std::max(0LL, j - half);
-            long long hi = std::min(static_cast<long long>(len), j + half + 1);
+          for (size_t j = 0; j < len; ++j) {
+            const double jd = static_cast<double>(j);
+            const double lo = jsMax(0.0, jd - half);
+            const double hi = jsMin(static_cast<double>(len), jd + half + 1);
             double sum = 0;
-            for (long long k = lo; k < hi; ++k) sum += data[k];
-            out[j] = sum / static_cast<double>(hi - lo);
+            for (double k = lo; k < hi; k += 1.0) sum += data[static_cast<size_t>(k)];
+            out[j] = sum / (hi - lo);  // NaN window → NaN/(NaN) → NaN, matching the TS side
           }
           return out;
         };
@@ -748,17 +809,16 @@ MatEvalFn compileAstMatrix(const NodePtr& node) {
             MatVal exp = argFns[1](inputs);
             for (int64_t i = 0; i < e.rows(); ++i)
               for (int64_t j = 0; j < e.cols(); ++j)
-                r(i,j) = std::pow(e(i,j), exp.isScalar() ? exp.scalar() : exp.eigen()(i,j));
+                r(i,j) = jsPow(e(i,j), exp.isScalar() ? exp.scalar() : exp.eigen()(i,j));
           } else if (name == "ROUND") {
-            int digits = 0;
+            double f = 1.0;
             if (argFns.size() > 1) {
               MatVal d = argFns[1](inputs);
-              digits = static_cast<int>(d.scalar());
+              f = jsPow(10.0, d.scalar());  // exponent as-is, matching the TS reference
             }
-            double f = std::pow(10.0, digits);
             for (int64_t i = 0; i < e.rows(); ++i)
               for (int64_t j = 0; j < e.cols(); ++j)
-                r(i,j) = std::round(e(i,j) * f) / f;
+                r(i,j) = jsRound(e(i,j) * f) / f;
           } else {
             auto fn = [&](double v) -> double {
               if (name == "ABS") return std::fabs(v);
@@ -768,7 +828,7 @@ MatEvalFn compileAstMatrix(const NodePtr& node) {
               if (name == "EXP") return std::exp(v);
               if (name == "FLOOR") return std::floor(v);
               if (name == "CEIL") return std::ceil(v);
-              if (name == "SIGN") return (v > 0) - (v < 0);
+              if (name == "SIGN") return (std::isnan(v) || v == 0.0) ? v : static_cast<double>((v > 0) - (v < 0));
               return v;
             };
             for (int64_t i = 0; i < e.rows(); ++i)
