@@ -45,3 +45,17 @@ add_test(NAME matrix_fixtures
 add_executable(dc_nodes_test tests/nodes_test.cpp)
 target_link_libraries(dc_nodes_test PRIVATE dc_core)
 add_test(NAME node_registry COMMAND dc_nodes_test)
+
+# Stress gate: hammer the HTTP server with malformed requests and assert the process
+# survives (the 2026-10-18 audit found std::stoul terminating the whole process from a
+# detached connection thread). Opt-in via DC_RUN_STRESS=1 so CI stays fast: without it
+# the script exits 101 and ctest records "Not Run" instead of a silent pass. It always
+# binds a throwaway port — never 37811, where the systemd service lives.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME http_stress
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/stress/stress_test.py
+            --binary $<TARGET_FILE:dc_backend> --port 37911
+            --rounds 2 --threads 20 --requests 5)
+  set_tests_properties(http_stress PROPERTIES SKIP_RETURN_CODE 101)
+endif()
