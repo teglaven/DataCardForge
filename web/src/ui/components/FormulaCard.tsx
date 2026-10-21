@@ -1,30 +1,28 @@
 /**
- * Formula card — computes derived columns from expressions over a source matrix card.
+ * Formula card — a pure view over backend compute nodes (B-plan).
  *
  * The user writes one or more expressions (e.g. `(A - AVG(A)) / STD(A)`) referencing
- * columns by name. Each expression produces a column in the result matrix, which is
- * displayed in a read-only virtual table below the formula editor.
+ * columns by name. Each expression is shipped as text to its own server-side compute node;
+ * the browser never parses, compiles or evaluates it. Results arrive through the event
+ * stream and are pulled into a read-only display cache, rendered below the editor.
  *
- * The result matrix lives in the store's `matrices` map and is recomputed whenever the
- * source card's active file changes or the source file's cells are edited (see
- * `refreshDependentCharts`).
- *
- * A formula column is *not* yet a chart source: charts are built from a matrix card's
- * columns (`addChartCard` requires a `MatrixCardModel`). This used to be described as if it
- * already worked.
+ * The four-state light and every error message come from the node's authoritative status:
+ * `dirty | computing | done | error` → 灰/黄/绿/红, with an error rendered via the i18n key
+ * `formula.error.<code>` (unknown codes fall back to a visible generic sentence + the raw
+ * code — never silent). A formula column is *not* yet a chart source: charts are built from
+ * a matrix card's columns (`addChartCard` requires a `MatrixCardModel`).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MatrixData } from '../../core/MatrixData.ts';
-import { compile, ExpressionError } from '../../core/expression.ts';
 import { setTableMetrics, invalidateLayout } from '../cardMetrics.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
-import type { FormulaCardModel } from '../types.ts';
+import type { FormulaCardModel, NodeStatus } from '../types.ts';
 import type { MessageKey } from '../i18n.ts';
 import { CardShell } from './CardShell.tsx';
 import { VirtualTable, type TableMetrics } from './VirtualTable.tsx';
 
-/** How long to wait after the last keystroke before re-evaluating every formula. */
+/** How long to wait after the last keystroke before re-sending each formula to the backend. */
 const FORMULA_DEBOUNCE_MS = 250;
 
 interface FormulaCardProps {
@@ -53,15 +51,14 @@ export function FormulaCard({
   const setFormula = useWorkspace((s) => s.setFormula);
   const removeFormula = useWorkspace((s) => s.removeFormula);
 
-  const [errors, setErrors] = useState<Map<number, string>>(new Map());
   const metricsRef = useRef<TableMetrics | null>(null);
 
   /**
    * The editor keeps its own draft and only commits after a pause.
    *
-   * `setFormula` re-evaluates the whole expression over every row and installs a fresh
-   * result matrix, so committing on each keystroke ran 10 000-row evaluations once per
-   * character — and re-rendered every card in the workspace each time.
+   * Committing sends the formula text to the backend (PATCH/POST a node), which recomputes
+   * asynchronously — so committing on each keystroke would spam the server and re-render on
+   * every character.
    */
   const [draft, setDraft] = useState(() => card.formulas.map((formula) => ({ ...formula })));
   const identityRef = useRef({ id: card.id, count: card.formulas.length });
@@ -102,35 +99,26 @@ export function FormulaCard({
     return () => observer.disconnect();
   }, [resultMatrix]);
 
-  // Validate the draft, so an error appears as soon as the expression is wrong.
-  useEffect(() => {
-    const newErrors = new Map<number, string>();
-    for (let i = 0; i < draft.length; i++) {
-      try {
-        compile(draft[i].expression, sourceColumnNames);
-      } catch (e) {
-        if (e instanceof ExpressionError) {
-          // Render a localised sentence from the structured code; the raw English parser
-          // message stays available on the error object for logs and tests.
-          const key = `formula.error.${e.code}` as MessageKey;
-          // "2–2 arguments" reads badly; collapse an exact arity to a single number.
-          const params =
-            e.code === 'badArgCount'
-              ? {
-                  ...e.params,
-                  expected:
-                    e.params.min === e.params.max
-                      ? String(e.params.min)
-                      : `${e.params.min}–${e.params.max}`,
-                }
-              : e.params;
-          const localised = t(key, params);
-          newErrors.set(i, localised === key ? e.message : localised);
-        }
-      }
-    }
-    setErrors(newErrors);
-  }, [draft, sourceColumnNames, t]);
+  /**
+   * Per-column error text, straight from the node's structured status.
+   *
+   * No local `compile()`: the backend's parse is the authority. Its error `code` maps to an
+   * i18n key; an unknown code still shows something (generic sentence + raw code) rather than
+   * silently swallowing the failure.
+   */
+  const errors = useMemo(() => {
+    const map = new Map<number, string>();
+    card.nodes.forEach((status: NodeStatus | null, index: number) => {
+      if (!status || status.state !== 'error') return;
+      const code = status.code ?? 'internalError';
+      const params = normaliseErrorParams(status.params);
+      const key = `formula.error.${code}` as MessageKey;
+      const localised = t(key, params);
+      // Unknown code ⇒ t() returns the key unchanged: show a fallback sentence + raw code.
+      map.set(index, localised === key ? `${t('formula.error.unknown')} (${code})` : localised);
+    });
+    return map;
+  }, [card.nodes, t]);
 
   const rows = resultMatrix?.rowCount() ?? 0;
   const cols = resultMatrix?.columnCount() ?? 0;
@@ -139,6 +127,7 @@ export function FormulaCard({
     name: draft[0]?.name || card.formulas[0]?.name || t('card.unlabeled'),
   });
   const badge = `${card.formulas.length} ${t('formula.columns')} · ${rows} ${t('formula.rows')}`;
+  const overallState = aggregateNodeState(card.nodes);
 
   return (
     <CardShell
@@ -158,6 +147,7 @@ export function FormulaCard({
         {/* Formula editor */}
         <div className="formula-card__editor">
           <div className="formula-card__hint">
+            <span className={`node-light node-light--${overallState}`} aria-hidden />
             {t('formula.hint')}
             <span className="formula-card__cols">
               {sourceColumnNames.slice(0, 8).join(', ')}
@@ -192,6 +182,7 @@ export function FormulaCard({
                   )
                 }
               />
+              <span className={`node-light node-light--${card.nodes[index]?.state ?? 'dirty'}`} aria-hidden />
               {draft.length > 1 ? (
                 <button
                   type="button"
@@ -220,7 +211,7 @@ export function FormulaCard({
           </button>
         </div>
 
-        {/* Result table */}
+        {/* Result table — the read-only display cache fed by the backend. */}
         {resultMatrix && cols > 0 ? (
           <VirtualTable
             matrix={resultMatrix}
@@ -229,9 +220,42 @@ export function FormulaCard({
             onMetrics={handleMetrics}
           />
         ) : (
-          <div className="formula-card__empty">{t('formula.empty')}</div>
+          <div className="formula-card__empty">
+            {overallState === 'computing' || overallState === 'dirty'
+              ? t('formula.pending')
+              : t('formula.empty')}
+          </div>
         )}
       </div>
     </CardShell>
   );
 }
+
+/** Collapse the exact-arity phrasing and pass through the backend's structured params. */
+function normaliseErrorParams(params?: Record<string, unknown>): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (typeof v === 'string' || typeof v === 'number') out[k] = v;
+  }
+  // `badArgCount` renders "2–2 arguments" badly; collapse an exact arity to one number.
+  if (out.min !== undefined && out.max !== undefined && out.min === out.max) {
+    out.expected = String(out.min);
+  }
+  return out;
+}
+
+/** Worst-case state across a card's nodes, for the header light (red > yellow > green > grey). */
+function aggregateNodeState(nodes: Array<NodeStatus | null>): NodeStatus['state'] | 'idle' {
+  let sawDone = false;
+  let sawComputing = false;
+  for (const n of nodes) {
+    if (!n) continue;
+    if (n.state === 'error') return 'error';
+    if (n.state === 'computing') sawComputing = true;
+    if (n.state === 'done') sawDone = true;
+  }
+  if (sawComputing) return 'computing';
+  if (sawDone) return 'done';
+  return 'idle';
+}
+

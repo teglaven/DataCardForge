@@ -78,6 +78,23 @@ export interface ChartCardModel extends CardBase {
   smoothing: SmoothingOptions;
 }
 
+/**
+ * A compute node as the browser sees it (B-plan: docs/decisions/2026-10-17-backend-owns-compute.md).
+ *
+ * The card no longer computes anything; it mirrors one server node's state machine so the
+ * UI can light an indicator (dirty/computing/done/error → 灰/黄/绿/红) and render a localised
+ * message from a structured error code. `code`/`params` are present only while `state === 'error'`;
+ * the user-facing sentence comes from i18n key `formula.error.<code>`, never from the server.
+ */
+export interface NodeStatus {
+  nodeId: number;
+  resultMatrixId: number;
+  state: 'dirty' | 'computing' | 'done' | 'error';
+  /** Structured error identity from the backend (never user prose). */
+  code?: string;
+  params?: Record<string, unknown>;
+}
+
 /** A formula card computes derived columns from expressions over a source matrix card. */
 export interface FormulaCardModel extends CardBase {
   kind: 'formula';
@@ -90,8 +107,19 @@ export interface FormulaCardModel extends CardBase {
     /** The expression, e.g. `(A - AVG(A)) / STD(A)`. */
     expression: string;
   }>;
-  /** The computed result matrix id (stored in the matrices map). */
+  /**
+   * The computed result matrix id (stored in the matrices map).
+   *
+   * Under the B-plan this is a **read-only display cache**: its contents come from the
+   * backend's result matrices, keyed by revision, and nothing writes into it locally.
+   */
   resultMatrixId: number;
+  /**
+   * One backend compute node per formula column, index-aligned with `formulas`.
+   * `null` while registration is pending or when the backend is unreachable — which is
+   * exactly why the four-state light must not silently assume a node exists.
+   */
+  nodes: Array<NodeStatus | null>;
 }
 
 export type CardModel = MatrixCardModel | ChartCardModel | FormulaCardModel;

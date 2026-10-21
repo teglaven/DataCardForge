@@ -1,6 +1,14 @@
 /**
  * Column expression engine.
  *
+ * ⚠️ **已退出生产路径，仅作 xlayer 差分基准。** Under the B-plan
+ * (docs/decisions/2026-10-17-backend-owns-compute.md) the parse / compile / evaluate of
+ * formulas all live in the C++ backend; the browser ships formula *text* only. Nothing on a
+ * production code path imports this file any more — it is kept solely as the reference
+ * implementation the cross-layer fixtures (`tests/fixtures/xlayer/*.json`) diff the C++
+ * engine against, and will be retired once that differential coverage is complete.
+ * Do NOT wire it back into UI or store compute.
+ *
  * Evaluates formulas like `(A - B) / C`, `MOV(A, 5)`, `IF(A > 0, A, 0)` against a
  * column-oriented matrix. Every operation is vectorised over the full column length,
  * so a 10 000-row expression runs in one pass without per-cell overhead.

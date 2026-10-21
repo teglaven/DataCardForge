@@ -40,6 +40,16 @@ export interface NodeCreateResult {
   cyclePath?: number[];
 }
 
+/** A compute node as the server reports it (`GET /api/nodes/{id}`). */
+export interface NodeStatusDto {
+  nodeId: number;
+  state: NodeStateName;
+  resultMatrixId: number;
+  /** Structured error identity, present only while `state === "error"`. */
+  code?: string;
+  params?: Record<string, unknown>;
+}
+
 export type NodeStateName = 'dirty' | 'computing' | 'done' | 'error';
 
 export interface NodeEvent {
@@ -145,6 +155,47 @@ export class BackendClient {
     }
   }
 
+  /**
+   * Push browser cell edits into the server-side copy (revision bumps on the server).
+   * Non-finite values travel as string sentinels, like registerMatrix.
+   */
+  async patchCells(
+    matrixId: number,
+    cells: Array<{ row: number; col: number; value: number }>,
+  ): Promise<{ ok: boolean; code?: string }> {
+    try {
+      await jsonRequest(this.base, `/matrices/${matrixId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          cells: cells.map((c) => ({
+            row: c.row,
+            col: c.col,
+            value: Number.isNaN(c.value)
+              ? 'NaN'
+              : c.value === Infinity
+                ? 'Infinity'
+                : c.value === -Infinity
+                  ? '-Infinity'
+                  : c.value,
+          })),
+        }),
+      });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, code: (e as { code?: string }).code ?? 'backendUnavailable' };
+    }
+  }
+
+  /** Drop a stored matrix. The server refuses while a compute node still reads it. */
+  async deleteMatrix(matrixId: number): Promise<{ ok: boolean; code?: string }> {
+    try {
+      await jsonRequest(this.base, `/matrices/${matrixId}`, { method: 'DELETE' });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, code: (e as { code?: string }).code ?? 'backendUnavailable' };
+    }
+  }
+
   async createNode(inputs: PortBindingDto[], formula: string): Promise<NodeCreateResult> {
     try {
       const r = await jsonRequest<{ nodeId: number; resultMatrixId: number; state: NodeStateName }>(
@@ -179,6 +230,37 @@ export class BackendClient {
     } catch (e) {
       return { ok: false, code: (e as { code?: string }).code ?? 'backendUnavailable' };
     }
+  }
+
+  /**
+   * Read one node's authoritative status. Used to reconcile after a reconnect or a
+   * restored workspace, where the live event stream no longer describes the node.
+   */
+  async getNode(nodeId: number): Promise<NodeStatusDto | null> {
+    try {
+      return await jsonRequest<NodeStatusDto>(this.base, `/nodes/${nodeId}`);
+    } catch {
+      return null;
+    }
+  }
+
+  /** All node ids the server currently holds (for reconciling a restored workspace). */
+  async listNodes(): Promise<number[]> {
+    try {
+      const r = await jsonRequest<{ nodes: number[] }>(this.base, '/nodes');
+      return Array.isArray(r.nodes) ? r.nodes : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Pull a node's result matrix through the documented window endpoint. The result is a
+   * stored matrix (`resultMatrixId`), so `GET /api/matrices/{id}/window` serves it — no
+   * protocol extension needed. `count` is clamped to the server's maxWindowRows (5000).
+   */
+  async nodeResult(resultMatrixId: number, count = 5000): Promise<MatrixWindow> {
+    return this.window(resultMatrixId, 0, count);
   }
 
   /** Long-poll node events newer than `since`. Resolves empty on timeout. */

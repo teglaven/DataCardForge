@@ -21,7 +21,9 @@ import { DEFAULT_SMOOTHING, type SmoothingOptions } from '../core/Smoothing.ts';
 import { defaultChartConfig, type ChartConfig, type ChartSource } from '../charts/chartModel.ts';
 import { chartTypeDef, minimumColumns, type ChartTypeId } from '../charts/chartTypes.ts';
 import { lineColor } from '../charts/palette.ts';
-import { evaluateExpression } from '../core/expression.ts';
+// B-plan (docs/decisions/2026-10-17-backend-owns-compute.md): no numeric compute lives in
+// the browser any more. `core/expression.ts` is NOT imported here — parsing, compiling and
+// evaluating formulas are the backend's job; the frontend only ships formula *text*.
 import {
   identityKey,
   isChartCard,
@@ -33,10 +35,11 @@ import {
   type MatrixCardModel,
   type MatrixSnapshot,
   type FileIdentity,
+  type NodeStatus,
   type WorkspaceSnapshot,
 } from './types.ts';
 import { translatorFor, detectLocale, type Locale } from './i18n.ts';
-import { BackendClient } from '../backend/client.ts';
+import { BackendClient, type NodeEvent, type PortBindingDto } from '../backend/client.ts';
 
 export { lineColor };
 
@@ -164,11 +167,11 @@ interface WorkspaceState {
   // ── formula card behaviour ──────────────────────────────────────────
   /** Create a formula card that reads from a source matrix card. */
   addFormulaCard: (sourceCardId: number) => number | null;
-  /** Add or update a formula column. Recomputes the result matrix. */
+  /** Add or update a formula column. Registers / patches the backing compute node. */
   setFormula: (cardId: number, index: number, name: string, expression: string) => void;
-  /** Remove a formula column. */
+  /** Remove a formula column. Deletes its compute node and releases its result matrix. */
   removeFormula: (cardId: number, index: number) => void;
-  /** Force recompute of a formula card's result matrix. */
+  /** Re-send every formula of a card to the backend so it recomputes. */
   recomputeFormula: (cardId: number) => void;
 
   // ── view helpers ────────────────────────────────────────────────────
@@ -190,6 +193,16 @@ interface WorkspaceState {
   registerMatrixWithBackend: (name: string, columns: MatrixSnapshot['columns']) => Promise<number | null>;
   /** Server matrix id for a local matrix id, once registered (null while offline). */
   backendMatrixId: (localMatrixId: number) => number | null;
+  /** Apply one backend node event: update the indicator and refresh the display cache. */
+  applyNodeEvent: (event: NodeEvent) => void;
+  /**
+   * Subscribe to the backend's long-poll event stream. Idempotent: re-arming replaces any
+   * live subscription. Every formula card's four-state light and result table are driven
+   * from these events — the browser performs no computation of its own.
+   */
+  startBackendEventLoop: () => void;
+  /** Tear down the event subscription (used by tests and on shutdown). */
+  stopBackendEventLoop: () => void;
 
   // ── persistence ─────────────────────────────────────────────────────
   toSnapshot: () => WorkspaceSnapshot;
@@ -204,35 +217,294 @@ let toastCounter = 0;
 const backendClient = new BackendClient();
 const backendMatrixIds = new Map<number, number>();
 
+/** server result-matrix id → local display-cache matrix id (one per formula column). */
+const backendResultLocalIds = new Map<number, number>();
+/** Highest backend event `seq` already applied; the long-poll resumes after it. */
+let lastEventSeq = 0;
+/** The single live event subscription. Re-armed whenever the backend comes back online. */
+let eventLoopAbort: AbortController | null = null;
+
+/** Cancel any live event subscription (module-level so store actions can call it). */
+function stopEventLoop(): void {
+  if (eventLoopAbort) {
+    eventLoopAbort.abort();
+    eventLoopAbort = null;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+
 function nearlyEqual(a: number, b: number): boolean {
   return Math.abs(a - b) < GEOM_EPSILON;
 }
 
 /**
- * Evaluate a set of formula expressions against a source matrix and return the result
- * as a new MatrixData. Each formula produces one column in the output.
+ * Column label the backend resolves a formula identifier against.
+ *
+ * The C++ engine matches identifiers case-insensitively on the column's *label* — the
+ * annotation when present, otherwise `Pos.N` (`Matrix::label`) — so this mirrors exactly
+ * what the old local evaluator used as its variable names. It is not compute: it only
+ * tells the store which source columns a formula actually mentions, so each node binds
+ * precisely those ports instead of the whole table under an arbitrary alias.
  */
-function computeFormulaResult(
-  source: MatrixData,
-  formulas: Array<{ name: string; expression: string }>,
-): MatrixData {
-  const colNames = source.columns().map((c) => c.annotation || c.posName);
-  const colData = source.columns().map((c) => c.data);
-  const columns = colNames.map((name, i) => ({ name, data: colData[i] }));
+function sourceColumnLabel(column: { posName: string; annotation: string }): string {
+  return column.annotation !== '' ? column.annotation : column.posName;
+}
 
-  const result = new MatrixData();
-  for (const formula of formulas) {
-    try {
-      const values = evaluateExpression(formula.expression, columns);
-      result.appendColumn(formula.name, values);
-    } catch {
-      // Invalid expression — fill with NaN so the card still renders.
-      const len = source.rowCount();
-      result.appendColumn(formula.name, new Array<number>(len).fill(NaN));
+/** Case-insensitive "does this expression reference `name`?" — text inspection only. */
+function referencesName(expression: string, name: string): boolean {
+  const lower = expression.toLowerCase();
+  let from = 0;
+  for (;;) {
+    const at = lower.indexOf(name.toLowerCase(), from);
+    if (at < 0) return false;
+    const before = at === 0 ? '' : expression[at - 1];
+    const after = expression[at + name.length] ?? '';
+    // Reject substring hits inside a longer identifier (annotation `tempC` vs `temp`).
+    if (!/[A-Za-z0-9_.]/.test(before) && !/[A-Za-z0-9_.]/.test(after)) return true;
+    from = at + 1;
+  }
+}
+
+/** The bindings one formula needs: every referenced source column, bound in matrix mode. */
+function buildPortBindings(
+  expression: string,
+  sourceBackendMatrixId: number,
+  columns: ReadonlyArray<{ posName: string; annotation: string }>,
+): PortBindingDto[] {
+  const bindings: PortBindingDto[] = [];
+  for (const column of columns) {
+    const label = sourceColumnLabel(column);
+    if (label === '') continue;
+    if (referencesName(expression, label)) {
+      bindings.push({ varName: label, mode: 'matrix', sourceMatrixId: sourceBackendMatrixId });
     }
   }
-  return result;
+  return bindings;
 }
+
+/**
+ * Materialise a decoded DCM1 frame into a read-only display matrix.
+ *
+ * This is a pure shape conversion — no arithmetic. Non-finite values arrive unchanged
+ * (IEEE 754 over the wire) and keep rendering as `—`.
+ */
+function frameToMatrixData(window: {
+  rows?: number;
+  data?: Float64Array[];
+  names?: string[];
+}): MatrixData {
+  const matrix = new MatrixData();
+  const columns = window.data ?? [];
+  const names = window.names ?? [];
+  for (let c = 0; c < columns.length; ++c) {
+    const col = columns[c];
+    const label = names[c] ?? `Pos.${c + 1}`;
+    const space = label.startsWith('Pos.') ? label.indexOf(' ') : -1;
+    const posName = space > 0 ? label.slice(0, space) : label;
+    const annotation = space > 0 ? label.slice(space + 1) : '';
+    matrix.appendColumn(posName, Array.from(col));
+    matrix.setColumnAnnotation(matrix.columnCount() - 1, annotation);
+  }
+  return matrix;
+}
+
+/** A card's nodes once a formula column is added or removed (index-aligned with formulas). */
+function resizeNodeStatuses(
+  statuses: Array<NodeStatus | null>,
+  length: number,
+): Array<NodeStatus | null> {
+  const next = statuses.slice(0, length);
+  while (next.length < length) next.push(null);
+  return next;
+}
+
+/**
+ * Make restored cards safe for the B-plan model.
+ *
+ * Snapshots saved before formula cards were backed by compute nodes have no `nodes` field;
+ * older ones may even carry pre-computed result data. Restoring must never resurrect local
+ * computation, so every formula card comes back with empty node slots — the sources are
+ * re-registered on demand and results flow from the backend again. Non-formula cards pass
+ * through untouched.
+ */
+function normalizeRestoredCards(cards: CardModel[]): CardModel[] {
+  return cards.map((card) =>
+    isFormulaCard(card) ? { ...card, nodes: resizeNodeStatuses(card.nodes ?? [], card.formulas.length) } : card,
+  );
+}
+
+/**
+ * Register / patch one backend compute node per formula column of a card.
+ *
+ * The mapping is deliberately **one node per formula column**: the protocol gives a node a
+ * single `formula`, while a formula card holds several output columns. Index alignment lets
+ * an edit PATCH the right node and a removed column DELETE its node (releasing its result
+ * matrix). Each node binds exactly the source columns its expression references, in matrix
+ * mode, against the source card's *active* server matrix.
+ *
+ * Fire-and-forget like registration: never blocks the UI; a genuinely unreachable backend
+ * flips the banner (contract 1 — 降级必须可见), it does not fall back to local compute.
+ */
+async function syncFormulaNodes(cardId: number): Promise<void> {
+  const state = useWorkspace.getState();
+  const card = state.cards.find((c) => c.id === cardId);
+  if (!card || !isFormulaCard(card)) return;
+
+  const sourceCard = state.cards.find((c) => c.id === card.sourceCardId);
+  if (!sourceCard || !isMatrixCard(sourceCard)) return;
+  const activeSource = sourceCard.sources[sourceCard.activeSource];
+  if (!activeSource) return;
+  const sourceMatrix = state.matrices.get(activeSource.matrixId);
+  if (!sourceMatrix) return;
+
+  // The node must read the *server-side* copy of the active matrix. If it is not registered
+  // yet (offline at load time), there is nothing authoritative to bind to — leave the nodes
+  // unregistered and let the offline banner carry the failure. Never compute locally.
+  const sourceBackendId = backendMatrixIds.get(activeSource.matrixId);
+  if (sourceBackendId === undefined) return;
+
+  const columns = sourceMatrix.columns();
+  for (let i = 0; i < card.formulas.length; ++i) {
+    const formula = card.formulas[i];
+    const inputs = buildPortBindings(formula.expression, sourceBackendId, columns);
+    const existing = card.nodes[i] ?? null;
+
+    const send = existing
+      ? backendClient.patchNode(existing.nodeId, { formula: formula.expression, inputs })
+      : backendClient.createNode(inputs, formula.expression);
+
+    const result = await send;
+    if (!result.ok) {
+      if (result.code === 'backendUnavailable') {
+        useWorkspace.setState({ backend: { state: 'offline', error: result.code } });
+      } else {
+        // A structured refusal (e.g. cycle) is surfaced on the node so the light goes red
+        // and the i18n message renders — visible, never silent.
+        markNodeError(cardId, i, result.code ?? 'internalError', {});
+      }
+      continue;
+    }
+
+    const nodeId = result.nodeId!;
+    const resultMatrixId =
+      result.resultMatrixId ?? (existing ? existing.resultMatrixId : -1);
+    recordResultMapping(resultMatrixId, cardId, i);
+    applyNodeSnapshot(cardId, i, {
+      nodeId,
+      resultMatrixId,
+      state: result.state ?? 'dirty',
+    });
+    if (result.state === 'done') void pullResultIntoCache(nodeId, resultMatrixId);
+  }
+}
+
+/** Remember which local display-cache column a server result matrix feeds. */
+function recordResultMapping(resultMatrixId: number, cardId: number, index: number): void {
+  if (resultMatrixId >= 0) backendResultLocalIds.set(resultMatrixId, localColumnId(cardId, index));
+}
+
+/**
+ * Stable local id for one formula column's per-column display cache.
+ *
+ * Negative so it can never collide with a source-matrix id (those start at 1). Keeping a
+ * slot per column is what lets several single-column node results merge into one card
+ * table without clobbering each other.
+ */
+function localColumnId(cardId: number, index: number): number {
+  return -(cardId * 1_000 + index + 1);
+}
+
+/** Write a node's status into the card model (drives the four-state light). */
+function applyNodeSnapshot(cardId: number, index: number, status: NodeStatus): void {
+  useWorkspace.setState((state) => ({
+    cards: state.cards.map((card) => {
+      if (card.id !== cardId || !isFormulaCard(card)) return card;
+      const nodes = resizeNodeStatuses(card.nodes, card.formulas.length);
+      nodes[index] = status;
+      return { ...card, nodes };
+    }),
+  }));
+}
+
+/** Mark a column's node as errored with a structured code (no result pull attempted). */
+function markNodeError(
+  cardId: number,
+  index: number,
+  code: string,
+  params: Record<string, unknown>,
+): void {
+  useWorkspace.setState((state) => ({
+    cards: state.cards.map((card) => {
+      if (card.id !== cardId || !isFormulaCard(card)) return card;
+      const nodes = resizeNodeStatuses(card.nodes, card.formulas.length);
+      const prev = nodes[index];
+      nodes[index] = {
+        nodeId: prev?.nodeId ?? -1,
+        resultMatrixId: prev?.resultMatrixId ?? -1,
+        state: 'error',
+        code,
+        params,
+      };
+      return { ...card, nodes };
+    }),
+  }));
+}
+
+/** Find the (cardId, columnIndex) a node id belongs to. */
+function locateNode(nodeId: number): { cardId: number; index: number; resultMatrixId: number } | null {
+  for (const card of useWorkspace.getState().cards) {
+    if (!isFormulaCard(card)) continue;
+    for (let i = 0; i < card.nodes.length; ++i) {
+      const n = card.nodes[i];
+      if (n && n.nodeId === nodeId) {
+        return { cardId: card.id, index: i, resultMatrixId: n.resultMatrixId };
+      }
+    }
+  }
+  return null;
+}
+
+/** Pull a done node's result window and write it into the card's display cache. */
+async function pullResultIntoCache(nodeId: number, resultMatrixId: number): Promise<void> {
+  if (resultMatrixId < 0) return;
+  const frame = await backendClient.nodeResult(resultMatrixId);
+  if (!frame.ok) {
+    if (frame.code === 'backendUnavailable') {
+      useWorkspace.setState({ backend: { state: 'offline', error: frame.code } });
+    }
+    return;
+  }
+  const matrix = frameToMatrixData(frame);
+  const located = locateNode(nodeId);
+  if (!located) return;
+  // Store this column's freshly pulled values in its own cache slot first, then rebuild the
+  // merged card table from every column's current slot — order preserved, no clobbering.
+  useWorkspace.setState((state) => {
+    const matrices = new Map(state.matrices);
+    matrices.set(localColumnId(located.cardId, located.index), matrix);
+    const card = state.cards.find((c) => c.id === located.cardId);
+    if (!card || !isFormulaCard(card)) return { matrices };
+    const merged = new MatrixData();
+    for (let i = 0; i < card.formulas.length; ++i) {
+      const cached = matrices.get(localColumnId(card.id, i));
+      const name = card.formulas[i].name;
+      if (cached && cached.columnCount() > 0) {
+        const col = cached.column(0);
+        merged.appendColumn(name, col.data.slice());
+        merged.setColumnAnnotation(merged.columnCount() - 1, col.annotation);
+      } else {
+        merged.appendColumn(name, []);
+      }
+    }
+    matrices.set(card.resultMatrixId, merged);
+    return { matrices };
+  });
+}
+
 
 export const useWorkspace = create<WorkspaceState>((set, get) => {
   /** Highest z currently in use, so new cards land on top. */
@@ -283,10 +555,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       };
     };
 
-    // Formula dependents get a fresh result matrix; charts only need re-pointing.
-    const nextMatrices = new Map(state.matrices);
-    let matricesChanged = false;
-
     set(() => {
       const cards = state.cards.map((card) => {
         if (!dependentIds.has(card.id)) return card;
@@ -319,19 +587,23 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
             : card;
         }
 
-        // A formula card reads its source card's *active* matrix, so switching files must
-        // recompute its derived columns — otherwise the result silently describes the
-        // file that is no longer displayed.
-        if (isFormulaCard(card) && card.sourceCardId === matrixCardId) {
-          nextMatrices.set(card.resultMatrixId, computeFormulaResult(activeMatrix, card.formulas));
-          matricesChanged = true;
-        }
-
+        // A formula card used to be recomputed here in the browser. Under the B-plan it is
+        // now a pure view: switching the source file re-points its compute nodes at the new
+        // backend matrix (see `recomputeFormula`), and the fresh numbers arrive through the
+        // event stream + window fetch — never through local evaluation.
         return card;
       });
 
-      return matricesChanged ? { cards, matrices: nextMatrices } : { cards };
+      return { cards };
     });
+
+    // Formula dependents follow the newly active file by re-binding their nodes server-side.
+    for (const dependentId of dependentIds) {
+      const card = get().cards.find((c) => c.id === dependentId);
+      if (card && isFormulaCard(card) && card.sourceCardId === matrixCardId) {
+        get().recomputeFormula(dependentId);
+      }
+    }
   };
 
   return {
@@ -525,12 +797,33 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
             for (const [key, mid] of matrixIdByIdentity) {
               if (mid === source.matrixId) matrixIdByIdentity.delete(key);
             }
+            // Release the server-side copy too, otherwise the backend grows without
+            // bound as cards are opened and closed. The map entry is dropped first so a
+            // later reconnect cannot hand out an id the server no longer has.
+            const backendId = backendMatrixIds.get(source.matrixId);
+            if (backendId !== undefined) {
+              backendMatrixIds.delete(source.matrixId);
+              void backendClient.deleteMatrix(backendId);
+            }
           }
         }
       } else if (isFormulaCard(card)) {
         // A formula card owns its derived matrix outright; no other card can reference it,
-        // so it must not be left behind in the map.
+        // so it must not be left behind in the map. Neither may its per-column cache slots.
         matrices.delete(card.resultMatrixId);
+        for (let i = 0; i < card.formulas.length; ++i) matrices.delete(localColumnId(card.id, i));
+        // Delete every backing node server-side. `DELETE /api/nodes/{id}` also drops the
+        // node's result matrix, so this is what releases the compute graph on close — and
+        // keeps the local→server id maps from handing out ids the server no longer has.
+        for (const status of card.nodes) {
+          if (!status || status.nodeId < 0) continue;
+          backendResultLocalIds.delete(status.resultMatrixId);
+          void backendClient.deleteNode(status.nodeId).then((result) => {
+            if (!result.ok && result.code === 'backendUnavailable') {
+              set({ backend: { state: 'offline', error: result.code } });
+            }
+          });
+        }
       }
 
       state.dependencies.removeAllDependencies(id);
@@ -632,6 +925,18 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         ),
       });
       refreshDependentCharts(cardId);
+
+      // B-plan: the backend holds the authoritative copy, so an edit must reach it.
+      // Fire-and-forget like registration — editing never blocks on the network; only a
+      // genuinely unreachable backend flips the banner.
+      const backendId = backendMatrixIds.get(source.matrixId);
+      if (backendId !== undefined) {
+        void backendClient.patchCells(backendId, [{ row, col, value }]).then((result) => {
+          if (!result.ok && result.code === 'backendUnavailable') {
+            set({ backend: { state: 'offline', error: result.code } });
+          }
+        });
+      }
     },
 
     setEditable(cardId, editable) {
@@ -788,15 +1093,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const cardId = state.nextCardId;
       const resultMatrixId = state.nextMatrixId;
 
-      // Start with one empty formula referencing the first column.
-      const firstColName = sourceMatrix.columnCount() > 0 ? sourceMatrix.column(0).posName : 'A';
-      const formulas = [{ name: `${firstColName} × 2`, expression: `${firstColName} * 2` }];
+      // Start with one empty formula referencing the first column. The identifier must be
+      // the label the backend resolves against — annotation when present, else Pos.N — not
+      // the raw posName: `Pos.1 * 2` fails on a table whose first column is annotated `A`.
+      const firstColLabel = sourceMatrix.columnCount() > 0 ? sourceColumnLabel(sourceMatrix.column(0)) : 'A';
+      const formulas = [{ name: `${firstColLabel} × 2`, expression: `${firstColLabel} * 2` }];
 
-      // Compute the initial result matrix.
-      const resultMatrix = computeFormulaResult(sourceMatrix, formulas);
-
+      // The result matrix starts as an EMPTY display cache. It is filled only once the
+      // backend reports a node `done` and we pull its result window — the browser computes
+      // nothing (docs/decisions/2026-10-17-backend-owns-compute.md).
       const matrices = new Map(state.matrices);
-      matrices.set(resultMatrixId, resultMatrix);
+      matrices.set(resultMatrixId, new MatrixData());
 
       const formulaSize = { width: 520, height: 380 };
       const card: FormulaCardModel = {
@@ -814,6 +1121,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         sourceCardId,
         formulas,
         resultMatrixId,
+        nodes: [null],
       };
 
       state.dependencies.addDependency(cardId, sourceCardId);
@@ -825,6 +1133,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         nextMatrixId: resultMatrixId + 1,
         selectedId: cardId,
       });
+
+      void syncFormulaNodes(cardId);
       return cardId;
     },
 
@@ -840,23 +1150,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         formulas.push({ name, expression });
       }
 
-      const sourceCard = state.cards.find((c) => c.id === card.sourceCardId);
-      if (!sourceCard || !isMatrixCard(sourceCard)) return;
-      const source = sourceCard.sources[sourceCard.activeSource];
-      if (!source) return;
-      const sourceMatrix = state.matrices.get(source.matrixId);
-      if (!sourceMatrix) return;
-
-      const resultMatrix = computeFormulaResult(sourceMatrix, formulas);
-      const matrices = new Map(state.matrices);
-      matrices.set(card.resultMatrixId, resultMatrix);
-
       set({
         cards: state.cards.map((c) =>
-          c.id === cardId && isFormulaCard(c) ? { ...c, formulas } : c,
+          c.id === cardId && isFormulaCard(c)
+            ? { ...c, formulas, nodes: resizeNodeStatuses(c.nodes, formulas.length) }
+            : c,
         ),
-        matrices,
       });
+
+      // Push the change to the backend: existing columns PATCH their node, a new column
+      // registers one. Results arrive asynchronously through the event stream.
+      void syncFormulaNodes(cardId);
     },
 
     removeFormula(cardId, index) {
@@ -865,44 +1169,32 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       if (!card || !isFormulaCard(card)) return;
       if (card.formulas.length <= 1) return; // keep at least one
 
+      const removed = card.nodes[index];
       const formulas = card.formulas.filter((_, i) => i !== index);
-
-      const sourceCard = state.cards.find((c) => c.id === card.sourceCardId);
-      if (!sourceCard || !isMatrixCard(sourceCard)) return;
-      const source = sourceCard.sources[sourceCard.activeSource];
-      if (!source) return;
-      const sourceMatrix = state.matrices.get(source.matrixId);
-      if (!sourceMatrix) return;
-
-      const resultMatrix = computeFormulaResult(sourceMatrix, formulas);
-      const matrices = new Map(state.matrices);
-      matrices.set(card.resultMatrixId, resultMatrix);
 
       set({
         cards: state.cards.map((c) =>
-          c.id === cardId && isFormulaCard(c) ? { ...c, formulas } : c,
+          c.id === cardId && isFormulaCard(c)
+            ? { ...c, formulas, nodes: resizeNodeStatuses(c.nodes, formulas.length) }
+            : c,
         ),
-        matrices,
       });
+
+      // Release the deleted column's node; removing it drops its result matrix server-side.
+      if (removed) {
+        void backendClient.deleteNode(removed.nodeId).then((result) => {
+          if (!result.ok && result.code === 'backendUnavailable') {
+            set({ backend: { state: 'offline', error: result.code } });
+          }
+        });
+      }
     },
 
     recomputeFormula(cardId) {
-      const state = get();
-      const card = state.cards.find((c) => c.id === cardId);
-      if (!card || !isFormulaCard(card)) return;
-
-      const sourceCard = state.cards.find((c) => c.id === card.sourceCardId);
-      if (!sourceCard || !isMatrixCard(sourceCard)) return;
-      const source = sourceCard.sources[sourceCard.activeSource];
-      if (!source) return;
-      const sourceMatrix = state.matrices.get(source.matrixId);
-      if (!sourceMatrix) return;
-
-      const resultMatrix = computeFormulaResult(sourceMatrix, card.formulas);
-      const matrices = new Map(state.matrices);
-      matrices.set(card.resultMatrixId, resultMatrix);
-
-      set({ matrices });
+      // "Recompute" means "re-send the definitions to the backend"; the browser never
+      // evaluates. Each node's inputs are re-bound to the source card's *active* matrix so
+      // a file switch cascades through the server, then results flow back via events.
+      void syncFormulaNodes(cardId);
     },
 
     // ── view helpers ──────────────────────────────────────────────────
@@ -976,9 +1268,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const info = await backendClient.hello();
       if (info.ok) {
         set({ backend: { state: 'online', build: info.build, protocol: info.protocol } });
+        // The event stream is the only way results reach the browser; re-arm it whenever we
+        // (re)connect so a reconnect after an outage resumes pushing node states.
+        get().startBackendEventLoop();
       } else if (info.error?.startsWith('protocol-mismatch')) {
+        stopEventLoop();
         set({ backend: { state: 'mismatch', error: info.error } });
       } else {
+        stopEventLoop();
         set({ backend: { state: 'offline', error: info.error ?? 'unreachable' } });
       }
     },
@@ -993,6 +1290,45 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     },
 
     backendMatrixId: (localMatrixId) => backendMatrixIds.get(localMatrixId) ?? null,
+
+    applyNodeEvent(event) {
+      // Matrix-level events (no nodeId) carry no per-node state to mirror here.
+      if (event.nodeId === undefined || !event.state) return;
+      if (event.seq > lastEventSeq) lastEventSeq = event.seq;
+      const located = locateNode(event.nodeId);
+      if (!located) return;
+      const { cardId, index, resultMatrixId } = located;
+      applyNodeSnapshot(cardId, index, {
+        nodeId: event.nodeId,
+        resultMatrixId,
+        state: event.state,
+        code: event.code,
+        params: event.params,
+      });
+      // A finished computation is the trigger to pull the numbers — the display cache is
+      // refreshed from the window endpoint, never from a local evaluation.
+      if (event.state === 'done') void pullResultIntoCache(event.nodeId, resultMatrixId);
+    },
+
+    startBackendEventLoop() {
+      stopEventLoop();
+      const controller = new AbortController();
+      eventLoopAbort = controller;
+      void (async () => {
+        while (!controller.signal.aborted) {
+          const events = await backendClient.events(lastEventSeq, controller.signal);
+          if (controller.signal.aborted) break;
+          for (const event of events) get().applyNodeEvent(event);
+          // `events()` resolves empty on timeout or transport failure; a small pause keeps
+          // a dead backend from spinning the loop while the offline banner stays visible.
+          if (events.length === 0) await sleep(250);
+        }
+      })();
+    },
+
+    stopBackendEventLoop() {
+      stopEventLoop();
+    },
 
     // ── persistence ───────────────────────────────────────────────────
 
@@ -1070,7 +1406,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       }
 
       set({
-        cards: snapshot.cards,
+        cards: normalizeRestoredCards(snapshot.cards),
         matrices,
         matrixIdByIdentity: new Map(),
         dependencies,
@@ -1098,6 +1434,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     },
 
     reset() {
+      // Matrix ids restart at 1, so cached server ids from the previous workspace would
+      // point at the wrong rows after a reset. Drop them together with the matrices.
+      backendMatrixIds.clear();
+      backendResultLocalIds.clear();
+      lastEventSeq = 0;
+      stopEventLoop();
       set({
         cards: [],
         matrices: new Map(),

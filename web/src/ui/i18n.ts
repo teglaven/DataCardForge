@@ -150,6 +150,8 @@ const dictionaries = {
     'formula.columns': '列',
     'formula.rows': '行',
     'formula.empty': '输入表达式以计算派生列',
+    'formula.pending': '等待后端计算…',
+    'formula.error.unknown': '公式无法计算',
     'formula.error.unexpectedChar': '无法识别的字符「{char}」（第 {position} 个字符）',
     'formula.error.unknownFunction': '未知函数「{name}」',
     'formula.error.expectedCloseAfterArgs': '函数参数后面缺少右括号',
@@ -158,6 +160,7 @@ const dictionaries = {
     'formula.error.expectedClose': '缺少右括号',
     'formula.error.unexpectedToken': '无法解析的记号「{token}」',
     'formula.error.trailingToken': '表达式结束后多出「{token}」',
+    'formula.error.upstreamError': '上游节点不可用：{name}',
     'menu.newFormula': '新建公式卡…',
   },
 
@@ -301,6 +304,8 @@ const dictionaries = {
     'formula.columns': 'columns',
     'formula.rows': 'rows',
     'formula.empty': 'Enter an expression to compute derived columns',
+    'formula.pending': 'Waiting for the backend to compute…',
+    'formula.error.unknown': 'The formula could not be computed',
     'formula.error.unexpectedChar': "Unexpected character '{char}' (position {position})",
     'formula.error.unknownFunction': "Unknown function '{name}'",
     'formula.error.expectedCloseAfterArgs': "Missing ')' after the function arguments",
@@ -309,6 +314,7 @@ const dictionaries = {
     'formula.error.expectedClose': "Missing ')'",
     'formula.error.unexpectedToken': "Unrecognised token '{token}'",
     'formula.error.trailingToken': "Unexpected '{token}' after the expression",
+    'formula.error.upstreamError': 'Upstream node unavailable: {name}',
     'menu.newFormula': 'New Formula Card…',
   },
 } as const;

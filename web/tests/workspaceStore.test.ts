@@ -12,7 +12,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { MatrixData } from '../src/core/MatrixData.ts';
 import { useWorkspace } from '../src/ui/workspaceStore.ts';
-import { isChartCard, isMatrixCard, type ChartCardModel, type MatrixCardModel } from '../src/ui/types.ts';
+import { isChartCard, isMatrixCard, type ChartCardModel, type FormulaCardModel, type MatrixCardModel } from '../src/ui/types.ts';
+import { decodeMatrixFrame } from '../src/backend/client.ts';
 
 /**
  * Build a matrix from row-major data, mirroring how a text file is laid out.
@@ -338,5 +339,390 @@ describe('map card keep-alive', () => {
     expect(isMatrixCard(card)).toBe(true);
     const matrixId = card.sources[0].matrixId;
     expect(store().matrices.get(matrixId)!.cell(0, 1)).toBe(2);
+  });
+});
+
+describe('compute-backend sync (B-plan)', () => {
+  interface Call {
+    url: string;
+    method: string;
+    body?: string;
+  }
+
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  async function withStubbedFetch(
+    reply: (call: Call) => { status?: number; body: unknown },
+    run: (calls: Call[]) => Promise<void>,
+  ): Promise<void> {
+    const calls: Call[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const call: Call = {
+        url: String(input),
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : undefined,
+      };
+      calls.push(call);
+      const r = reply(call);
+      const text = JSON.stringify(r.body);
+      const status = r.status ?? 200;
+      return {
+        ok: status < 400,
+        status,
+        text: async () => text,
+        json: async () => r.body,
+        arrayBuffer: async () => new TextEncoder().encode(text).buffer,
+      } as unknown as Response;
+    }) as typeof fetch;
+    try {
+      await run(calls);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  it('patches the server-side matrix when a cell is edited', async () => {
+    await withStubbedFetch(
+      (call) =>
+        call.method === 'POST'
+          ? { body: { matrixId: 7, revision: 1 } }
+          : { body: { matrixId: 7, revision: 2 } },
+      async (calls) => {
+        const cardId = store().addMatrixCard([{ name: 'a.txt', matrix: matrix([[1], [2]]) }]);
+        await tick(); // registration is fire-and-forget
+        store().editCell(cardId, 1, 0, 42);
+        await tick();
+        const patch = calls.find((c) => c.method === 'PATCH');
+        expect(patch?.url).toBe('/api/matrices/7');
+        expect(JSON.parse(patch!.body!)).toEqual({ cells: [{ row: 1, col: 0, value: 42 }] });
+      },
+    );
+  });
+
+  it('deletes the server-side matrix when the card closes', async () => {
+    await withStubbedFetch(
+      () => ({ body: { matrixId: 9, revision: 1 } }),
+      async (calls) => {
+        const cardId = store().addMatrixCard([{ name: 'a.txt', matrix: matrix([[1]]) }]);
+        await tick();
+        expect(store().removeCard(cardId)).toBe(true);
+        await tick();
+        expect(calls.some((c) => c.method === 'DELETE' && c.url === '/api/matrices/9')).toBe(true);
+      },
+    );
+  });
+
+  it('keeps no server ids across a reset', async () => {
+    let nextServerId = 11;
+    await withStubbedFetch(
+      () => ({ body: { matrixId: nextServerId++, revision: 1 } }),
+      async (calls) => {
+        store().addMatrixCard([{ name: 'a.txt', matrix: matrix([[1]]) }]);
+        await tick();
+        store().reset();
+        const cardId = store().addMatrixCard([{ name: 'b.txt', matrix: matrix([[5]]) }]);
+        await tick();
+        store().editCell(cardId, 0, 0, 6);
+        await tick();
+        // The new matrix gets its own server id (12); the stale mapping (11) is gone.
+        expect(calls.some((c) => c.method === 'PATCH' && c.url === '/api/matrices/11')).toBe(false);
+        expect(calls.some((c) => c.method === 'PATCH' && c.url === '/api/matrices/12')).toBe(true);
+      },
+    );
+  });
+});
+
+// ── Stage 3: formula cards are computed by the backend, not the browser ─────────
+describe('formula-card compute authority (B-plan stage 3)', () => {
+  interface Call {
+    url: string;
+    method: string;
+    body?: string;
+  }
+
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  /** Let queued promise continuations settle — one macrotask flushes the whole chain. */
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  /** Encode a DCM1 frame exactly as the C++ server does (see decodeMatrixFrame). */
+  function encodeFrame(columns: number[][], names: string[]): ArrayBuffer {
+    const rows = columns.reduce((max, c) => Math.max(max, c.length), 0);
+    const cols = columns.length;
+    const namesJson = JSON.stringify(names);
+    const namesBytes = new TextEncoder().encode(namesJson);
+    const buffer = new ArrayBuffer(16 + cols * rows * 8 + namesBytes.length);
+    const view = new DataView(buffer);
+    view.setUint32(0, 0x44434d31, true);
+    view.setUint32(4, rows, true);
+    view.setUint32(8, cols, true);
+    view.setUint32(12, namesBytes.length, true);
+    let offset = 16;
+    for (const col of columns) {
+      for (let r = 0; r < rows; ++r) {
+        view.setFloat64(offset + r * 8, col[r] ?? NaN, true);
+      }
+      offset += rows * 8;
+    }
+    new Uint8Array(buffer, offset, namesBytes.length).set(namesBytes);
+    return buffer;
+  }
+
+  function stubBackend(opts: {
+    nodeResult?: number[][];
+    nodeNames?: string[];
+    createState?: 'done' | 'error';
+    error?: { code: string; params?: Record<string, unknown> };
+    failAll?: boolean;
+  }) {
+    const calls: Call[] = [];
+    let nextNodeId = 1;
+    let nextMatrixId = 100;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const body = typeof init?.body === 'string' ? init.body : undefined;
+      calls.push({ url, method, body });
+      if (opts.failAll) {
+        return { ok: false, status: 503, text: async () => '', json: async () => ({}) } as unknown as Response;
+      }
+      if (url.endsWith('/hello')) {
+        return json({ protocol: 1, build: 'test', capabilities: [], limits: { maxWindowRows: 5000 } });
+      }
+      if (url.endsWith('/matrices') && method === 'POST') {
+        return json({ matrixId: nextMatrixId++, revision: 1 });
+      }
+      if (url.endsWith('/nodes') && method === 'POST') {
+        const nodeId = nextNodeId++;
+        const resultMatrixId = nextMatrixId++;
+        if (opts.createState === 'error') {
+          return err(opts.error?.code ?? 'unexpectedToken', opts.error?.params ?? {});
+        }
+        return json({ nodeId, resultMatrixId, state: opts.createState ?? 'done' });
+      }
+      if (/\/nodes\/\d+$/.test(url) && method === 'PATCH') {
+        const id = Number(url.split('/').pop());
+        return json({ nodeId: id, state: opts.createState ?? 'done' });
+      }
+      if (/\/nodes\/\d+$/.test(url) && method === 'DELETE') {
+        return json({ deleted: Number(url.split('/').pop()) });
+      }
+      if (url.includes('/window')) {
+        const bytes = encodeFrame(opts.nodeResult ?? [[2, 4]], opts.nodeNames ?? ['Pos.1']);
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => bytes,
+          json: async () => ({}),
+          text: async () => '',
+        } as unknown as Response;
+      }
+      return json({});
+    }) as typeof fetch;
+    return { calls, restore: () => (globalThis.fetch = originalFetch) };
+  }
+
+  function json(body: unknown): Response {
+    const text = JSON.stringify(body);
+    return { ok: true, status: 200, text: async () => text, json: async () => body } as unknown as Response;
+  }
+  function err(code: string, params: Record<string, unknown>): Response {
+    const text = JSON.stringify({ code, params });
+    return { ok: false, status: 400, text: async () => text, json: async () => ({ code, params }) } as unknown as Response;
+  }
+
+  /** Load a source table and wait for its fire-and-forget backend registration. */
+  async function loadSource(rows: number[][], annotations: string[]) {
+    const cardId = store().addMatrixCard([{ name: 's.txt', matrix: matrix(rows, annotations) }]);
+    await tick();
+    return cardId;
+  }
+
+  it('registers one compute node per formula column on creation', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4, 6]] });
+    try {
+      const srcId = await loadSource([[1], [2], [3]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(creates).toHaveLength(1);
+      const payload = JSON.parse(creates[0].body!);
+      expect(payload.formula).toBe('A * 2');
+      expect(payload.inputs).toEqual([{ varName: 'A', mode: 'matrix', sourceMatrixId: 100 }]);
+      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
+      expect(card.nodes[0]?.nodeId).toBe(1);
+      expect(card.nodes[0]?.state).toBe('done');
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('pulls the done result through the window endpoint into the display cache', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4, 6]], nodeNames: ['Pos.1'] });
+    try {
+      const srcId = await loadSource([[1], [2], [3]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
+      const resultMatrix = store().matrices.get(card.resultMatrixId)!;
+      expect(Array.from(resultMatrix.column(0).data)).toEqual([2, 4, 6]);
+      // It really hit the documented window route, not a local evaluation.
+      expect(stub.calls.some((c) => c.url.includes('/window'))).toBe(true);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('patches the existing node when a formula is edited', async () => {
+    const stub = stubBackend({ nodeResult: [[3, 6, 9]] });
+    try {
+      const srcId = await loadSource([[1], [2], [3]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      stub.calls.length = 0;
+      store().setFormula(fId, 0, 'Triple', 'A * 3');
+      await flush();
+      const patch = stub.calls.find((c) => /\/nodes\/\d+$/.test(c.url) && c.method === 'PATCH');
+      expect(patch).toBeDefined();
+      expect(JSON.parse(patch!.body!).formula).toBe('A * 3');
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('deletes the node when a formula column is removed', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      // Add a second column so removing one is allowed.
+      store().setFormula(fId, 1, 'B2', 'A * 2');
+      await flush();
+      const secondNode = (store().cards.find((c) => c.id === fId) as FormulaCardModel).nodes[1];
+      expect(secondNode?.nodeId).toBe(2);
+      stub.calls.length = 0;
+      store().removeFormula(fId, 1);
+      await flush();
+      const del = stub.calls.find((c) => c.method === 'DELETE' && /\/nodes\/2$/.test(c.url));
+      expect(del).toBeDefined();
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('deletes every node and releases results when the card closes', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      const nodeId = (store().cards.find((c) => c.id === fId) as FormulaCardModel).nodes[0]!.nodeId;
+      stub.calls.length = 0;
+      expect(store().removeCard(fId)).toBe(true);
+      await flush();
+      expect(stub.calls.some((c) => c.method === 'DELETE' && c.url === `/api/nodes/${nodeId}`)).toBe(true);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('surfaces a structured backend error as an i18n-renderable code on the node', async () => {
+    const stub = stubBackend({ createState: 'error', error: { code: 'unknownColumn', params: { position: 0 } } });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
+      expect(card.nodes[0]?.state).toBe('error');
+      expect(card.nodes[0]?.code).toBe('unknownColumn');
+      // The key the UI will render resolves to real copy, never a silent blank.
+      const msg = (await import('../src/ui/i18n.ts')).translatorFor('en')(
+        `formula.error.${card.nodes[0]!.code}` as never,
+        card.nodes[0]!.params as never,
+      );
+      expect(msg).toContain('Unknown column');
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('does NOT compute locally or register nodes when the backend is unreachable', async () => {
+    const stub = stubBackend({ failAll: true });
+    try {
+      const srcId = await loadSource([[1], [2], [3]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
+      // No node was ever created (the source matrix could not be registered either).
+      expect(card.nodes.every((n) => n === null)).toBe(true);
+      // And crucially: the display cache stayed EMPTY — no fabricated [2,4,6].
+      const resultMatrix = store().matrices.get(card.resultMatrixId)!;
+      expect(resultMatrix.rowCount()).toBe(0);
+      // Offline is VISIBLE via the banner contract (backend state flips offline on failure).
+      expect(store().backend.state).toBe('offline');
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('applyNodeEvent surfaces an error event as a structured code on the node', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      const nid = (store().cards.find((c) => c.id === fId) as FormulaCardModel).nodes[0]!.nodeId;
+      // A `done`→`error` transition arrives through the stream with code + params.
+      store().applyNodeEvent({ seq: 500, nodeId: nid, state: 'error', code: 'unknownColumn', params: { position: 3 } });
+      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
+      expect(card.nodes[0]?.state).toBe('error');
+      expect(card.nodes[0]?.code).toBe('unknownColumn');
+      expect(card.nodes[0]?.params).toEqual({ position: 3 });
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('an unknown error code still renders a visible fallback + raw code (never silent)', async () => {
+    const { translatorFor } = await import('../src/ui/i18n.ts');
+    const t = translatorFor('en');
+    // Mirrors FormulaCard's rendering rule for a code with no i18n key.
+    const code = 'someBrandNewCode';
+    const localised = t(`formula.error.${code}` as never);
+    const shown = localised === `formula.error.${code}` ? `${t('formula.error.unknown')} (${code})` : localised;
+    expect(shown).toContain('could not be computed');
+    expect(shown).toContain(code);
+  });
+
+  it('applyNodeEvent updates the light and pulls results on done', async () => {
+    const stub = stubBackend({ nodeResult: [[7, 8]] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      const before = store().cards.find((c) => c.id === fId) as FormulaCardModel;
+      const nid = before.nodes[0]!.nodeId;
+      store().applyNodeEvent({ seq: 999, nodeId: nid, state: 'computing' });
+      expect((store().cards.find((c) => c.id === fId) as FormulaCardModel).nodes[0]?.state).toBe('computing');
+      store().applyNodeEvent({ seq: 1000, nodeId: nid, state: 'done', matrixId: before.nodes[0]!.resultMatrixId });
+      await flush();
+      const after = store().cards.find((c) => c.id === fId) as FormulaCardModel;
+      expect(after.nodes[0]?.state).toBe('done');
+      expect(Array.from(store().matrices.get(after.resultMatrixId)!.column(0).data)).toEqual([7, 8]);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('decodeMatrixFrame round-trips the encoder used here', () => {
+    const frame = decodeMatrixFrame(encodeFrame([[1, 2], [3, 4]], ['Pos.1 x', 'Pos.2']));
+    expect(frame.ok).toBe(true);
+    expect(frame.rows).toBe(2);
+    expect(frame.columns).toBe(2);
+    expect(Array.from(frame.data![0])).toEqual([1, 2]);
+    expect(Array.from(frame.data![1])).toEqual([3, 4]);
+    expect(frame.names).toEqual(['Pos.1 x', 'Pos.2']);
   });
 });

@@ -37,6 +37,8 @@ export default function App() {
   const toSnapshot = useWorkspace((s) => s.toSnapshot);
   const loadSnapshot = useWorkspace((s) => s.loadSnapshot);
   const connectBackend = useWorkspace((s) => s.connectBackend);
+  const startBackendEventLoop = useWorkspace((s) => s.startBackendEventLoop);
+  const stopBackendEventLoop = useWorkspace((s) => s.stopBackendEventLoop);
   const backendStatus = useWorkspace((s) => s.backend);
 
   // Cached per locale, so `t` is referentially stable and the callbacks below do not
@@ -68,6 +70,14 @@ export default function App() {
   useEffect(() => {
     void connectBackend();
   }, [connectBackend]);
+
+  // The event stream is how results reach the browser (nothing computes locally). Arm it for
+  // the life of the app; `connectBackend` re-arms it after a reconnect, and unmount tears it
+  // down so a hot reload cannot leave two long-polls running against one backend.
+  useEffect(() => {
+    startBackendEventLoop();
+    return () => stopBackendEventLoop();
+  }, [startBackendEventLoop, stopBackendEventLoop]);
 
   /** Parse dropped / picked files and open them as one multi-file matrix card. */
   const ingestFiles = useCallback(

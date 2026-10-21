@@ -1034,6 +1034,55 @@ body {
   text-align: center;
 }
 
+/*
+ * Node state light (B-plan): the four backend states drive the indicator — grey (dirty /
+ * not yet registered), amber (computing), green (done), red (error). Colour-blind-safe via
+ * shape too: computing pulses, done is solid. Never a silent blank.
+ */
+.node-light {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--text-dim);
+  flex: 0 0 auto;
+}
+
+.node-light--idle {
+  background: var(--border-strong);
+}
+
+.node-light--dirty {
+  background: var(--text-dim);
+}
+
+.node-light--computing {
+  background: #d99a1f;
+  animation: node-pulse 1s ease-in-out infinite;
+}
+
+.node-light--done {
+  background: #2e9e57;
+}
+
+.node-light--error {
+  background: var(--danger);
+}
+
+@keyframes node-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .node-light--computing {
+    animation: none;
+  }
+}
+
+
 /* ── Empty state ────────────────────────────────────────────────────── */
 
 .empty-state {
