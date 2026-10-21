@@ -71,7 +71,7 @@
 
 后端持有所有数据、依赖图和计算定义的**权威副本**。浏览器仅保留按 revision 键控的只读显示缓存。
 
-- **表达式引擎**：TS 参考实现的逐语义移植（`expression.ts`）——38 个跨层差分夹具保证结果完全一致。支持算术、比较、聚合（SUM/AVG/MIN/MAX/MEDIAN/STD，NaN 跳过 + Bessel 校正 STD）、逐元素数学函数（ABS/SQRT/LOG/LN/LOG10/EXP/POW/ROUND/FLOOR/CEIL/SIGN）、滑动窗口（MOV/EMA）、条件（IF）
+- **表达式引擎**：TS 参考实现的逐语义移植（`expression.ts`）——46 个跨层差分夹具 + 随机差分 fuzz（`DC_RUN_FUZZ=1`）保证结果一致。支持算术、比较、聚合（SUM/AVG/MIN/MAX/MEDIAN/STD，NaN 跳过 + Bessel 校正 STD）、逐元素数学函数（ABS/SQRT/LOG/LN/LOG10/EXP/POW/ROUND/FLOOR/CEIL/SIGN）、滑动窗口（MOV/EMA）、条件（IF）
 - **矩阵模式求值**：当任一输入变量声明为矩阵模式时，`*` 变为矩阵乘法；新增函数：`TRANSPOSE`、`DET`、`INV`、`SOLVE`、`MMUL`（显式矩阵乘）、`EMUL`（显式逐元素乘）。形状不匹配产生结构化 `shapeMismatch` 错误——绝不静默产出垃圾结果
 - **依赖图**：按端口的边、原子成环拒绝（N 条边要么全加要么全不加）、经 `resultOwner_` 映射的结果矩阵感知级联
 - **节点状态机**：dirty → computing → done | error，通过单调递增 seq 的事件流推送
@@ -160,11 +160,15 @@ npm test                  # 单元测试（vitest，含跨层夹具）
 ### 测试
 
 ```bash
-# 前端：typecheck + 247 个单元测试（含 38 个跨层差分夹具）
+# 前端：typecheck + 269 个单元测试（含 46 个跨层差分夹具）
 cd web && npm run typecheck && npm test
 
-# 后端：3 个 ctest 套件（38 表达式 + 14 矩阵 + 节点注册表）
+# 后端：5 个 ctest 用例（46 表达式 + 14 矩阵 + 节点注册表；另有两个按需门控，默认 Skipped）
 cd backend && ctest --test-dir build --output-on-failure
+
+# 按需门控：差分 fuzz（随机表达式 TS↔C++ 对拍）与 HTTP 畸形报文压测
+DC_RUN_FUZZ=1 ctest --test-dir build -R diff_fuzz --output-on-failure
+DC_RUN_STRESS=1 ctest --test-dir build -R http_stress --output-on-failure
 
 # 端到端冒烟（需先 npm run preview）
 node web/scripts/smoke.mjs http://127.0.0.1:4173
@@ -196,7 +200,8 @@ GitHub Actions 在每次 push/PR 时运行三个 job：
 - [x] **依赖环检测** → `DependencyGraph` 拒绝成环并去除重复边（2026-10-15）
 - [x] **兜底原则确立** → 可见降级契约（2026-10-15）
 - [x] **B 方案拍板** → 后端持有计算，浏览器纯交互（2026-10-17）
-- [x] **跨层差分夹具** → 38 个表达式用例，单一 JSON 裁判格式（2026-10-17）
+- [x] **跨层差分夹具** → 46 个表达式用例，单一 JSON 裁判格式（2026-10-17；2026-10-21 扩充）
+- [x] **差分 fuzz 门禁** → 随机表达式 TS↔C++ 对拍（含错误码/位置），种子可复现（2026-10-21）
 - [x] **C++/Eigen 计算后端骨架** → 表达式引擎移植、节点注册表、HTTP API、协议 v1（2026-10-17）
 - [x] **前端传输客户端** → 后端握手、矩阵注册、事件轮询、可见离线横幅（2026-10-17）
 - [x] **一键开发 + CI 门禁** → `scripts/dev.sh`、vite proxy、GitHub Actions backend-test job（2026-10-17）

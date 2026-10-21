@@ -161,11 +161,15 @@ npm test                  # unit tests (vitest, includes cross-tier fixtures)
 ### Tests
 
 ```bash
-# Frontend: typecheck + 247 unit tests (including 38 cross-tier differential fixtures)
+# Frontend: typecheck + 269 unit tests (including 46 cross-tier differential fixtures)
 cd web && npm run typecheck && npm test
 
-# Backend: 3 ctest suites (38 expression + 14 matrix + node registry)
+# Backend: 5 ctest cases (46 expression + 14 matrix + node registry; two more are opt-in gates, Skipped by default)
 cd backend && ctest --test-dir build --output-on-failure
+
+# Opt-in gates: differential fuzz (random TS↔C++ cross-check) and HTTP malformed-request stress
+DC_RUN_FUZZ=1 ctest --test-dir build -R diff_fuzz --output-on-failure
+DC_RUN_STRESS=1 ctest --test-dir build -R http_stress --output-on-failure
 
 # End-to-end smoke (run `npm run preview` first)
 node web/scripts/smoke.mjs http://127.0.0.1:4173
@@ -197,7 +201,8 @@ GitHub Actions runs three jobs on every push/PR:
 - [x] **Dependency cycle detection** → `DependencyGraph` refuses loops and deduplicates edges (2026-10-15)
 - [x] **Maximum-headroom principle adopted** → visible degradation contract (2026-10-15)
 - [x] **B-plan decided** → backend owns compute, browser is pure interaction (2026-10-17)
-- [x] **Cross-tier differential fixtures** → 38 expression cases, single JSON judge format (2026-10-17)
+- [x] **Cross-tier differential fixtures** → 46 expression cases, single JSON judge format (2026-10-17; extended 2026-10-21)
+- [x] **Differential fuzz gate** → random TS↔C++ cross-check incl. error codes/positions, reproducible seeds (2026-10-21)
 - [x] **C++/Eigen compute backend skeleton** → expression engine port, node registry, HTTP API, protocol v1 (2026-10-17)
 - [x] **Frontend transport client** → backend handshake, matrix registration, event polling, visible offline banner (2026-10-17)
 - [x] **One-command dev + CI gate** → `scripts/dev.sh`, vite proxy, GitHub Actions backend-test job (2026-10-17)
