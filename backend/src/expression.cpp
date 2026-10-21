@@ -517,7 +517,19 @@ std::unordered_map<std::string, int> buildColumnMap(const std::vector<std::strin
   for (size_t i = 0; i < names.size(); ++i) {
     map[toLower(names[i])] = static_cast<int>(i);
     if (names[i].rfind("Pos.", 0) == 0) {
+      // "Pos.N" is additionally addressable by its number ("1", "2").
       map[toLower(names[i].substr(4))] = static_cast<int>(i);
+      // A labelled column also registers under its bare annotation: the display label is
+      // "Pos.1 A", but formulas refer to it as `A` — the same convention the TS reference
+      // engine and the old browser evaluator used. Without this, an annotated multi-column
+      // table was unaddressable by name (the whole "Pos.1 A" became one key containing a
+      // space). Additive only: never overwrites an existing key, so first-wins ordering and
+      // every previously resolvable formula are unchanged.
+      const size_t space = names[i].find(' ');
+      if (space != std::string::npos && space + 1 < names[i].size()) {
+        const std::string anno = toLower(names[i].substr(space + 1));
+        if (!anno.empty() && map.find(anno) == map.end()) map[anno] = static_cast<int>(i);
+      }
     }
   }
   return map;
