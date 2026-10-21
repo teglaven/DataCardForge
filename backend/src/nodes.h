@@ -9,6 +9,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -75,7 +76,13 @@ class NodeRegistry {
   // rule; the registry just reports it).
   bool remove(int64_t nodeId, bool* hadDependents);
 
-  const ComputeNode* get(int64_t nodeId) const;
+  // Delete a stored matrix that no node reads and no node owns as a result.
+  // Refuses (hadDependents=true) otherwise — the caller maps that to 409.
+  bool removeMatrix(int64_t matrixId, bool* hadDependents);
+
+  // Returns a copy: a raw pointer escaped the lock and was a use-after-free window
+  // for a concurrent DELETE (see the 2026-10-18 audit).
+  std::optional<ComputeNode> get(int64_t nodeId) const;
   std::vector<int64_t> dependentsOf(int64_t nodeId) const;
 
   // Recompute `nodeId` now, then transitively refresh every dependent in topological
@@ -99,6 +106,8 @@ class NodeRegistry {
 
  private:
   void evaluateNode(ComputeNode* node);
+  // Transition to Error, clear the stale result matrix, publish the error event.
+  void failNode(ComputeNode* node, const std::string& code, Json params);
   // Resolve one binding to its current columns. Throws ExpressionError-compatible
   // failures via std::runtime_error subclasses handled locally.
   bool gatherInputs(const ComputeNode& node, std::vector<std::string>* names,
