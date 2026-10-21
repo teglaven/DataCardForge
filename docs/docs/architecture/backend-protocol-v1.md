@@ -1,6 +1,6 @@
 # 后端协议 v1（backend-protocol-v1）
 
-- **日期**：2026-10-17 · **状态**：v1 草案，随阶段 1 实现同步修订
+- **日期**：2026-10-17 · **状态**：**v1 规范（阶段 1–2 已按此实现）**；改实现先改本文，端点与帧格式以本文为准
 - **出处**：[[../decisions/2026-10-17-backend-owns-compute|B 方案决策]]
 - **原则**：服务端只发结构化数据与错误码；文案、布局、渲染全在浏览器。
 
@@ -41,13 +41,23 @@ GET /api/hello
 - `POST /api/matrices` （JSON：列名+数据，小表/上传解析结果入库）→ `{matrixId, revision}`
 - `POST /api/matrices/raw` （二进制帧，见"载荷编码"）→ 同上
 - `GET /api/matrices/{id}/window?start=&count=` → 二进制帧（可视行窗口）
-- `DELETE /api/matrices/{id}`
+- `PATCH /api/matrices/{id}` `{cells:[{row, col, value}]}` → `{matrixId, revision}`
+  - 浏览器单元格编辑落盘（`value` 同样接受 `"NaN"|"Infinity"|"-Infinity"` 哨兵）。
+  - 任一坐标越界 ⇒ `400 {code:"shapeMismatch"}`，**整批不写入**（不会半更新）。
+- `DELETE /api/matrices/{id}` — 仍有节点读取、或本身就是某节点的结果矩阵时
+  ⇒ `409 {code:"hasDependents"}`；成功 ⇒ `{deleted: id}`
 
 ### 节点
 - `POST /api/nodes` `{kind, inputs, formula}` → `{nodeId, resultMatrixId}`
   - 输入绑定成环 ⇒ `409 {code:"cycle", path:[...]}`，**整批原子拒绝**（N 条边要么全加要么全不加）。
+- `GET /api/nodes/{id}` → `{nodeId, state, resultMatrixId, code?, params?}`
+  - 阶段 3 新增：读单个节点的权威状态快照。事件流是有界且瞬时的，重连或恢复工作区后前端靠它
+    重建四态指示灯与错误码，无需回放历史事件。`state === "error"` 时附带结构化 `code`+`params`。
+- `GET /api/nodes` → `{nodes: [id, …]}`
+  - 阶段 3 新增：列出服务端当前全部计算节点 id，供前端把恢复出的公式卡与服务端权威集合对齐。
 - `PATCH /api/nodes/{id}` `{formula?, inputs?}` → 触发重算调度
 - `DELETE /api/nodes/{id}` — 有依赖者时 `409 {code:"hasDependents"}`（关闭保护的服务端侧）
+  - 成功时一并释放该节点的结果矩阵（前端关卡即回收其显示缓存对应的服务端副本）。
 - `POST /api/nodes/{id}/cancel` — 长任务取消
 
 ### 事件
@@ -57,13 +67,16 @@ GET /api/hello
 ## 载荷编码（二进制帧）
 
 ```
-magic   u32 = 0x44434D31 ("DCM1")
-rows    u32
-cols    u32
-data    f64[rows*cols]  (column-major)
-names   JSON string（UTF-8，长度 u32 前缀）：列名数组
+magic     u32 = 0x44434D31 ("DCM1")
+rows      u32
+cols      u32
+namesLen  u32                     names JSON 的字节数
+data      f64[rows*cols]          column-major，小端
+names     namesLen 字节的 JSON 数组（UTF-8），元素是 "Pos.1 annotation" 形式的标签
 ```
-小端。NaN 原样传输（IEEE 754），前端渲染为 `—` 的既有约定不变。
+帧长恒为 `16 + rows*cols*8 + namesLen`；小端。`POST /api/matrices/raw` 的请求体就是这一帧
+（不带 HTTP 分块），服务端解码后与 JSON 端点等价入库。NaN 原样传输（IEEE 754），
+前端渲染为 `—` 的既有约定不变。
 
 ## 结构化错误
 
@@ -74,7 +87,8 @@ HTTP 4xx/5xx + { "code": "...", "params": {...}, "position"?: number }
 沿用 `expression.ts` 现有码表并扩展：
 `unexpectedChar unknownFunction expectedCloseAfterArgs badArgCount unknownColumn
 expectedClose unexpectedToken trailingToken shapeMismatch singular matrixRequired
-notImplemented backendUnavailable hasDependents cycle`
+notImplemented backendUnavailable hasDependents cycle badFrame payloadTooLarge
+internalError upstreamError`
 
 **服务端永不发送面向用户的句子**；前端用 i18n key `formula.error.<code>` /
 `backend.error.<code>` 渲染。未知 code ⇒ 前端显示通用兜底句 + 原始 code（可见，不静默）。
