@@ -224,7 +224,7 @@ GitHub Actions 在每次 push/PR 时运行三个 job：
 
 ## 致谢
 
-本项目由 **GitHub Copilot**（LLM 辅助编程工具）辅助开发。所有生成代码均经过**人工审查和测试**。
+本项目由 **AI 编程助手**辅助开发（DeepSeek Harness / Claude 等 agent 工具，以及早期的 GitHub Copilot）。所有生成代码均经过**人工审查和测试**。
 
 ## 许可证
 

@@ -225,7 +225,7 @@ GitHub Actions runs three jobs on every push/PR:
 
 ## Acknowledgements
 
-This project is developed with the assistance of **GitHub Copilot** (an LLM-assisted programming tool). All generated code has been **manually reviewed and tested**.
+This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class agent tooling, and earlier GitHub Copilot). All generated code has been **manually reviewed and tested**.
 
 ## License
 

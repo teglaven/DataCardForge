@@ -5,6 +5,8 @@
 
 ## 导航
 
+- 🧭 **项目演进史** (`history.md`) — 把决策/日志/踩坑/审计按因果链串成一条历史，含四个时代、四条螺旋线、教训清单与文档不一致盘点
+  - [[history|项目演进史（Data Workbench / DataCardForge）]] ← **先读这篇再进各分册**
 - 📌 **决策记录** (`decisions/`) — 已经拍板、影响后续的方向性结论
   - [[2026-10-17-backend-owns-compute|后端持有数据与计算（B 方案）]] ← **最新分层裁定：浏览器纯交互，修订 T1 基线**
   - [[2026-10-15-max-headroom-principle|兜底原则（最大余量）]] ← **核心架构原则**（分层表已被 10-17 决策修订，契约仍有效）
@@ -13,9 +15,10 @@
   - [[2026-10-14-chart-library-audit|图表库保持 ECharts]] ← 统计图型与矢量导出审计
   - [[2026-08-07-backend-first-frontend-paused|后端先行，前端搁置]]（其中"前端暂停"部分已被上面取代；"后端先行"部分被 10-17 决策复活并扩展）
   - [[2026-08-07-connection-subordination|连线从属原则]]
-- ⚖️ **架构权衡** (`architecture/`) — 尚未拍板、需要继续论证的对比
-  - [[backend-protocol-v1|后端协议 v1]] ← B 方案的传输/资源/错误/夹具契约
-  - [[frontend-imgui-vs-web|前端选型：ImGui vs Web]]（权重已反转，见 10-14 决策）
+- 📐 **规范** (`architecture/`) — 已定稿、实现必须服从的契约（改它 = 改代码前先改这里）
+  - [[backend-protocol-v1|后端协议 v1]] ← B 方案的传输/资源/错误/夹具契约；阶段 1–2 已按此实现，端点与帧格式以本文为准
+- ⚖️ **架构权衡** (`architecture/`) — 历史对比文档，结论多数已被决策追记取代；仅当想理解"为什么不选另一头"时阅读
+  - [[frontend-imgui-vs-web|前端选型：ImGui vs Web]]（✅ 已收敛 → 选 Web，见 10-14 决策；对比表仍可复用）
 - 🕳️ **踩坑记录** (`lessons/`) — 实测中遇到的坑与规避方法
   - [[implot-v1.1-api|ImPlot v1.1 API 大改]]
   - [[imgui-docking-pushstylecolor|ImGui Docking 下 PushStyleColor 的坑]]
