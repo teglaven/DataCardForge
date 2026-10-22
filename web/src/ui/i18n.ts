@@ -22,6 +22,7 @@ const dictionaries = {
     'menu.exportAllCharts': '批量导出所有图表 SVG…',
     'menu.tile': '平铺',
     'menu.cascade': '层叠',
+    'menu.resetView': '回到卡片',
     'menu.closeAll': '关闭全部卡片',
 
     'status.ready': '就绪 — 在空白处点击右键 → 打开数据文件，或直接拖入数据文件',
@@ -176,6 +177,7 @@ const dictionaries = {
     'menu.exportAllCharts': 'Export All Charts as SVG…',
     'menu.tile': 'Tile',
     'menu.cascade': 'Cascade',
+    'menu.resetView': 'Reset View',
     'menu.closeAll': 'Close All Cards',
 
     'status.ready': 'Ready — right-click the empty area → Open Data Files, or drop data files here',

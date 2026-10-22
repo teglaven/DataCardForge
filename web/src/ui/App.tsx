@@ -33,6 +33,7 @@ export default function App() {
   const showToast = useWorkspace((s) => s.showToast);
   const tileCards = useWorkspace((s) => s.tileCards);
   const cascadeCards = useWorkspace((s) => s.cascadeCards);
+  const resetView = useWorkspace((s) => s.resetView);
   const closeAllCards = useWorkspace((s) => s.closeAllCards);
   const toSnapshot = useWorkspace((s) => s.toSnapshot);
   const loadSnapshot = useWorkspace((s) => s.loadSnapshot);
@@ -232,6 +233,11 @@ export default function App() {
     afterBulkLayoutChange();
   }, [cascadeCards]);
 
+  const onResetView = useCallback(() => {
+    resetView();
+    afterBulkLayoutChange();
+  }, [resetView]);
+
   const onCloseAll = useCallback(() => {
     closeAllCards();
     setStatus(t('status.ready'));
@@ -262,6 +268,7 @@ export default function App() {
         hasCharts={hasCharts}
         onTile={onTile}
         onCascade={onCascade}
+        onResetView={onResetView}
         onCloseAll={onCloseAll}
       />
       {backendStatus.state !== 'online' && backendStatus.state !== 'unknown' ? (

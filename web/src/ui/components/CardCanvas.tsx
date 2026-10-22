@@ -1,13 +1,29 @@
 /**
- * Card canvas — the `QMdiArea` replacement.
+ * Card canvas — an unbounded, pannable plane.
  *
- * Owns the absolutely-positioned card plane, the backend-layer connection overlay,
- * the empty-state affordance, the right-click "new table" gesture and file drops.
+ * Owns the pannable world layer, the viewport-fixed connection overlay, the empty-state
+ * affordance, the right-click "new table" gesture, file drops and the pan gestures.
  * All geometry lives in the store; this component only orchestrates.
+ *
+ * Two nested coordinate spaces:
+ *
+ *   .canvas        the visible viewport — clips, never moves
+ *   .canvas__world the card plane — carries `translate(-view.x, -view.y)` and is the
+ *                  origin every anchor measurement is taken against (cardMetrics), so
+ *                  panning cancels out of the geometry instead of having to be applied
+ *                  twice.
+ *
+ * The plane is sized from the cards themselves, so it grows without bound as a workflow
+ * spreads out; `PLANE_PAD` keeps a margin of empty space beyond the furthest card so
+ * there is always somewhere further to drag a card to.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { invalidateLayout, setCanvasElement } from '../cardMetrics.ts';
+import {
+  invalidateLayout,
+  setCanvasElement,
+  setWorldElement,
+} from '../cardMetrics.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
 import { isChartCard, isFormulaCard, isMatrixCard } from '../types.ts';
 import { ConnectionLayer } from '../ConnectionLayer.tsx';
@@ -16,6 +32,15 @@ import { ChartCard } from './ChartCard.tsx';
 import { FormulaCard } from './FormulaCard.tsx';
 import { EmptyState } from './EmptyState.tsx';
 import { MatrixCard } from './MatrixCard.tsx';
+
+/** Empty space kept beyond the furthest card, in px: room to keep building outward. */
+const PLANE_PAD = 900;
+
+/** Pointer travel before a press on the bare canvas counts as a pan, not a click. */
+const PAN_THRESHOLD = 4;
+
+/** Dot-grid pitch of the canvas backdrop, in px. Drives the pan-parallax offset below. */
+const GRID_SIZE = 22;
 
 interface CardCanvasProps {
   onNewTable: () => void;
@@ -37,20 +62,214 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
   const addChartCard = useWorkspace((s) => s.addChartCard);
   const addFormulaCard = useWorkspace((s) => s.addFormulaCard);
   const showToast = useWorkspace((s) => s.showToast);
+  const view = useWorkspace((s) => s.view);
+  const setView = useWorkspace((s) => s.setView);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const worldRef = useRef<HTMLDivElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
   const dragDepth = useRef(0);
+
+  // ── plane geometry ──────────────────────────────────────────────────
+
+  /**
+   * The plane spans every card plus a margin. Deriving it from the cards (rather than
+   * fixing a size) is what makes it unbounded: dragging a card outward grows the plane,
+   * which lets it be dragged further still on the next frame.
+   */
+  const plane = useMemo(() => {
+    let width = viewportSize.width;
+    let height = viewportSize.height;
+    for (const card of cards) {
+      width = Math.max(width, card.x + card.width);
+      height = Math.max(height, card.y + card.height);
+    }
+    return { width: width + PLANE_PAD, height: height + PLANE_PAD };
+  }, [cards, viewportSize]);
+
+  const maxPan = useMemo(
+    () => ({
+      x: Math.max(0, plane.width - viewportSize.width),
+      y: Math.max(0, plane.height - viewportSize.height),
+    }),
+    [plane, viewportSize],
+  );
+
+  /** Keep the view inside the plane; never scroll past its far edge or the origin. */
+  const clampView = useCallback(
+    (candidate: { x: number; y: number }) => ({
+      x: Math.min(Math.max(0, candidate.x), maxPan.x),
+      y: Math.min(Math.max(0, candidate.y), maxPan.y),
+    }),
+    [maxPan],
+  );
+
+  /** Pan by a screen-px delta, clamped against the *current* sizes. */
+  const panByClamped = useCallback(
+    (dx: number, dy: number) => {
+      if (dx === 0 && dy === 0) return;
+      const current = useWorkspace.getState().view;
+      const next = clampView({ x: current.x + dx, y: current.y + dy });
+      if (next.x !== current.x || next.y !== current.y) setView(next);
+    },
+    [clampView, setView],
+  );
+
+  // Removing the furthest card (or resizing the window) shrinks the plane; without this
+  // the stored pan could sit past the new edge and the view would show empty space.
+  useEffect(() => {
+    const clamped = clampView(view);
+    if (clamped.x !== view.x || clamped.y !== view.y) setView(clamped);
+  }, [view, clampView, setView]);
+
+  // ── measurement registration ────────────────────────────────────────
 
   useEffect(() => {
     setCanvasElement(canvasRef.current);
-    return () => setCanvasElement(null);
+    setWorldElement(worldRef.current);
+    return () => {
+      setCanvasElement(null);
+      setWorldElement(null);
+    };
   }, []);
 
   // Keep anchors fresh when the viewport itself changes size.
   useEffect(() => {
+    const element = canvasRef.current;
+    if (!element) return;
+    const measure = () =>
+      setViewportSize({ width: element.clientWidth, height: element.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     window.addEventListener('resize', invalidateLayout);
     return () => window.removeEventListener('resize', invalidateLayout);
+  }, []);
+
+  // ── pan gestures ────────────────────────────────────────────────────
+  //
+  // Wheel/trackpad scrolling, middle-button drag and space+left drag all pan; a plain
+  // left drag on the bare canvas pans too, but only after the pointer travels far enough
+  // to rule out a click (clicking the background still clears the selection).
+  // Deliberately *not* right-drag: the right button already opens the "new table" menu,
+  // and the project's own connection/gesture conventions must not be re-purposed.
+
+  const pan = useRef<{
+    pointerId: number;
+    lastX: number;
+    lastY: number;
+    moved: boolean;
+  } | null>(null);
+
+  const beginPan = useCallback((event: React.PointerEvent) => {
+    const element = canvasRef.current;
+    if (!element) return;
+    pan.current = {
+      pointerId: event.pointerId,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      moved: false,
+    };
+    setIsPanning(true);
+    // Optional: jsdom (used by the DOM tests) does not implement pointer capture, and a
+    // missing capture only costs us events that leave the element mid-drag.
+    element.setPointerCapture?.(event.pointerId);
+  }, []);
+
+  const onPointerDown = (event: React.PointerEvent) => {
+    // React portals bubble synthetic events through the *React* tree, so a context menu
+    // portaled to <body> arrives here even though it is nowhere near the canvas. The DOM
+    // path is the only honest test: without it, pressing a menu item was classified as
+    // "bare canvas", the canvas captured the pointer, and the item's click never fired —
+    // the menu just stayed open. Caught by the browser probe, not by the unit tests.
+    const path = event.nativeEvent.composedPath?.() ?? [];
+    if (!canvasRef.current || !path.includes(canvasRef.current)) return;
+
+    const onCard = (event.target as HTMLElement).closest('.card') !== null;
+    // Middle button pans from anywhere, space+left pans from anywhere.
+    if (event.button === 1 || (event.button === 0 && spaceHeld)) {
+      event.preventDefault();
+      beginPan(event);
+      return;
+    }
+    // Plain left press on the bare canvas: armed, promoted to a pan once it moves.
+    if (event.button === 0 && !onCard) beginPan(event);
+  };
+
+  const onPointerMove = (event: React.PointerEvent) => {
+    const state = pan.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    const dx = event.clientX - state.lastX;
+    const dy = event.clientY - state.lastY;
+    if (!state.moved) {
+      if (Math.abs(dx) < PAN_THRESHOLD && Math.abs(dy) < PAN_THRESHOLD) return;
+      state.moved = true;
+    }
+    state.lastX = event.clientX;
+    state.lastY = event.clientY;
+    panByClamped(-dx, -dy);
+  };
+
+  const endPan = (event: React.PointerEvent) => {
+    const state = pan.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    pan.current = null;
+    setIsPanning(false);
+    canvasRef.current?.releasePointerCapture?.(event.pointerId);
+  };
+
+  // Wheel needs a non-passive native listener to be able to preventDefault.
+  useEffect(() => {
+    const element = canvasRef.current;
+    if (!element) return;
+    const onWheel = (event: WheelEvent) => {
+      // Cards own their own wheel behaviour: the virtual table scrolls, the chart's
+      // dataZoom zooms. Only the bare plane pans.
+      if ((event.target as HTMLElement | null)?.closest('.card')) return;
+      event.preventDefault();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
+      panByClamped(event.deltaX * unit, event.deltaY * unit);
+    };
+    element.addEventListener('wheel', onWheel, { passive: false });
+    return () => element.removeEventListener('wheel', onWheel);
+  }, [panByClamped]);
+
+  useEffect(() => {
+    const isTextTarget = (target: EventTarget | null) => {
+      const element = target as HTMLElement | null;
+      if (!element) return false;
+      const tag = element.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' || event.repeat) return;
+      if (isTextTarget(event.target)) return;
+      setSpaceHeld(true);
+      // Stop the page from scrolling — but leave buttons alone so Space still activates
+      // whatever has focus.
+      const tag = (event.target as HTMLElement | null)?.tagName;
+      if (tag !== 'BUTTON' && tag !== 'A') event.preventDefault();
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') setSpaceHeld(false);
+    };
+    // A window that loses focus mid-pan must not leave the canvas stuck in pan mode.
+    const onBlur = () => setSpaceHeld(false);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
   }, []);
 
   /**
@@ -227,12 +446,28 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
 
   return (
     <div
-      className={`canvas${dragActive ? ' canvas--dragging' : ''}`}
+      className={`canvas${dragActive ? ' canvas--dragging' : ''}${
+        isPanning ? ' canvas--panning' : spaceHeld ? ' canvas--pan-ready' : ''
+      }`}
       ref={canvasRef}
+      // Parallax the dot grid by the pan so the backdrop belongs to the plane rather than
+      // to the window. Offsetting the fixed viewport's background keeps this free — the
+      // alternative (a plane-sized background layer) would be rasterised at plane size.
+      style={{
+        backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`,
+        backgroundPosition: `${-view.x % GRID_SIZE}px ${-view.y % GRID_SIZE}px`,
+      }}
       onContextMenu={onContextMenu}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endPan}
+      onPointerCancel={endPan}
       onClick={(event) => {
-        // Clicking the bare canvas clears the selection (deselects the active card).
-        if (event.target === canvasRef.current) select(null);
+        // Clicking the bare canvas clears the selection (deselects the active card) —
+        // unless that "click" was the tail of a pan.
+        if (event.target !== canvasRef.current) return;
+        if (pan.current?.moved) return;
+        select(null);
       }}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
@@ -244,13 +479,24 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
         selectedId={selectedId}
         blockedCardId={blockedCardId}
         blockNonce={blockNonce}
+        view={view}
       />
+
+      <div
+        className="canvas__world"
+        ref={worldRef}
+        style={{
+          width: plane.width,
+          height: plane.height,
+          transform: `translate(${-view.x}px, ${-view.y}px)`,
+        }}
+      >
+        <div className="canvas__cards">{renderedCards}</div>
+      </div>
 
       {cards.length === 0 ? (
         <EmptyState onNewTable={onNewTable} dragActive={dragActive} />
       ) : null}
-
-      <div className="canvas__cards">{renderedCards}</div>
 
       {dragActive ? (
         <div className="canvas__drop-hint">{t('empty.dropHint')}</div>

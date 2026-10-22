@@ -214,6 +214,8 @@ interface ConnectionLayerProps {
   blockedCardId: number | null;
   /** Changes on every refused close so the blink restarts. */
   blockNonce: number;
+  /** Current pan of the card plane; the layer counter-translates by it. */
+  view: { x: number; y: number };
 }
 
 export function ConnectionLayer({
@@ -221,6 +223,7 @@ export function ConnectionLayer({
   selectedId,
   blockedCardId,
   blockNonce,
+  view,
 }: ConnectionLayerProps) {
   const connections = useConnectionGeometry(cards, selectedId);
   const rects = useCardRects(cards);
@@ -238,11 +241,19 @@ export function ConnectionLayer({
   // they are deliberately meant to be readable on top of the card they refer to.
   const maskId = 'connection-card-cutout';
 
+  // The SVG itself stays pinned to the viewport (a plane-sized SVG would be rasterised
+  // as one enormous layer); only its contents are counter-translated, so everything below
+  // can keep working in unbounded *plane* coordinates — the same space the anchors are
+  // measured in (see cardMetrics).
   return (
     <svg className="connection-layer" aria-hidden="true">
+      <g transform={`translate(${-view.x}, ${-view.y})`}>
       <defs>
         <mask id={maskId} maskUnits="userSpaceOnUse">
-          <rect x="0" y="0" width="100%" height="100%" fill="#ffffff" />
+          {/* Covers the whole unbounded plane, not just the viewport: this group is
+              counter-translated by the pan, so a `100%` rect would whiten only the first
+              screenful of plane coordinates and silently erase every line beyond it. */}
+          <rect x="-100000" y="-100000" width="200000" height="200000" fill="#ffffff" />
           {rects.map((rect, index) => (
             <rect
               key={index}
@@ -274,6 +285,7 @@ export function ConnectionLayer({
           the line meets each card's edge, and the source column is marked on its header cell
           by `MatrixCard` (`vtable__colhead--source`), which is real DOM and therefore above
           the card's own background. */}
+      </g>
     </svg>
   );
 }

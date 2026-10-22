@@ -155,21 +155,44 @@ body {
   background: var(--border);
 }
 
-/* ── Canvas (MDI plane) ─────────────────────────────────────────────── */
+/* ── Canvas (infinite MDI plane) ────────────────────────────────────── */
 
 .canvas {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  /* The viewport clips; it never moves. Panning is applied to `.canvas__world`. */
   overflow: hidden;
   background: var(--bg);
   background-image: radial-gradient(var(--border) 1px, transparent 1px);
-  background-size: 22px 22px;
+  /* Size and position are written inline by CardCanvas so the dot grid travels with the
+     pan (offset by `-view % gridSize`) instead of standing still under moving cards.
+     Keeping the grid on the fixed viewport also avoids a plane-sized background layer. */
+}
+
+.canvas--pan-ready {
+  cursor: grab;
+}
+
+.canvas--panning {
+  cursor: grabbing;
 }
 
 .canvas--dragging {
   outline: 2px dashed var(--accent);
   outline-offset: -6px;
+}
+
+/* The pannable card plane. Sized to the cards it holds (so it grows without bound) and
+   translated by the pan; `cardMetrics` measures against this element, which is what keeps
+   every anchor in plane coordinates no matter how far the view has travelled. */
+.canvas__world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  /* Above the connection layer (z-index 1) so lines always pass behind the cards. */
+  z-index: 2;
 }
 
 /* The card plane itself must not swallow clicks: only the cards it contains should
@@ -188,6 +211,7 @@ body {
   position: absolute;
   left: 50%;
   bottom: 22px;
+  z-index: 3;
   transform: translateX(-50%);
   padding: 8px 16px;
   background: var(--surface);
@@ -215,9 +239,11 @@ body {
   z-index: 1;
 }
 
-/* Establishes the stacking context that keeps every card above the connection layer. */
+/* The stacking context that keeps every card above the connection layer now lives on
+   `.canvas__world` (the translated plane); `.canvas__cards` only lays out the cards, so
+   their own z-index values stay ordered *within* that context. */
 .canvas__cards {
-  z-index: 2;
+  z-index: auto;
 }
 
 .connection path {
@@ -1088,6 +1114,9 @@ body {
 .empty-state {
   position: absolute;
   inset: 0;
+  /* Above the card plane (z-index 2): it is a viewport-level affordance and would
+     otherwise be painted underneath the (translated, higher) world layer. */
+  z-index: 3;
   display: flex;
   flex-direction: column;
   align-items: center;

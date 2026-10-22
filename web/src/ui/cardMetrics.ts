@@ -48,7 +48,21 @@ interface CardMetrics {
 let layoutVersion = 0;
 const listeners = new Set<() => void>();
 const cards = new Map<number, CardMetrics>();
-let canvasElement: HTMLElement | null = null;
+/**
+ * Two different references, because the canvas is now a pannable, unbounded plane:
+ *
+ *   - `viewportElement` is the visible clipping box — its *size* answers "how much room
+ *     does the user have on screen" (Tile/Cascade, new-card placement).
+ *   - `worldElement` is the origin of the card coordinate system. It carries the pan
+ *     transform, so `getBoundingClientRect()` differences against it stay in plane
+ *     coordinates no matter how far the view has been panned — the same trick that used
+ *     to make scroll position a non-issue.
+ *
+ * Before the plane was pannable these were the same element, which is why the module
+ * predates the split.
+ */
+let viewportElement: HTMLElement | null = null;
+let worldElement: HTMLElement | null = null;
 
 export function subscribeLayout(listener: () => void): () => void {
   listeners.add(listener);
@@ -66,7 +80,13 @@ export function invalidateLayout(): void {
 }
 
 export function setCanvasElement(element: HTMLElement | null): void {
-  canvasElement = element;
+  viewportElement = element;
+  invalidateLayout();
+}
+
+/** Register the panned world layer that defines the card coordinate origin. */
+export function setWorldElement(element: HTMLElement | null): void {
+  worldElement = element;
   invalidateLayout();
 }
 
@@ -120,23 +140,50 @@ export function clearTableMetrics(id: number): void {
 }
 
 /**
- * Size of the card plane, in CSS px.
+ * Size of the *visible* canvas viewport, in CSS px.
  *
  * `Tile`/`Cascade` and new-card placement must measure *this*, not the window or the app
  * shell: the shell also contains the menu bar and the status bar, so sizing cards from it
  * made every tiled card ~48px taller than the canvas and pushed its bottom edge (and the
- * south-east resize handle) off-screen.
+ * south-east resize handle) off-screen. Note it is the viewport, not the card plane: the
+ * plane is unbounded, so "how big is the canvas" only means anything on screen.
  */
 export function canvasSize(): { width: number; height: number } {
-  if (!canvasElement) return { width: 0, height: 0 };
-  const rect = canvasElement.getBoundingClientRect();
+  if (!viewportElement) return { width: 0, height: 0 };
+  const rect = viewportElement.getBoundingClientRect();
   return { width: rect.width, height: rect.height };
 }
 
+/**
+ * Origin of the card coordinate system, in screen px.
+ *
+ * Every measurement is a difference against this rectangle, so panning cancels out and
+ * all anchors stay in unbounded plane coordinates.
+ */
 function canvasRect(): Rect {
-  if (!canvasElement) return { left: 0, top: 0, width: 0, height: 0 };
-  const r = canvasElement.getBoundingClientRect();
+  const element = worldElement ?? viewportElement;
+  if (!element) return { left: 0, top: 0, width: 0, height: 0 };
+  const r = element.getBoundingClientRect();
   return { left: r.left, top: r.top, width: r.width, height: r.height };
+}
+
+/**
+ * The visible viewport rectangle expressed in plane coordinates.
+ *
+ * New cards are placed relative to *this*: with an unbounded plane there is no "canvas
+ * edge" to clamp against any more, but a card must still be born where the user can see
+ * it. Panning moves the rectangle, so a card created after panning lands in view.
+ */
+export function viewportRectInWorld(): Rect {
+  if (!viewportElement) return { left: 0, top: 0, width: 0, height: 0 };
+  const origin = canvasRect();
+  const v = viewportElement.getBoundingClientRect();
+  return {
+    left: v.left - origin.left,
+    top: v.top - origin.top,
+    width: v.width,
+    height: v.height,
+  };
 }
 
 function toCanvas(rect: DOMRect, canvas: Rect): Rect {

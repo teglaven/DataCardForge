@@ -17,6 +17,7 @@ export interface MenuActions {
   onExportAllCharts: () => void;
   onTile: () => void;
   onCascade: () => void;
+  onResetView: () => void;
   onCloseAll: () => void;
 }
 
@@ -33,6 +34,7 @@ export function MenuBar({
   onExportAllCharts,
   onTile,
   onCascade,
+  onResetView,
   onCloseAll,
   canExport,
   hasCharts,
@@ -128,6 +130,8 @@ export function MenuBar({
         <>
           {item(t('menu.tile'), onTile)}
           {item(t('menu.cascade'), onCascade)}
+          <div className="menubar__separator" />
+          {item(t('menu.resetView'), onResetView)}
         </>,
       )}
       {menu(

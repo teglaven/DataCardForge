@@ -14,7 +14,7 @@
  */
 import { create } from 'zustand';
 
-import { canvasSize } from './cardMetrics.ts';
+import { viewportRectInWorld } from './cardMetrics.ts';
 import { DependencyGraph } from '../core/DependencyGraph.ts';
 import { MatrixData } from '../core/MatrixData.ts';
 import { DEFAULT_SMOOTHING, type SmoothingOptions } from '../core/Smoothing.ts';
@@ -78,32 +78,85 @@ export const MIN_CARD_HEIGHT = 240;
 /** Deliberately coarse epsilon: float noise from drag/resize must not re-render. */
 const GEOM_EPSILON = 0.01;
 
-/** Keep a new card at least this far from the canvas edge. */
+/** Keep a new card at least this far from the origin of the card plane. */
 const CARD_MARGIN = 8;
 
+/** Down-right step used while the preferred spot is taken. */
+const CARD_CASCADE_STEP = 28;
+const CARD_CASCADE_TRIES = 24;
+
 /**
- * Place a new card near `preferred`, but inside the card plane.
+ * Place a new card near `preferred`, on the unbounded card plane.
  *
- * A chart was previously positioned unconditionally at `table.x + table.width + 32`. With
- * the table parked near the right edge that put the whole card outside the canvas (measured
- * box 1472–2032 against a 0–1440 plane): invisible, while the status bar still announced
- * "Created chart: …". `bounds="parent"` only constrains *dragging*, never the initial
- * position, so the clamp has to happen here.
+ * The previous version clamped into the *viewport*, which is precisely why a workflow
+ * could never grow past one screenful: a chart opened from a table parked near the right
+ * edge was folded back on top of its parent (and the Qt-era bug it guarded against —
+ * a card created off-plane while the status bar announced success — is now impossible,
+ * because the plane grows with the cards instead of ending at the window edge).
+ *
+ * A spot the user cannot see is *not* pulled back into view: folding a chart away from
+ * the table it was opened from would stretch its connection line across the plane and
+ * destroy the spatial story the canvas is telling. The view is moved instead (see
+ * `revealView`), which is what "create something, then look at it" means everywhere else.
+ * `occupied` lets the position cascade while it overlaps an existing card, so a burst of
+ * new cards never stacks invisibly at one point.
  */
-function placeWithinCanvas(
+function placeOnPlane(
   preferred: { x: number; y: number },
   size: { width: number; height: number },
+  occupied: Array<{ x: number; y: number; width: number; height: number }>,
 ): { x: number; y: number } {
-  const canvas = canvasSize();
-  if (canvas.width <= 0 || canvas.height <= 0) return preferred;
-  const maxX = Math.max(CARD_MARGIN, canvas.width - size.width - CARD_MARGIN);
-  const maxY = Math.max(CARD_MARGIN, canvas.height - size.height - CARD_MARGIN);
-  return {
-    // Fall back to the cascade default when the preferred spot is off-plane only on one
-    // axis, so a chart never ends up half-outside the canvas either.
-    x: Math.min(Math.max(CARD_MARGIN, preferred.x), maxX),
-    y: Math.min(Math.max(CARD_MARGIN, preferred.y), maxY),
-  };
+  let x = preferred.x;
+  let y = preferred.y;
+
+  const overlaps = (cx: number, cy: number) =>
+    occupied.some(
+      (c) =>
+        cx < c.x + c.width + CARD_MARGIN &&
+        cx + size.width + CARD_MARGIN > c.x &&
+        cy < c.y + c.height + CARD_MARGIN &&
+        cy + size.height + CARD_MARGIN > c.y,
+    );
+
+  for (let i = 0; i < CARD_CASCADE_TRIES && overlaps(x, y); i += 1) {
+    x += CARD_CASCADE_STEP;
+    y += CARD_CASCADE_STEP;
+  }
+
+  // The plane extends without bound right and down, but not into negative space: cards
+  // are laid out from the origin and react-rnd's `bounds="parent"` keeps them there.
+  return { x: Math.max(CARD_MARGIN, x), y: Math.max(CARD_MARGIN, y) };
+}
+
+/**
+ * Where the view has to move for `bounds` to be fully visible, given the current pan.
+ *
+ * Panning rather than repositioning keeps new cards next to their parent — the whole
+ * point of drawing connections at all. Returns `current` unchanged when the card is
+ * already in sight, or when nothing can be measured (SSR, unit tests without a DOM).
+ */
+function revealView(
+  bounds: { x: number; y: number; width: number; height: number },
+  current: { x: number; y: number },
+): { x: number; y: number } {
+  const visible = viewportRectInWorld();
+  if (visible.width <= 0 || visible.height <= 0) return current;
+
+  const margin = 24;
+  let dx = 0;
+  let dy = 0;
+  if (bounds.x < visible.left + margin) {
+    dx = bounds.x - margin - visible.left;
+  } else if (bounds.x + bounds.width > visible.left + visible.width - margin) {
+    dx = bounds.x + bounds.width + margin - (visible.left + visible.width);
+  }
+  if (bounds.y < visible.top + margin) {
+    dy = bounds.y - margin - visible.top;
+  } else if (bounds.y + bounds.height > visible.top + visible.height - margin) {
+    dy = bounds.y + bounds.height + margin - (visible.top + visible.height);
+  }
+  if (dx === 0 && dy === 0) return current;
+  return { x: Math.max(0, current.x + dx), y: Math.max(0, current.y + dy) };
 }
 
 export interface Toast {
@@ -136,6 +189,14 @@ interface WorkspaceState {
   locale: Locale;
   nextCardId: number;
   nextMatrixId: number;
+  /**
+   * Pan offset of the infinite canvas, in plane px: the world layer is drawn at
+   * `translate(-view.x, -view.y)`. The plane itself is unbounded (it grows with the
+   * cards), so this is the only piece of view state that has to be remembered.
+   * Clamping against the plane/viewport sizes happens in `CardCanvas`, which is the only
+   * place that can measure them.
+   */
+  view: { x: number; y: number };
 
   // ── card lifecycle ──────────────────────────────────────────────────
   addMatrixCard: (
@@ -147,6 +208,11 @@ interface WorkspaceState {
   setBounds: (id: number, bounds: { x: number; y: number; width: number; height: number }) => void;
   bringToFront: (id: number) => void;
   select: (id: number | null) => void;
+  /** Move the canvas view by a screen-px delta (already clamped by the caller). */
+  panBy: (dx: number, dy: number) => void;
+  setView: (view: { x: number; y: number }) => void;
+  /** Frame every card again — the escape hatch after panning off into empty space. */
+  resetView: () => void;
 
   // ── matrix card behaviour ───────────────────────────────────────────
   setActiveSource: (cardId: number, index: number) => void;
@@ -512,6 +578,18 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     get().cards.reduce((max, card) => Math.max(max, card.z), 0);
 
   /**
+   * Bring a freshly created card into view by panning, not by moving the card.
+   *
+   * Split out of the placement helpers because only the store may write the view, and
+   * because every "new card" path (table, chart, formula) wants the same follow-up.
+   */
+  const revealCard = (bounds: { x: number; y: number; width: number; height: number }): void => {
+    const current = get().view;
+    const next = revealView(bounds, current);
+    if (next.x !== current.x || next.y !== current.y) set({ view: next });
+  };
+
+  /**
    * Push fresh column data into every chart that reads data from `matrixCardId`.
    *
    * Dependencies are registered against the *card* (chart → matrix card) rather than
@@ -618,6 +696,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     locale: detectLocale(),
     nextCardId: 1,
     nextMatrixId: 1,
+    view: { x: 0, y: 0 },
 
     // ── card lifecycle ────────────────────────────────────────────────
 
@@ -664,15 +743,22 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       }
 
       // Cascade placement, so stacked cards do not land exactly on top of each other.
+      // Routed through placeOnPlane so a table opened while the view is panned away
+      // still lands where the user is looking.
       const offset = (state.cards.length % 8) * 28;
+      const matrixSize = { width: 640, height: 420 };
+      const matrixSpot = placeOnPlane(
+        { x: 24 + offset, y: 24 + offset },
+        matrixSize,
+        state.cards,
+      );
       const card: MatrixCardModel = {
         kind: 'matrix',
         id: cardId,
         title: '',
-        x: 24 + offset,
-        y: 24 + offset,
-        width: 640,
-        height: 420,
+        ...matrixSpot,
+        width: matrixSize.width,
+        height: matrixSize.height,
         z,
         createdAt: Date.now(),
         sources,
@@ -688,6 +774,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         nextMatrixId,
         selectedId: cardId,
       });
+      revealCard({ ...matrixSpot, ...matrixSize });
       return cardId;
     },
 
@@ -724,16 +811,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       const cardId = state.nextCardId;
       const chartSize = { width: 560, height: 400 };
+      // Beside the table it was opened from, so the connection line stays short.
+      const chartSpot = placeOnPlane(
+        { x: matrixCard.x + matrixCard.width + 32, y: matrixCard.y + 24 },
+        chartSize,
+        state.cards,
+      );
       const card: ChartCardModel = {
         kind: 'chart',
         id: cardId,
         title: '',
         // Offset from the source card so the new chart is visibly its child, clamped so it
         // always lands on the card plane.
-        ...placeWithinCanvas(
-          { x: matrixCard.x + matrixCard.width + 32, y: matrixCard.y + 24 },
-          chartSize,
-        ),
+        ...chartSpot,
         width: chartSize.width,
         height: chartSize.height,
         z: topZ() + 1,
@@ -760,6 +850,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         nextCardId: cardId + 1,
         selectedId: cardId,
       });
+      revealCard({ ...chartSpot, ...chartSize });
       return cardId;
     },
 
@@ -1106,14 +1197,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       matrices.set(resultMatrixId, new MatrixData());
 
       const formulaSize = { width: 520, height: 380 };
+      const formulaSpot = placeOnPlane(
+        { x: sourceCard.x + 40, y: sourceCard.y + sourceCard.height + 32 },
+        formulaSize,
+        state.cards,
+      );
       const card: FormulaCardModel = {
         kind: 'formula',
         id: cardId,
         title: '',
-        ...placeWithinCanvas(
-          { x: sourceCard.x + 40, y: sourceCard.y + sourceCard.height + 32 },
-          formulaSize,
-        ),
+        ...formulaSpot,
         width: formulaSize.width,
         height: formulaSize.height,
         z: topZ() + 1,
@@ -1133,6 +1226,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         nextMatrixId: resultMatrixId + 1,
         selectedId: cardId,
       });
+      revealCard({ ...formulaSpot, ...formulaSize });
 
       void syncFormulaNodes(cardId);
       return cardId;
@@ -1214,13 +1308,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         (viewportHeight - pad * 2 - gap * (rows - 1)) / rows,
       );
 
+      // Anchor the grid to the visible rectangle: on an unbounded plane, tiling from a
+      // fixed origin would rearrange the cards somewhere the user is not looking.
+      const view = viewportRectInWorld();
       const cards = state.cards.map((card, index) => {
         const col = index % cols;
         const row = Math.floor(index / cols);
         return {
           ...card,
-          x: pad + col * (cellWidth + gap),
-          y: pad + row * (cellHeight + gap),
+          x: Math.max(0, view.left) + pad + col * (cellWidth + gap),
+          y: Math.max(0, view.top) + pad + row * (cellHeight + gap),
           width: cellWidth,
           height: cellHeight,
         };
@@ -1230,13 +1327,55 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
     cascadeCards() {
       const state = get();
+      const view = viewportRectInWorld();
+      const originX = Math.max(0, view.left);
+      const originY = Math.max(0, view.top);
       const cards = state.cards.map((card, index) => ({
         ...card,
-        x: 24 + index * 28,
-        y: 24 + index * 28,
+        x: originX + 24 + index * 28,
+        y: originY + 24 + index * 28,
         z: index + 1,
       }));
       set({ cards });
+    },
+
+    // ── canvas view (infinite plane) ───────────────────────────────────
+
+    panBy(dx, dy) {
+      const { view } = get();
+      // Clamping lives in CardCanvas: only the DOM knows the plane and viewport sizes.
+      set({ view: { x: view.x + dx, y: view.y + dy } });
+    },
+
+    setView(view) {
+      set({ view });
+    },
+
+    resetView() {
+      const { cards } = get();
+      if (cards.length === 0) {
+        set({ view: { x: 0, y: 0 } });
+        return;
+      }
+      const visible = viewportRectInWorld();
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const card of cards) {
+        minX = Math.min(minX, card.x);
+        minY = Math.min(minY, card.y);
+        maxX = Math.max(maxX, card.x + card.width);
+        maxY = Math.max(maxY, card.y + card.height);
+      }
+      // Centre on the cards rather than jumping to the origin: on a plane this large the
+      // user's problem is "where did my work go", not "where is (0,0)".
+      const next = {
+        x: Math.max(0, (minX + maxX) / 2 - visible.width / 2),
+        y: Math.max(0, (minY + maxY) / 2 - visible.height / 2),
+      };
+      // CardCanvas clamps against the live plane, which is the only place that can.
+      set({ view: next });
     },
 
     // ── misc ──────────────────────────────────────────────────────────
@@ -1449,6 +1588,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         blockedCardId: null,
         blockNonce: 0,
         toast: null,
+        // The plane is empty again, so bring the view back to the origin — otherwise the
+        // next workspace would open panned into the void left by the previous one.
+        view: { x: 0, y: 0 },
         nextCardId: 1,
         nextMatrixId: 1,
       });
