@@ -15,6 +15,14 @@ export default defineConfig({
     include: ['@e965/xlsx'],
   },
   server: {
+    // Bind every interface so the workbench is reachable from other machines on the LAN
+    // (requested 2026-10-21). NOTE the standing gap: the backend has NO authentication
+    // (backend-protocol-v1 "无鉴权…跨机部署前必须先补 token"), and this dev server
+    // proxies /api/* straight through — so anything that can reach this port gets full
+    // matrix/node API access. Keep it on a trusted network, or add a token first.
+    host: '0.0.0.0',
+    // Vite rejects requests whose Host header is neither localhost nor an IP (DNS-rebinding
+    // guard). LAN clients hitting http://<ip>:5173 pass; a hostname needs adding here.
     proxy: {
       // B-plan: forward /api/* to the C++ compute backend (default port 37811).
       '/api': {
