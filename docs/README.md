@@ -91,6 +91,10 @@ The backend holds **authoritative copies** of all data, dependency graphs, and c
 
 ### UI / Interaction
 - Consistent theme with automatic light/dark adaptation
+- **Unbounded canvas**: the card plane grows with the workflow instead of ending at the window edge;
+  pan with the wheel/trackpad, middle-drag, **space+left drag**, or a left drag on the bare canvas
+  (a wheel over a card still belongs to the card: table scrolling, chart zoom).
+  **View → Reset View** frames every card again (see the [decision](docs/decisions/2026-10-21-infinite-canvas.md))
 - Cards drag, resize and stack freely, plus **Tile / Cascade / Close All**
 - A table that still feeds a chart **refuses to close**, and its connections blink to explain why
 - Runtime **Chinese/English switching**, **workspace persistence** (layout + dependencies + data), and CSV export of the current table
@@ -208,6 +212,8 @@ GitHub Actions runs three jobs on every push/PR:
 - [x] **One-command dev + CI gate** → `scripts/dev.sh`, vite proxy, GitHub Actions backend-test job (2026-10-17)
 - [x] **Eigen matrix operators** → matmul, transpose, det, inv, solve + matrix-mode expression evaluator + 14 matrix fixtures (2026-10-17)
 - [ ] **Function card UI**: three-pane layout (left: variable blocks + input ports + mode badges; top-right: formula editor; bottom-right: result grid + output port)
+- [x] **Unbounded canvas (pan)** → plane grows with the cards, four pan gestures, View → Reset View (2026-10-21)
+- [ ] **Canvas zoom**: wheel zoom (a true infinite canvas); the entry point and cost are argued in the decision record
 - [ ] **VirtualTable windowed data source**: large matrices fetched by visible-row window, not loaded whole
 - [ ] **Port anchors**: per-port connection endpoints in `cardMetrics` + `ConnectionLayer`
 - [ ] **Four-state status lamps**: driven by node state events (gray/yellow/green/red)
