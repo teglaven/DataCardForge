@@ -19,7 +19,10 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  MAX_ZOOM,
+  MIN_ZOOM,
   setCanvasElement,
+  setCanvasZoom,
   setWorldElement,
   viewportRectInWorld,
 } from '../src/ui/cardMetrics.ts';
@@ -91,6 +94,7 @@ beforeEach(() => {
   store().reset();
   setCanvasElement(null);
   setWorldElement(null);
+  setCanvasZoom(1);
 });
 
 afterEach(async () => {
@@ -102,6 +106,7 @@ afterEach(async () => {
   document.body.innerHTML = '';
   setCanvasElement(null);
   setWorldElement(null);
+  setCanvasZoom(1);
 });
 
 describe('viewportRectInWorld', () => {
@@ -145,7 +150,7 @@ describe('placing new cards on the unbounded plane', () => {
     const matrixCardId = store().addMatrixCard([{ name: 'a.csv', matrix: matrix([1, 2, 3]) }]);
     // Drag the table far to the right of anything currently visible.
     store().setBounds(matrixCardId, { x: 8000, y: 6000, width: 640, height: 420 });
-    store().setView({ x: 0, y: 0 });
+    store().setView({ x: 0, y: 0, zoom: 1 });
 
     const chartId = store().addChartCard(matrixCardId, 0);
     const chart = store().cards.find((c) => c.id === chartId)!;
@@ -183,43 +188,6 @@ describe('placing new cards on the unbounded plane', () => {
 });
 
 describe('pan gestures', () => {
-  it('pans on wheel over the bare canvas', async () => {
-    const host = await mountCanvas();
-    const canvas = host.querySelector('.canvas') as HTMLElement;
-
-    await act(async () => {
-      canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
-    });
-
-    expect(store().view.y).toBe(120);
-  });
-
-  it('leaves the wheel to the cards (table scrolling, chart zoom)', async () => {
-    const host = await mountCanvas();
-    const canvas = host.querySelector('.canvas') as HTMLElement;
-    // Any descendant of a `.card` owns its own wheel behaviour.
-    const card = document.createElement('div');
-    card.className = 'card';
-    canvas.appendChild(card);
-
-    await act(async () => {
-      card.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
-    });
-
-    expect(store().view).toEqual({ x: 0, y: 0 });
-  });
-
-  it('never pans past the origin', async () => {
-    const host = await mountCanvas();
-    const canvas = host.querySelector('.canvas') as HTMLElement;
-
-    await act(async () => {
-      canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, bubbles: true, cancelable: true }));
-    });
-
-    expect(store().view).toEqual({ x: 0, y: 0 });
-  });
-
   it('pans with a middle-button drag', async () => {
     const host = await mountCanvas();
     const canvas = host.querySelector('.canvas') as HTMLElement;
@@ -234,8 +202,27 @@ describe('pan gestures', () => {
       canvas.dispatchEvent(new MouseEvent('pointerup', { clientX: 460, clientY: 370, bubbles: true }));
     });
 
-    // Dragging the plane left/up moves the view right/down.
-    expect(store().view).toEqual({ x: 40, y: 30 });
+    // Dragging the plane left/up moves the view right/down. Pan is in *screen* px, which
+    // is why it is unaffected by the zoom.
+    expect(store().view).toEqual({ x: 40, y: 30, zoom: 1 });
+  });
+
+  it('pans at any zoom without scaling the delta twice', async () => {
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+    store().setView({ x: 0, y: 0, zoom: 2 });
+
+    await act(async () => {
+      canvas.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 1, clientX: 500, clientY: 400, bubbles: true }),
+      );
+      canvas.dispatchEvent(new MouseEvent('pointermove', { clientX: 480, clientY: 390, bubbles: true }));
+      canvas.dispatchEvent(new MouseEvent('pointerup', { clientX: 480, clientY: 390, bubbles: true }));
+    });
+
+    // 20 screen px of travel must be 20 px of pan, not 40: `view` is already screen space.
+    expect(store().view.x).toBe(20);
+    expect(store().view.y).toBe(10);
   });
 
   it('does not pan on a plain click, and still clears the selection', async () => {
@@ -252,7 +239,120 @@ describe('pan gestures', () => {
       canvas.dispatchEvent(new MouseEvent('click', { clientX: 500, clientY: 400, bubbles: true }));
     });
 
-    expect(store().view).toEqual({ x: 0, y: 0 });
+    expect(store().view).toEqual({ x: 0, y: 0, zoom: 1 });
     expect(store().selectedId).toBeNull();
+  });
+});
+
+describe('wheel zoom of the whole workbench', () => {
+  const wheel = (target: HTMLElement, init: WheelEventInit) =>
+    target.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ...init }));
+
+  it('zooms out on a wheel-down over the bare canvas', async () => {
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+
+    await act(async () => wheel(canvas, { deltaY: 120, clientX: 700, clientY: 400 }));
+
+    expect(store().view.zoom).toBeLessThan(1);
+  });
+
+  it('zooms in on a wheel-up and keeps the point under the cursor fixed', async () => {
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+    canvas.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 1000, height: 800, right: 1000, bottom: 800, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+
+    const before = store().view;
+    const cursor = { x: 300, y: 200 };
+    // Plane point under the cursor before the zoom.
+    const anchorBefore = {
+      x: (cursor.x + before.x) / before.zoom,
+      y: (cursor.y + before.y) / before.zoom,
+    };
+
+    await act(async () => wheel(canvas, { deltaY: -120, clientX: cursor.x, clientY: cursor.y }));
+
+    const after = store().view;
+    expect(after.zoom).toBeGreaterThan(1);
+    // screen = plane*zoom - pan, solved for plane: it must be the same point.
+    expect((cursor.x + after.x) / after.zoom).toBeCloseTo(anchorBefore.x, 6);
+    expect((cursor.y + after.y) / after.zoom).toBeCloseTo(anchorBefore.y, 6);
+  });
+
+  it('never zooms past its limits', async () => {
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+
+    await act(async () => {
+      for (let i = 0; i < 80; i += 1) wheel(canvas, { deltaY: -120, clientX: 400, clientY: 300 });
+    });
+    expect(store().view.zoom).toBeLessThanOrEqual(MAX_ZOOM);
+
+    await act(async () => {
+      for (let i = 0; i < 200; i += 1) wheel(canvas, { deltaY: 120, clientX: 400, clientY: 300 });
+    });
+    expect(store().view.zoom).toBeGreaterThanOrEqual(MIN_ZOOM);
+  });
+
+  it('leaves the wheel to the cards (table scrolling, chart zoom)', async () => {
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+    // Any descendant of a `.card` owns its own wheel behaviour.
+    const card = document.createElement('div');
+    card.className = 'card';
+    canvas.appendChild(card);
+
+    await act(async () => wheel(card, { deltaY: 120 }));
+
+    expect(store().view).toEqual({ x: 0, y: 0, zoom: 1 });
+  });
+
+  it('still zooms over a card when Ctrl is held (trackpad pinch too)', async () => {
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+    const card = document.createElement('div');
+    card.className = 'card';
+    canvas.appendChild(card);
+
+    await act(async () => wheel(card, { deltaY: -120, ctrlKey: true, clientX: 300, clientY: 300 }));
+
+    expect(store().view.zoom).toBeGreaterThan(1);
+  });
+
+  it('measures the visible box in plane units while zoomed', () => {
+    const viewport = document.createElement('div');
+    stubRect(viewport, { left: 0, top: 0, width: 1000, height: 800 });
+    const world = document.createElement('div');
+    stubRect(world, { left: -200, top: -100, width: 8000, height: 8000 });
+    setCanvasElement(viewport);
+    setWorldElement(world);
+    setCanvasZoom(2);
+
+    // Screen differences halved, and the pan (200, 100) screen px is 100/50 plane px.
+    expect(viewportRectInWorld()).toEqual({ left: 100, top: 50, width: 500, height: 400 });
+  });
+
+  it('resets with a zoom-to-fit that frames every card', async () => {
+    const viewport = document.createElement('div');
+    stubRect(viewport, { left: 0, top: 0, width: 1000, height: 800 });
+    const world = document.createElement('div');
+    stubRect(world, { left: 0, top: 0, width: 8000, height: 8000 });
+    setCanvasElement(viewport);
+    setWorldElement(world);
+
+    const matrixCardId = store().addMatrixCard([{ name: 'a.csv', matrix: matrix([1, 2, 3]) }]);
+    store().setBounds(matrixCardId, { x: 0, y: 0, width: 640, height: 420 });
+    const chartId = store().addChartCard(matrixCardId, 0)!;
+    store().setBounds(chartId, { x: 5000, y: 3000, width: 560, height: 400 });
+
+    const before = store().view.zoom;
+    store().resetView();
+    const after = store().view.zoom;
+
+    // The cards span far more than one screenful, so fitting them must zoom out…
+    expect(after).toBeLessThan(before);
+    // …and the widest extent (5000 + 560) has to end up inside the 1000px viewport.
+    expect((5000 + 560) * after - store().view.x).toBeLessThanOrEqual(1000 + 1);
   });
 });

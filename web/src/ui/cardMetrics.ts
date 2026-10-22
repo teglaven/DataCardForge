@@ -148,10 +148,44 @@ export function clearTableMetrics(id: number): void {
  * south-east resize handle) off-screen. Note it is the viewport, not the card plane: the
  * plane is unbounded, so "how big is the canvas" only means anything on screen.
  */
+/**
+ * Zoom bounds for the whole workbench. Shared by the store (zoom-to-fit) and the canvas
+ * (wheel zoom), so the two can never disagree about how far the view may go.
+ *
+ * The lower bound is deliberately far out: "adapt the view to the cards" (View → Reset
+ * View) is the answer to a workflow that spans several screens, and at 20% that answer
+ * only reaches ~5 screenfuls — the very complaint that started this feature. Text is
+ * unreadable down there, which is fine: it is an overview, not a reading mode.
+ */
+export const MIN_ZOOM = 0.1;
+export const MAX_ZOOM = 3;
+
+/** Current zoom of the world layer. 1 = 100%. */
+let worldScale = 1;
+
+/**
+ * Publish the zoom so measurements can be converted back into plane units.
+ *
+ * `getBoundingClientRect()` reports *scaled* screen pixels, so every difference has to be
+ * divided by the zoom before it means anything in card coordinates — the same reason the
+ * pan cancels out of the differences.
+ */
+export function setCanvasZoom(zoom: number): void {
+  if (zoom === worldScale || !Number.isFinite(zoom) || zoom <= 0) return;
+  worldScale = zoom;
+  invalidateLayout();
+}
+
+export function getCanvasZoom(): number {
+  return worldScale;
+}
+
 export function canvasSize(): { width: number; height: number } {
   if (!viewportElement) return { width: 0, height: 0 };
   const rect = viewportElement.getBoundingClientRect();
-  return { width: rect.width, height: rect.height };
+  // Reported in *plane* units: every caller places cards with it (Tile/Cascade), and at
+  // 50% zoom the same screen box holds twice as many plane pixels.
+  return { width: rect.width / worldScale, height: rect.height / worldScale };
 }
 
 /**
@@ -179,19 +213,21 @@ export function viewportRectInWorld(): Rect {
   const origin = canvasRect();
   const v = viewportElement.getBoundingClientRect();
   return {
-    left: v.left - origin.left,
-    top: v.top - origin.top,
-    width: v.width,
-    height: v.height,
+    left: (v.left - origin.left) / worldScale,
+    top: (v.top - origin.top) / worldScale,
+    width: v.width / worldScale,
+    height: v.height / worldScale,
   };
 }
 
 function toCanvas(rect: DOMRect, canvas: Rect): Rect {
+  // Screen differences divided by the zoom: the world layer is CSS-scaled, so a card that
+  // measures 400px wide on screen is 200 plane px at 200% zoom.
   return {
-    left: rect.left - canvas.left,
-    top: rect.top - canvas.top,
-    width: rect.width,
-    height: rect.height,
+    left: (rect.left - canvas.left) / worldScale,
+    top: (rect.top - canvas.top) / worldScale,
+    width: rect.width / worldScale,
+    height: rect.height / worldScale,
   };
 }
 
@@ -235,18 +271,23 @@ export function headerAnchor(id: number, columnIndex: number): HeaderAnchor | nu
   const viewportRect = viewport.getBoundingClientRect();
   const scrollLeft = viewport.scrollLeft;
 
+  // `columnOffsets`/`columnWidths` and `scrollLeft` are all plane px (the table is not
+  // scaled internally), while the rect is screen px — so un-scale the rect and keep the
+  // rest of the computation in one space.
+  const viewportWidth = viewportRect.width / worldScale;
+  const canvasViewportLeft = (viewportRect.left - canvas.left) / worldScale;
+  const canvasViewportRight = canvasViewportLeft + viewportWidth;
+  const canvasViewportTop = (viewportRect.top - canvas.top) / worldScale;
+
   // Where the header sits inside the table viewport, in viewport-local px.
   const localLeft = offset - scrollLeft;
-  const visible = localLeft + width > 0 && localLeft < viewportRect.width;
-
-  const canvasViewportLeft = viewportRect.left - canvas.left;
-  const canvasViewportRight = canvasViewportLeft + viewportRect.width;
+  const visible = localLeft + width > 0 && localLeft < viewportWidth;
 
   if (!visible) {
     const x = localLeft < 0 ? canvasViewportLeft : canvasViewportRight;
     return {
       x,
-      y: viewportRect.top - canvas.top,
+      y: canvasViewportTop,
       width,
       visible: false,
       offLeft: localLeft < 0,
@@ -255,7 +296,7 @@ export function headerAnchor(id: number, columnIndex: number): HeaderAnchor | nu
 
   return {
     x: canvasViewportLeft + localLeft + width / 2,
-    y: viewportRect.top - canvas.top,
+    y: canvasViewportTop,
     width,
     visible: true,
     offLeft: false,

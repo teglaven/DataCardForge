@@ -14,7 +14,13 @@
  */
 import { create } from 'zustand';
 
-import { viewportRectInWorld } from './cardMetrics.ts';
+import {
+  MAX_ZOOM,
+  MIN_ZOOM,
+  canvasSize,
+  getCanvasZoom,
+  viewportRectInWorld,
+} from './cardMetrics.ts';
 import { DependencyGraph } from '../core/DependencyGraph.ts';
 import { MatrixData } from '../core/MatrixData.ts';
 import { DEFAULT_SMOOTHING, type SmoothingOptions } from '../core/Smoothing.ts';
@@ -137,8 +143,8 @@ function placeOnPlane(
  */
 function revealView(
   bounds: { x: number; y: number; width: number; height: number },
-  current: { x: number; y: number },
-): { x: number; y: number } {
+  current: { x: number; y: number; zoom: number },
+): { x: number; y: number; zoom: number } {
   const visible = viewportRectInWorld();
   if (visible.width <= 0 || visible.height <= 0) return current;
 
@@ -156,7 +162,13 @@ function revealView(
     dy = bounds.y + bounds.height + margin - (visible.top + visible.height);
   }
   if (dx === 0 && dy === 0) return current;
-  return { x: Math.max(0, current.x + dx), y: Math.max(0, current.y + dy) };
+  // The plane delta is in plane px; `view` is stored in screen px (the translate runs after
+  // the scale), so it has to be multiplied by the zoom.
+  return {
+    x: Math.max(0, current.x + dx * current.zoom),
+    y: Math.max(0, current.y + dy * current.zoom),
+    zoom: current.zoom,
+  };
 }
 
 export interface Toast {
@@ -190,13 +202,14 @@ interface WorkspaceState {
   nextCardId: number;
   nextMatrixId: number;
   /**
-   * Pan offset of the infinite canvas, in plane px: the world layer is drawn at
-   * `translate(-view.x, -view.y)`. The plane itself is unbounded (it grows with the
-   * cards), so this is the only piece of view state that has to be remembered.
-   * Clamping against the plane/viewport sizes happens in `CardCanvas`, which is the only
-   * place that can measure them.
+   * View of the infinite canvas: pan in **screen** px plus a zoom factor. The world layer
+   * is drawn at `translate(-view.x, -view.y) scale(view.zoom)` — pan is applied *after*
+   * the scale, which is why it stays in screen px while every card coordinate is in plane
+   * px. The plane itself is unbounded (it grows with the cards), so this is the only piece
+   * of view state that has to be remembered; clamping against the plane/viewport sizes
+   * happens in `CardCanvas`, the only place that can measure them.
    */
-  view: { x: number; y: number };
+  view: { x: number; y: number; zoom: number };
 
   // ── card lifecycle ──────────────────────────────────────────────────
   addMatrixCard: (
@@ -210,7 +223,7 @@ interface WorkspaceState {
   select: (id: number | null) => void;
   /** Move the canvas view by a screen-px delta (already clamped by the caller). */
   panBy: (dx: number, dy: number) => void;
-  setView: (view: { x: number; y: number }) => void;
+  setView: (view: { x: number; y: number; zoom: number }) => void;
   /** Frame every card again — the escape hatch after panning off into empty space. */
   resetView: () => void;
 
@@ -696,7 +709,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     locale: detectLocale(),
     nextCardId: 1,
     nextMatrixId: 1,
-    view: { x: 0, y: 0 },
+    view: { x: 0, y: 0, zoom: 1 },
 
     // ── card lifecycle ────────────────────────────────────────────────
 
@@ -1344,7 +1357,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     panBy(dx, dy) {
       const { view } = get();
       // Clamping lives in CardCanvas: only the DOM knows the plane and viewport sizes.
-      set({ view: { x: view.x + dx, y: view.y + dy } });
+      set({ view: { x: view.x + dx, y: view.y + dy, zoom: view.zoom } });
     },
 
     setView(view) {
@@ -1354,10 +1367,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     resetView() {
       const { cards } = get();
       if (cards.length === 0) {
-        set({ view: { x: 0, y: 0 } });
+        set({ view: { x: 0, y: 0, zoom: 1 } });
         return;
       }
-      const visible = viewportRectInWorld();
+      // Nominal visible box, in screen px: `canvasSize()` reports plane units (Tile/Cascade
+      // place cards with it), so multiply the zoom back in.
+      const zoom = getCanvasZoom();
+      const box = canvasSize();
+      const screen = { width: box.width * zoom, height: box.height * zoom };
       let minX = Infinity;
       let minY = Infinity;
       let maxX = -Infinity;
@@ -1368,14 +1385,24 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         maxX = Math.max(maxX, card.x + card.width);
         maxY = Math.max(maxY, card.y + card.height);
       }
-      // Centre on the cards rather than jumping to the origin: on a plane this large the
-      // user's problem is "where did my work go", not "where is (0,0)".
-      const next = {
-        x: Math.max(0, (minX + maxX) / 2 - visible.width / 2),
-        y: Math.max(0, (minY + maxY) / 2 - visible.height / 2),
-      };
-      // CardCanvas clamps against the live plane, which is the only place that can.
-      set({ view: next });
+      // Zoom-to-fit: "where did my work go" deserves an answer that actually shows the
+      // work, so the fit shrinks the view when the cards span more than one screenful —
+      // but never zooms in past 100%, which would look like a bug rather than a feature.
+      const padding = 48;
+      const fit = Math.min(
+        screen.width > 0 ? screen.width / (maxX - minX + padding) : 1,
+        screen.height > 0 ? screen.height / (maxY - minY + padding) : 1,
+        1,
+      );
+      const nextZoom = Math.min(Math.max(fit, MIN_ZOOM), MAX_ZOOM);
+      // Centre on the cards rather than jumping to the origin.
+      set({
+        view: {
+          zoom: nextZoom,
+          x: Math.max(0, ((minX + maxX) / 2) * nextZoom - screen.width / 2),
+          y: Math.max(0, ((minY + maxY) / 2) * nextZoom - screen.height / 2),
+        },
+      });
     },
 
     // ── misc ──────────────────────────────────────────────────────────
@@ -1590,7 +1617,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         toast: null,
         // The plane is empty again, so bring the view back to the origin — otherwise the
         // next workspace would open panned into the void left by the previous one.
-        view: { x: 0, y: 0 },
+        view: { x: 0, y: 0, zoom: 1 },
         nextCardId: 1,
         nextMatrixId: 1,
       });

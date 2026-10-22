@@ -214,8 +214,8 @@ interface ConnectionLayerProps {
   blockedCardId: number | null;
   /** Changes on every refused close so the blink restarts. */
   blockNonce: number;
-  /** Current pan of the card plane; the layer counter-translates by it. */
-  view: { x: number; y: number };
+  /** Current pan/zoom of the card plane; the layer counter-transforms by it. */
+  view: { x: number; y: number; zoom: number };
 }
 
 export function ConnectionLayer({
@@ -247,7 +247,9 @@ export function ConnectionLayer({
   // measured in (see cardMetrics).
   return (
     <svg className="connection-layer" aria-hidden="true">
-      <g transform={`translate(${-view.x}, ${-view.y})`}>
+      {/* Same transform as the world layer: translate *after* scale, so a plane point
+          (px, py) lands at (px*zoom - view.x, py*zoom - view.y) in viewport px. */}
+      <g transform={`translate(${-view.x}, ${-view.y}) scale(${view.zoom})`}>
       <defs>
         <mask id={maskId} maskUnits="userSpaceOnUse">
           {/* Covers the whole unbounded plane, not just the viewport: this group is

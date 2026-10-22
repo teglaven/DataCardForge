@@ -10,7 +10,7 @@ import { useEffect, useRef } from 'react';
 import { Rnd } from 'react-rnd';
 import type { ReactNode } from 'react';
 
-import { MIN_CARD_HEIGHT, MIN_CARD_WIDTH } from '../workspaceStore.ts';
+import { MIN_CARD_HEIGHT, MIN_CARD_WIDTH, useWorkspace } from '../workspaceStore.ts';
 import { registerCard, unregisterCard, invalidateLayout } from '../cardMetrics.ts';
 import type { CardModel } from '../types.ts';
 
@@ -47,6 +47,9 @@ export function CardShell({
   children,
 }: CardShellProps) {
   const rndRef = useRef<Rnd | null>(null);
+  // react-rnd computes drag/resize deltas from *screen* pointer movement, so at any zoom
+  // other than 100% it has to be told the scale or cards would drift away from the cursor.
+  const zoom = useWorkspace((s) => s.view.zoom);
 
   // Publish this card's DOM element so the connection layer can measure anchors on it.
   useEffect(() => {
@@ -70,6 +73,7 @@ export function CardShell({
       position={{ x: card.x, y: card.y }}
       minWidth={MIN_CARD_WIDTH}
       minHeight={MIN_CARD_HEIGHT}
+      scale={zoom}
       bounds="parent"
       dragHandleClassName="card__titlebar"
       cancel=".card__close, .card__control, button, input, select"

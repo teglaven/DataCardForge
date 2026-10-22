@@ -8,7 +8,8 @@
  * Two nested coordinate spaces:
  *
  *   .canvas        the visible viewport — clips, never moves
- *   .canvas__world the card plane — carries `translate(-view.x, -view.y)` and is the
+ *   .canvas__world the card plane — carries `translate(-view.x, -view.y) scale(zoom)`
+ *                  and is the
  *                  origin every anchor measurement is taken against (cardMetrics), so
  *                  panning cancels out of the geometry instead of having to be applied
  *                  twice.
@@ -20,8 +21,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  MAX_ZOOM,
+  MIN_ZOOM,
   invalidateLayout,
   setCanvasElement,
+  setCanvasZoom,
   setWorldElement,
 } from '../cardMetrics.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
@@ -92,17 +96,20 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
 
   const maxPan = useMemo(
     () => ({
-      x: Math.max(0, plane.width - viewportSize.width),
-      y: Math.max(0, plane.height - viewportSize.height),
+      // The plane is measured in plane px; the view is stored in screen px because the
+      // pan is applied *after* the scale. So the plane's rendered extent is `size * zoom`.
+      x: Math.max(0, plane.width * view.zoom - viewportSize.width),
+      y: Math.max(0, plane.height * view.zoom - viewportSize.height),
     }),
-    [plane, viewportSize],
+    [plane, viewportSize, view.zoom],
   );
 
-  /** Keep the view inside the plane; never scroll past its far edge or the origin. */
+  /** Keep the view inside the plane and the zoom inside its limits. */
   const clampView = useCallback(
-    (candidate: { x: number; y: number }) => ({
+    (candidate: { x: number; y: number; zoom: number }) => ({
       x: Math.min(Math.max(0, candidate.x), maxPan.x),
       y: Math.min(Math.max(0, candidate.y), maxPan.y),
+      zoom: Math.min(Math.max(candidate.zoom, MIN_ZOOM), MAX_ZOOM),
     }),
     [maxPan],
   );
@@ -112,17 +119,72 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
     (dx: number, dy: number) => {
       if (dx === 0 && dy === 0) return;
       const current = useWorkspace.getState().view;
-      const next = clampView({ x: current.x + dx, y: current.y + dy });
+      const next = clampView({ x: current.x + dx, y: current.y + dy, zoom: current.zoom });
       if (next.x !== current.x || next.y !== current.y) setView(next);
     },
     [clampView, setView],
+  );
+
+  /**
+   * On-screen pitch of the backdrop dots.
+   *
+   * The grid belongs to the plane, so it scales with the zoom — but the raw 22px pitch
+   * turns into a 2.2px moiré mesh at 10% and into sparse holes at 300%. Doubling/halving
+   * the *plane* step keeps the rendered pitch inside a readable band while the dots still
+   * travel and scale with the cards, which is what makes the plane feel anchored.
+   */
+  const grid = useMemo(() => {
+    let step = GRID_SIZE;
+    while (step * view.zoom < 8) step *= 2;
+    while (step * view.zoom > 44) step /= 2;
+    const pitch = step * view.zoom;
+    return {
+      size: `${pitch}px ${pitch}px`,
+      position: `${-view.x % pitch}px ${-view.y % pitch}px`,
+    };
+  }, [view.x, view.y, view.zoom]);
+
+  /**
+   * Zoom the whole workbench around a point, so whatever is under the cursor stays put.
+   *
+   * The world layer is CSS-transformed, so *everything* inside it scales together — card
+   * faces, ECharts plots (SVG, so still vector and still crisp), table text, toolbars.
+   * Holding the anchor point fixed is what makes wheel zoom feel like a canvas rather than
+   * a slider that drags the work away from the cursor.
+   */
+  const zoomAt = useCallback(
+    (factor: number, clientX: number, clientY: number) => {
+      const element = canvasRef.current;
+      if (!element) return;
+      const current = useWorkspace.getState().view;
+      const nextZoom = Math.min(Math.max(current.zoom * factor, MIN_ZOOM), MAX_ZOOM);
+      if (nextZoom === current.zoom) return;
+
+      const rect = element.getBoundingClientRect();
+      const cursor = { x: clientX - rect.left, y: clientY - rect.top };
+      // Plane point under the cursor: screen = plane*zoom - pan, solved for plane.
+      const anchor = {
+        x: (cursor.x + current.x) / current.zoom,
+        y: (cursor.y + current.y) / current.zoom,
+      };
+      const maxX = Math.max(0, plane.width * nextZoom - viewportSize.width);
+      const maxY = Math.max(0, plane.height * nextZoom - viewportSize.height);
+      setView({
+        zoom: nextZoom,
+        x: Math.min(Math.max(0, anchor.x * nextZoom - cursor.x), maxX),
+        y: Math.min(Math.max(0, anchor.y * nextZoom - cursor.y), maxY),
+      });
+    },
+    [plane, viewportSize, setView],
   );
 
   // Removing the furthest card (or resizing the window) shrinks the plane; without this
   // the stored pan could sit past the new edge and the view would show empty space.
   useEffect(() => {
     const clamped = clampView(view);
-    if (clamped.x !== view.x || clamped.y !== view.y) setView(clamped);
+    if (clamped.x !== view.x || clamped.y !== view.y || clamped.zoom !== view.zoom) {
+      setView(clamped);
+    }
   }, [view, clampView, setView]);
 
   // ── measurement registration ────────────────────────────────────────
@@ -135,6 +197,12 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
       setWorldElement(null);
     };
   }, []);
+
+  // Publish the zoom before anything measures: `getBoundingClientRect` reports scaled
+  // pixels, and every anchor converts back to plane units through this value.
+  useEffect(() => {
+    setCanvasZoom(view.zoom);
+  }, [view.zoom]);
 
   // Keep anchors fresh when the viewport itself changes size.
   useEffect(() => {
@@ -230,16 +298,21 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
     const element = canvasRef.current;
     if (!element) return;
     const onWheel = (event: WheelEvent) => {
-      // Cards own their own wheel behaviour: the virtual table scrolls, the chart's
-      // dataZoom zooms. Only the bare plane pans.
-      if ((event.target as HTMLElement | null)?.closest('.card')) return;
+      const overCard = (event.target as HTMLElement | null)?.closest('.card') !== null;
+      // A wheel over a card belongs to the card — a 10 000-row table must stay scrollable
+      // and the chart's dataZoom must keep working — unless the user holds Ctrl/Cmd. That
+      // modifier is also what a trackpad pinch sends, so pinch-to-zoom keeps working and
+      // gives a way to zoom without moving the pointer off a card.
+      if (overCard && !event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
-      panByClamped(event.deltaX * unit, event.deltaY * unit);
+      // Exponential so each wheel notch is a constant *ratio*: zooming feels the same at
+      // 20% and at 300%, which a linear addend would not.
+      zoomAt(Math.pow(1.0015, -event.deltaY * unit), event.clientX, event.clientY);
     };
     element.addEventListener('wheel', onWheel, { passive: false });
     return () => element.removeEventListener('wheel', onWheel);
-  }, [panByClamped]);
+  }, [zoomAt]);
 
   useEffect(() => {
     const isTextTarget = (target: EventTarget | null) => {
@@ -453,10 +526,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
       // Parallax the dot grid by the pan so the backdrop belongs to the plane rather than
       // to the window. Offsetting the fixed viewport's background keeps this free — the
       // alternative (a plane-sized background layer) would be rasterised at plane size.
-      style={{
-        backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`,
-        backgroundPosition: `${-view.x % GRID_SIZE}px ${-view.y % GRID_SIZE}px`,
-      }}
+      style={{ backgroundSize: grid.size, backgroundPosition: grid.position }}
       onContextMenu={onContextMenu}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -488,7 +558,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
         style={{
           width: plane.width,
           height: plane.height,
-          transform: `translate(${-view.x}px, ${-view.y}px)`,
+          transform: `translate(${-view.x}px, ${-view.y}px) scale(${view.zoom})`,
         }}
       >
         <div className="canvas__cards">{renderedCards}</div>

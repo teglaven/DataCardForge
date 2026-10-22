@@ -190,6 +190,9 @@ body {
   position: absolute;
   left: 0;
   top: 0;
+  /* Mandatory: the default 50% 50% origin would make a scale() drag the plane sideways,
+     and every anchor measurement (which is a difference against this element) with it. */
+  transform-origin: 0 0;
   pointer-events: none;
   /* Above the connection layer (z-index 1) so lines always pass behind the cards. */
   z-index: 2;
