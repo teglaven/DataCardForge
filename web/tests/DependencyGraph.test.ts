@@ -147,4 +147,45 @@ describe('DependencyGraph', () => {
     expect(graph.findPath(3, 1)).toBeNull();
     expect(graph.findPath(1, 99)).toBeNull();
   });
+
+  // ── removeDependency (card-level connection lines) ──────────────────
+
+  it('removes an existing edge and every query agrees afterwards', () => {
+    const graph = new DependencyGraph();
+    graph.addDependency(10, 1); // chart 10 depends on matrix 1
+    graph.addDependency(11, 1);
+
+    graph.removeDependency(10, 1);
+
+    expect(graph.edgeCount()).toBe(1);
+    expect(graph.hasDependents(1)).toBe(true);
+    expect(graph.getDependents(1)).toEqual([11]);
+    expect(graph.edges()).toEqual([{ dependsOn: 1, dependent: 11 }]);
+  });
+
+  it('is a no-op for an edge that does not exist', () => {
+    const graph = new DependencyGraph();
+    graph.addDependency(10, 1);
+    const before = graph.edges();
+
+    expect(() => graph.removeDependency(99, 1)).not.toThrow();
+    expect(() => graph.removeDependency(10, 99)).not.toThrow();
+    expect(graph.edgeCount()).toBe(1);
+    expect(graph.edges()).toEqual(before);
+  });
+
+  it('drops the map key when the last dependent is removed, leaving other edges alone', () => {
+    const graph = new DependencyGraph();
+    graph.addDependency(10, 1);
+    graph.addDependency(11, 2);
+    graph.addDependency(12, 1);
+
+    graph.removeDependency(12, 1);
+    expect(graph.hasDependents(1)).toBe(true); // 10 still depends on 1
+
+    graph.removeDependency(10, 1);
+    expect(graph.hasDependents(1)).toBe(false); // the key itself is dropped
+    expect(graph.edgeCount()).toBe(1);
+    expect(graph.edges()).toEqual([{ dependsOn: 2, dependent: 11 }]);
+  });
 });

@@ -550,6 +550,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
         blockedCardId={blockedCardId}
         blockNonce={blockNonce}
         view={view}
+        dependencies={dependencies}
       />
 
       <div

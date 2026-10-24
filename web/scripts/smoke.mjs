@@ -8,8 +8,9 @@
  *   3. the virtualized table renders only a window of rows
  *   4. right-clicking a column header offers "draw line chart"
  *   5. the chart card renders an SVG (the vector-export capability)
- *   6. a connection line appears between the table column and the chart and follows
- *      the active card (red = source table, blue = target chart)
+ *   6. one card-level connection line appears between the table and the chart, colours
+ *      the active card (red = source table, blue = target chart), ignores table scrolling,
+ *      and the chart's left column dock adds/removes plotted columns
  *   7. closing a depended-on table is refused, then allowed after the chart closes
  *   8. a multi-file card exposes a selector and switching updates dependents
  *   9. the UI switches language at runtime
@@ -175,11 +176,13 @@ try {
   const chartBadge = await page.locator('.card--chart .card__badge').first().innerText();
   check('chart reports its point count', /10000/.test(chartBadge), chartBadge);
 
-  // ── 6. connection line + active-card colouring ──────────────────────
+  // ── 6. card-level connection line + active-card colouring ─────────
   await page.waitForSelector('.connection-layer .connection', { timeout: 10_000 });
+  const lineCount = await page.locator('.connection-layer .connection').count();
   check(
-    'a connection line links the table column to the chart',
-    (await page.locator('.connection-layer .connection').count()) >= 1,
+    'one card-level line links the table card to the chart card',
+    lineCount === 1,
+    `${lineCount} lines`,
   );
 
   const blueStroke = await page
@@ -197,10 +200,9 @@ try {
     .getAttribute('stroke');
   check('active table highlights the line in red', redStroke === 'rgb(200, 50, 50)', String(redStroke));
 
-  // ── 6b. scrolling a table must move its connection anchors (fix A) ───
-  // The line is anchored to a *column header* inside a scrollable viewport. Reading the
-  // anchor happens against live DOM, so scrolling has to bump the layout version or the
-  // path keeps pointing at where the header used to be.
+  // ── 6b. the line is card-level: table scrolling must NOT move it ──
+  // The line anchors at the card's top centre. It used to be glued to a column header,
+  // so scrolling the table moved it — that coupling is exactly what this guards against.
   const lineStartBefore = await page
     .locator('.connection-layer .connection--fg path')
     .first()
@@ -217,14 +219,14 @@ try {
     .first()
     .getAttribute('d');
   check(
-    'horizontal table scroll moves the connection anchor',
+    'horizontal table scroll leaves the card-level line untouched',
     typeof lineStartBefore === 'string' &&
       typeof lineStartAfter === 'string' &&
-      lineStartBefore !== lineStartAfter,
-    `path changed: ${lineStartBefore !== lineStartAfter}`,
+      lineStartBefore === lineStartAfter,
+    `path unchanged: ${lineStartBefore === lineStartAfter}`,
   );
 
-  // Scrolling a column fully out of view must snap the line to an edge, not lose it.
+  // A column scrolled fully out of view must not change anything either.
   await page
     .locator('.vtable__viewport')
     .first()
@@ -236,10 +238,11 @@ try {
     .locator('.connection-layer .connection--fg path')
     .first()
     .getAttribute('d');
+  const scrolledLineCount = await page.locator('.connection-layer .connection').count();
   check(
-    'off-screen column keeps its line pinned instead of dropping it',
-    typeof snappedPath === 'string' && snappedPath.length > 0,
-    `${String(snappedPath).slice(0, 28)}…`,
+    'off-screen columns keep exactly one card-level line',
+    snappedPath === lineStartBefore && scrolledLineCount === 1,
+    `unchanged: ${snappedPath === lineStartBefore}, ${scrolledLineCount} lines`,
   );
 
   await page
@@ -249,6 +252,32 @@ try {
       el.scrollLeft = 0;
     });
   await page.waitForTimeout(200);
+
+  // ── 6c. the collapsible column dock picks columns to plot ─────────────
+  const chipsBefore = await page.locator('.chart-card__chip').count();
+  await page.locator('.chart-card__dock-toggle').click();
+  await page.waitForSelector('.chart-card__dock--open', { timeout: 5_000 });
+  check('column dock opens from the chart card rail', true);
+
+  await page.locator('.chart-card__dock-item input[type="checkbox"]').nth(1).check();
+  await page.waitForTimeout(300);
+  const chipsAfterCheck = await page.locator('.chart-card__chip').count();
+  check(
+    'checking a dock column adds it to the chart',
+    chipsAfterCheck === chipsBefore + 1,
+    `${chipsBefore} -> ${chipsAfterCheck} chips`,
+  );
+  const dockLineCount = await page.locator('.connection-layer .connection').count();
+  check('a second column of the same table adds no extra line', dockLineCount === 1, `${dockLineCount} lines`);
+
+  await page.locator('.chart-card__dock-item input[type="checkbox"]').nth(1).uncheck();
+  await page.waitForTimeout(300);
+  const chipsAfterUncheck = await page.locator('.chart-card__chip').count();
+  check(
+    'unchecking the dock column removes it again',
+    chipsAfterUncheck === chipsBefore,
+    `${chipsAfterUncheck} chips`,
+  );
 
   // Deselecting both must drop the line back to the grey background layer.
   await page.locator('.menubar__brand').click();

@@ -48,6 +48,21 @@ export class DependencyGraph {
     return null;
   }
 
+  /**
+   * Unregister "`dependentId` depends on `dependsOnId`" — the inverse of
+   * `addDependency`.
+   *
+   * A no-op when the edge does not exist: nothing is mutated and nothing thrown. When
+   * the last dependent of `dependsOnId` goes, the map key itself is dropped, so
+   * `hasDependents` reports `false` again for a node nobody reads.
+   */
+  removeDependency(dependentId: number, dependsOnId: number): void {
+    const deps = this.m_dependents.get(dependsOnId);
+    if (!deps) return;
+    deps.delete(dependentId);
+    if (deps.size === 0) this.m_dependents.delete(dependsOnId);
+  }
+
   removeAllDependencies(cardId: number): void {
     // cardId as the depended-on target
     this.m_dependents.delete(cardId);

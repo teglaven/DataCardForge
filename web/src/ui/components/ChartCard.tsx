@@ -31,6 +31,7 @@ import {
 import { buildOption, ZOOM_COMPONENT_IDS, type BuildContext } from '../../charts/chartOptions.ts';
 import { exportChart, type ExportType } from '../../charts/export.ts';
 import { CardShell } from './CardShell.tsx';
+import { ColumnDock } from './ColumnDock.tsx';
 import { Popup } from './Popup.tsx';
 
 interface ChartCardProps {
@@ -72,7 +73,7 @@ export function ChartCard({
   const setSmoothing = useWorkspace((s) => s.setSmoothing);
   const setChartType = useWorkspace((s) => s.setChartType);
   const setChartConfig = useWorkspace((s) => s.setChartConfig);
-  const addChartSource = useWorkspace((s) => s.addChartSource);
+  const setChartColumnPanel = useWorkspace((s) => s.setChartColumnPanel);
   const removeChartSource = useWorkspace((s) => s.removeChartSource);
   const matrices = useWorkspace((s) => s.matrices);
   const cards = useWorkspace((s) => s.cards);
@@ -327,6 +328,12 @@ export function ChartCard({
       onBounds={(bounds) => setBounds(card.id, bounds)}
     >
       <div className="chart-card">
+        <ColumnDock
+          card={card}
+          open={Boolean(card.columnPanelOpen)}
+          onToggle={(open) => setChartColumnPanel(card.id, open)}
+        />
+        <div className="chart-card__main">
         {/* Toolbar: chart type, options, export. */}
         <div className="chart-card__toolbar">
           <div className="chart-card__tp">
@@ -650,7 +657,7 @@ export function ChartCard({
                 {/* A span is required for the ellipsis: `text-overflow` has no effect on
                     an anonymous flex item, so a long label would be cut mid-glyph. */}
                 <span className="chart-card__chip-label">{source.label}</span>
-                {card.config.sources.length > minimumColumns(card.config.type) ? (
+                {card.config.sources.length > Math.max(1, minimumColumns(card.config.type)) ? (
                   <button
                     type="button"
                     className="chart-card__chip-x card__control"
@@ -662,37 +669,6 @@ export function ChartCard({
                 ) : null}
               </span>
             ))}
-            <select
-              className="chart-card__add card__control"
-              aria-label={t('chart.addColumn')}
-              title={t('chart.addColumn')}
-              value=""
-              onChange={(event) => {
-                const value = event.target.value;
-                if (!value) return;
-                const [matrixId, columnIndex] = value.split(':').map(Number);
-                addChartSource(card.id, matrixId, columnIndex);
-              }}
-            >
-              <option value="">+ {t('chart.addColumn')}</option>
-              {availableColumns
-                .filter(
-                  (column) =>
-                    !card.config.sources.some(
-                      (source) =>
-                        source.matrixId === column.matrixId &&
-                        source.columnIndex === column.columnIndex,
-                    ),
-                )
-                .map((column) => (
-                  <option
-                    key={`${column.matrixId}:${column.columnIndex}`}
-                    value={`${column.matrixId}:${column.columnIndex}`}
-                  >
-                    {column.label} · {column.file}
-                  </option>
-                ))}
-            </select>
           </div>
 
           <div className="chart-card__controls">
@@ -771,6 +747,7 @@ export function ChartCard({
               </label>
             ) : null}
           </div>
+        </div>
         </div>
       </div>
     </CardShell>

@@ -330,6 +330,178 @@ describe('snapshot round-trip', () => {
     expect(text).not.toContain('Infinity');
     expect(JSON.parse(text).version).toBe(1);
   });
+
+  it('round-trips the column dock state and the chart→matrix edge', () => {
+    const matrixCardId = store().addMatrixCard([
+      { name: '1.txt', matrix: matrix([[1, 2, 3], [4, 5, 6]]) },
+    ]);
+    const chartId = store().addChartCard(matrixCardId, 0)!;
+    const matrixId = (store().cards.find((c) => c.id === matrixCardId) as MatrixCardModel).sources[0].matrixId;
+    store().addChartSource(chartId, matrixId, 1); // second column of the same owner
+    store().setChartColumnPanel(chartId, true);
+
+    const snapshot = store().toSnapshot();
+    store().reset();
+    expect(store().cards).toHaveLength(0);
+
+    store().loadSnapshot(snapshot);
+
+    const chart = store().cards.find((c) => c.id === chartId) as ChartCardModel;
+    expect(chart.columnPanelOpen).toBe(true);
+    expect(chart.config.sources).toHaveLength(2);
+    // The card-level edge is rebuilt from the restored sources.
+    expect(store().dependencies.getDependents(matrixCardId)).toEqual([chartId]);
+    expect(store().dependencies.edgeCount()).toBe(1);
+
+    // A snapshot written before the dock existed (no columnPanelOpen field) still loads,
+    // with the flag normalised to false.
+    const stripped = store().toSnapshot();
+    for (const card of stripped.cards) {
+      if (isChartCard(card)) delete (card as ChartCardModel).columnPanelOpen;
+    }
+    store().reset();
+    store().loadSnapshot(stripped);
+    expect((store().cards.find((c) => c.id === chartId) as ChartCardModel).columnPanelOpen).toBe(false);
+    expect(store().dependencies.getDependents(matrixCardId)).toEqual([chartId]);
+  });
+});
+
+// ── card-level connection lines: the store owns the chart→matrix-card edges ──
+describe('addChartSource', () => {
+  it('attaches a column and registers the chart→matrix-card edge', () => {
+    const matrixCardId = store().addMatrixCard([
+      { name: '1.txt', matrix: matrix([[1, 2, 3], [4, 5, 6]]) },
+    ]);
+    const chartId = store().addChartCard(matrixCardId, 0)!;
+    const matrixId = (store().cards.find((c) => c.id === matrixCardId) as MatrixCardModel).sources[0].matrixId;
+
+    store().addChartSource(chartId, matrixId, 2);
+
+    const chart = store().cards.find((c) => c.id === chartId) as ChartCardModel;
+    expect(chart.config.sources).toHaveLength(2);
+    expect(chart.config.sources[1].raw).toEqual([3, 6]);
+    // One card-level edge: the owning matrix card is the dependents' target.
+    expect(store().dependencies.hasDependents(matrixCardId)).toBe(true);
+    expect(store().dependencies.getDependents(matrixCardId)).toEqual([chartId]);
+    expect(store().dependencies.edgeCount()).toBe(1);
+  });
+
+  it('adds no duplicate source and no duplicate edge for the same column', () => {
+    const matrixCardId = store().addMatrixCard([
+      { name: '1.txt', matrix: matrix([[1, 2, 3], [4, 5, 6]]) },
+    ]);
+    const chartId = store().addChartCard(matrixCardId, 0)!;
+    const matrixId = (store().cards.find((c) => c.id === matrixCardId) as MatrixCardModel).sources[0].matrixId;
+
+    store().addChartSource(chartId, matrixId, 1);
+    store().addChartSource(chartId, matrixId, 1); // attaching twice is a no-op
+
+    const chart = store().cards.find((c) => c.id === chartId) as ChartCardModel;
+    expect(chart.config.sources).toHaveLength(2);
+    expect(store().dependencies.edgeCount()).toBe(1);
+    expect(store().dependencies.getDependents(matrixCardId)).toEqual([chartId]);
+  });
+
+  it('refuses a source whose matrix is unknown, adding neither source nor edge', () => {
+    const matrixCardId = store().addMatrixCard([
+      { name: '1.txt', matrix: matrix([[1, 2]]) },
+    ]);
+    const chartId = store().addChartCard(matrixCardId, 0)!;
+
+    store().addChartSource(chartId, 999999, 0);
+
+    const chart = store().cards.find((c) => c.id === chartId) as ChartCardModel;
+    expect(chart.config.sources).toHaveLength(1);
+    expect(store().dependencies.edgeCount()).toBe(1); // only the addChartCard edge
+    expect(store().dependencies.getDependents(matrixCardId)).toEqual([chartId]);
+  });
+});
+
+describe('removeChartSource', () => {
+  it("drops the edge when the owner's last attached source is removed", () => {
+    const ownerA = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1, 2]]) },
+    ]);
+    const ownerB = store().addMatrixCard([
+      { name: 'b.txt', matrix: matrix([[7]]) },
+    ]);
+    const chartId = store().addChartCard(ownerA, 0)!;
+    const matrixA = (store().cards.find((c) => c.id === ownerA) as MatrixCardModel).sources[0].matrixId;
+    const matrixB = (store().cards.find((c) => c.id === ownerB) as MatrixCardModel).sources[0].matrixId;
+    // A second source from another owner keeps the chart above its one-column floor,
+    // so removing the last A source is allowed.
+    store().addChartSource(chartId, matrixB, 0);
+
+    expect(store().dependencies.getDependents(ownerA)).toEqual([chartId]);
+    expect(store().dependencies.hasDependents(ownerB)).toBe(true);
+
+    store().removeChartSource(chartId, matrixA, 0);
+
+    const chart = store().cards.find((c) => c.id === chartId) as ChartCardModel;
+    expect(chart.config.sources.map((s) => s.matrixId)).toEqual([matrixB]);
+    expect(chart.config.xAxisSource).toBeNull();
+    expect(store().dependencies.hasDependents(ownerA)).toBe(false);
+    expect(store().dependencies.getDependents(ownerB)).toEqual([chartId]);
+    expect(store().dependencies.edgeCount()).toBe(1);
+  });
+
+  it('keeps the edge while a source or the X axis still reads the owner, drops it otherwise', () => {
+    const ownerA = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1, 2, 3], [4, 5, 6]]) },
+    ]);
+    const ownerB = store().addMatrixCard([
+      { name: 'b.txt', matrix: matrix([[7]]) },
+    ]);
+    const chartId = store().addChartCard(ownerA, 0)!;
+    const matrixA = (store().cards.find((c) => c.id === ownerA) as MatrixCardModel).sources[0].matrixId;
+    const matrixB = (store().cards.find((c) => c.id === ownerB) as MatrixCardModel).sources[0].matrixId;
+    store().addChartSource(chartId, matrixA, 1); // two sources of the same matrix
+    store().addChartSource(chartId, matrixB, 0); // keeps the floor satisfied after the last A removal
+    const columnA1 = store().matrices.get(matrixA)!.column(1);
+    store().setChartConfig(chartId, {
+      xAxisSource: {
+        matrixId: matrixA,
+        columnIndex: 1,
+        label: columnA1.posName,
+        raw: columnA1.data.slice(),
+      },
+    });
+
+    // Remove the first source: the second one still reads the owner → edge stays.
+    store().removeChartSource(chartId, matrixA, 0);
+    expect(store().dependencies.hasDependents(ownerA)).toBe(true);
+
+    // Remove the second source: the X axis pointed at it and is invalidated with it, so
+    // nothing of the owner's matrices is left → edge gone.
+    store().removeChartSource(chartId, matrixA, 1);
+    const chart = store().cards.find((c) => c.id === chartId) as ChartCardModel;
+    expect(chart.config.sources.map((s) => s.matrixId)).toEqual([matrixB]);
+    expect(chart.config.xAxisSource).toBeNull();
+    expect(store().dependencies.hasDependents(ownerA)).toBe(false);
+    expect(store().dependencies.edgeCount()).toBe(1); // only the B edge remains
+  });
+});
+
+describe('setChartColumnPanel', () => {
+  it('defaults to false on creation and flips on the matching chart card only', () => {
+    const matrixCardId = store().addMatrixCard([
+      { name: '1.txt', matrix: matrix([[1, 2]]) },
+    ]);
+    const chartId = store().addChartCard(matrixCardId, 0)!;
+    expect((store().cards.find((c) => c.id === chartId) as ChartCardModel).columnPanelOpen).toBe(false);
+
+    store().setChartColumnPanel(chartId, true);
+    expect((store().cards.find((c) => c.id === chartId) as ChartCardModel).columnPanelOpen).toBe(true);
+
+    store().setChartColumnPanel(chartId, false);
+    expect((store().cards.find((c) => c.id === chartId) as ChartCardModel).columnPanelOpen).toBe(false);
+
+    // A matrix card never gains a dock state, and an unknown id is a no-op.
+    store().setChartColumnPanel(matrixCardId, true);
+    store().setChartColumnPanel(999, true);
+    expect(store().cards).toHaveLength(2);
+    expect((store().cards.find((c) => c.id === matrixCardId) as MatrixCardModel).kind).toBe('matrix');
+  });
 });
 
 describe('map card keep-alive', () => {

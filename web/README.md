@@ -17,11 +17,11 @@ npm install
 npm run dev        # 开发服务器（默认 http://localhost:5173）
 npm run build      # 类型检查 + 生产构建 → dist/
 npm run preview    # 预览生产构建
-npm test           # 171 个单元测试（vitest）
+npm test           # 303 个单元测试（vitest）
 npm run typecheck  # 仅类型检查
 ```
 
-端到端冒烟测试（61 项检查，需要先起 `npm run preview`）：
+端到端冒烟测试（65 项检查，需要先起 `npm run preview`）：
 
 ```bash
 node scripts/smoke.mjs http://127.0.0.1:4173
@@ -98,11 +98,11 @@ PDF 绘图算子，工作量大且保真度风险高。本项目**手写了一�
 |------|------|
 | 卡片工作台 | 卡片可拖拽、缩放、层叠；右键空白 → 打开数据文件；支持把文件直接拖入画布 |
 | 多文件卡片 | 一个卡片装多个文件，顶部下拉切换；**切换文件会联动所有依赖它的图表** |
-| 多列图表 | 图表可挂多列（点「+ 添加列」），配合「图型」下拉切换；散点/回归按 (X,Y) 配对 |
+| 多列图表 | 图表左侧有可折叠的「列」面板，勾选要绘制的列；配合「图型」下拉切换；散点/回归按 (X,Y) 配对 |
 | 大表虚拟滚动 | 只渲染可见行（实测 10 000 行 → 23 个行节点） |
 | 右键列头出图 | 列头右键直接选图型（列数不够的图型会置灰） |
 | 平滑 | 滑动平均 / 指数 / 中值 / Savitzky–Golay（移植时与已删除的 C++ `Smoothing.cpp` 逐行对照，现由 18 个测试锁定） |
-| 连接线 | 贝塞尔曲线；源卡片激活=红、目标激活=蓝、都未激活=灰（背景层）；拖拽/缩放/**表格滚动**均实时跟随 |
+| 连接线 | 贝塞尔曲线，按**卡片**画线（一张图依赖一张表 = 一条线，与列和表格滚动无关）；源卡片激活=红、目标激活=蓝、都未激活=灰（背景层）；拖拽/缩放实时跟随 |
 | 解析离开主线程 | 文件解析在 Web Worker 中进行，无 Worker 环境自动回退内联执行 |
 | 内容寻址缓存 | 按 `size`+`lastModified` 复用解析结果；同名不同内容的文件不会被当成同一个 |
 | 依赖保护 | 有图表依赖的表格拒绝关闭，连线闪烁提示 |
@@ -164,13 +164,13 @@ src/
 ├── ui/
 │   ├── App.tsx              #   根组件：菜单动作、文件摄取、导入导出
 │   ├── workspaceStore.ts    #   卡片状态 + 依赖图 + 关闭规则
-│   ├── cardMetrics.ts       #   DOM 测量 → 连接线锚点坐标
-│   ├── ConnectionLayer.tsx  #   SVG 连线层（= ConnectionOverlay）
+│   ├── cardMetrics.ts       #   卡片矩形测量（连线端点 = 卡片顶部中心）
+│   ├── ConnectionLayer.tsx  #   SVG 卡片级连线层（一条依赖边一条线）
 │   ├── i18n.ts              #   中英词典
 │   ├── fileActions.ts       #   文件选择 / 下载 / 工作区读写
-│   └── components/          #   CardCanvas / CardShell / MatrixCard / ChartCard …
-scripts/smoke.mjs            # headless Chromium 端到端冒烟（61 项检查）
-tests/                       # vitest：171 个用例（*.dom.test.tsx 走 jsdom）
+│   └── components/          #   CardCanvas / CardShell / MatrixCard / ChartCard / ColumnDock …
+scripts/smoke.mjs            # headless Chromium 端到端冒烟（65 项检查）
+tests/                       # vitest：303 个用例（*.dom.test.tsx 走 jsdom）
 docs/screenshots/            # 文档配图
 ```
 

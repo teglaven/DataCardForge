@@ -5,6 +5,12 @@
  * background visualization of data dependencies, they never intercept pointer
  * events, and they never take part in card layout.
  *
+ * Lines anchor to the **top-centre of each card** (card-level, not column-level),
+ * and the source of truth for which cards are connected is the store's
+ * DependencyGraph: exactly one line per dependency edge whose dependent side is
+ * a chart card. Attaching a second column of the *same* matrix card to a chart
+ * therefore draws no extra line, and table scroll position no longer moves anything.
+ *
  * Layering reproduces the Qt two-overlay scheme with a single SVG using two groups:
  *   - `bg` group: thin grey lines for unselected cards, painted under the highlight
  *   - `fg` group: thick red/blue lines for the active card, painted on top
@@ -16,14 +22,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
-  headerAnchor,
   cardTopAnchor,
   cardRect,
   subscribeLayout,
   getLayoutVersion,
   type Rect,
 } from './cardMetrics.ts';
-import { isChartCard, isMatrixCard, type CardModel } from './types.ts';
+import type { DependencyGraph } from '../core/DependencyGraph.ts';
+import { isChartCard, type CardModel } from './types.ts';
 
 // The grey was rgb(160,160,160), which measures 2.27:1 against the canvas and 2.61:1
 // against a card surface — below the 3:1 non-text threshold — so an idle connection was
@@ -44,16 +50,23 @@ export interface Connection {
   chartCardId: number;
   color: string;
   highlighted: boolean;
-  sourceVisible: boolean;
-  sourceColumnWidth: number;
 }
 
 /**
  * Recompute every connection endpoint whenever the layout could have changed.
  * Subscribes to the layout version counter (bumped by drag/resize/scroll) plus
  * window resize, and coalesces redraws into one animation frame.
+ *
+ * The store's DependencyGraph is the source of truth: one line per dependency
+ * edge whose dependent side is a chart card, anchored at the top-centre of each
+ * card. The graph already dedupes, so a chart reading several columns of the
+ * same matrix card still draws exactly one line.
  */
-export function useConnectionGeometry(cards: CardModel[], selectedId: number | null): Connection[] {
+export function useConnectionGeometry(
+  cards: CardModel[],
+  selectedId: number | null,
+  dependencies: DependencyGraph,
+): Connection[] {
   const version = useSyncLayoutVersion();
   const [tick, setTick] = useState(0);
 
@@ -72,50 +85,39 @@ export function useConnectionGeometry(cards: CardModel[], selectedId: number | n
   return useMemo(() => {
     const out: Connection[] = [];
 
-    for (const card of cards) {
-      if (!isChartCard(card)) continue;
-      const target = cardTopAnchor(card.id);
-      if (!target) continue;
+    for (const edge of dependencies.edges()) {
+      const sourceCard = cards.find((c) => c.id === edge.dependsOn);
+      const targetCard = cards.find((c) => c.id === edge.dependent);
+      // Only edges whose dependent side is a chart card draw a line.
+      if (!sourceCard || !targetCard || !isChartCard(targetCard)) continue;
 
-      for (const source of card.config.sources) {
-        // Find the matrix card that owns this matrix id and is still open.
-        const matrixCard = cards.find(
-          (c) => isMatrixCard(c) && c.sources.some((s) => s.matrixId === source.matrixId),
-        );
-        if (!matrixCard) continue;
+      const from = cardTopAnchor(edge.dependsOn);
+      const to = cardTopAnchor(edge.dependent);
+      if (!from || !to) continue;
 
-        const anchor = headerAnchor(matrixCard.id, source.columnIndex);
-        if (!anchor) continue;
-
-        const sourceActive = selectedId === matrixCard.id;
-        const targetActive = selectedId === card.id;
-
-        let color = COLOR_GREY;
-        let highlighted = false;
-        if (sourceActive) {
-          color = COLOR_RED;
-          highlighted = true;
-        } else if (targetActive) {
-          color = COLOR_BLUE;
-          highlighted = true;
-        }
-
-        out.push({
-          key: `${source.matrixId}:${source.columnIndex}->${card.id}`,
-          from: { x: anchor.x, y: anchor.y },
-          to: target,
-          matrixCardId: matrixCard.id,
-          chartCardId: card.id,
-          color,
-          highlighted,
-          sourceVisible: anchor.visible,
-          sourceColumnWidth: anchor.width,
-        });
+      let color = COLOR_GREY;
+      let highlighted = false;
+      if (selectedId === edge.dependsOn) {
+        color = COLOR_RED;
+        highlighted = true;
+      } else if (selectedId === edge.dependent) {
+        color = COLOR_BLUE;
+        highlighted = true;
       }
+
+      out.push({
+        key: `${edge.dependsOn}->${edge.dependent}`,
+        from,
+        to,
+        matrixCardId: edge.dependsOn,
+        chartCardId: edge.dependent,
+        color,
+        highlighted,
+      });
     }
 
     return out;
-  }, [cards, selectedId, tick]);
+  }, [cards, selectedId, dependencies, tick]);
 }
 
 /**
@@ -216,6 +218,8 @@ interface ConnectionLayerProps {
   blockNonce: number;
   /** Current pan/zoom of the card plane; the layer counter-transforms by it. */
   view: { x: number; y: number; zoom: number };
+  /** The store's dependency graph — the source of truth for which cards are connected. */
+  dependencies: DependencyGraph;
 }
 
 export function ConnectionLayer({
@@ -224,8 +228,9 @@ export function ConnectionLayer({
   blockedCardId,
   blockNonce,
   view,
+  dependencies,
 }: ConnectionLayerProps) {
-  const connections = useConnectionGeometry(cards, selectedId);
+  const connections = useConnectionGeometry(cards, selectedId, dependencies);
   const rects = useCardRects(cards);
   const hidden = useBlockedBlink(blockedCardId, blockNonce);
 

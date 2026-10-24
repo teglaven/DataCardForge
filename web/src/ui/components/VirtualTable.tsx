@@ -8,27 +8,19 @@
  *     file usable in a browser (the Qt build simply used QTableView's own viewport),
  *   - cells display `—` for missing values and use `%.6g`-equivalent formatting.
  *
- * The component reports its viewport element and per-column offsets so the connection
- * layer can anchor a line to a column header without touching the DOM itself.
+ * Connection lines are card-level (see ConnectionLayer), so the table no longer reports
+ * column-header geometry; the header highlight only marks columns that feed a chart.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { MatrixData } from '../../core/MatrixData.ts';
 import { formatCell, isNumeric, parseNumeric } from '../../core/numeric.ts';
-import { invalidateLayout } from '../cardMetrics.ts';
 
 const ROW_HEIGHT = 22;
 const HEADER_HEIGHT = 26;
 const ROW_HEADER_WIDTH = 64;
 const COLUMN_WIDTH = 118;
 const OVERSCAN = 8;
-
-export interface TableMetrics {
-  tableViewport: HTMLDivElement | null;
-  columnOffsets: number[];
-  columnWidths: number[];
-  headerHeight: number;
-}
 
 export interface VirtualTableProps {
   matrix: MatrixData;
@@ -42,7 +34,6 @@ export interface VirtualTableProps {
   highlightColumn?: number | null;
   /** Columns of this table that feed the currently selected chart. */
   sourceColumns?: readonly number[];
-  onMetrics?: (metrics: TableMetrics) => void;
   /** Change a cell value in editable mode. */
   onCellChange?: (row: number, col: number, value: number) => void;
   /** Called with the raw text when an edit cannot be read as a number. */
@@ -57,7 +48,6 @@ export function VirtualTable({
   onHeaderClick,
   highlightColumn = null,
   sourceColumns = [],
-  onMetrics,
   onCellChange,
   onInvalidEdit,
 }: VirtualTableProps) {
@@ -89,16 +79,6 @@ export function VirtualTable({
     setColumnWidths(measuredWidths);
   }, [measuredWidths]);
 
-  const offsets = useMemo(() => {
-    const out: number[] = [];
-    let acc = 0;
-    for (let c = 0; c < columnWidths.length; ++c) {
-      out.push(acc);
-      acc += columnWidths[c];
-    }
-    return out;
-  }, [columnWidths]);
-
   const totalWidth = useMemo(
     () => columnWidths.reduce((sum, w) => sum + w, 0),
     [columnWidths],
@@ -116,29 +96,11 @@ export function VirtualTable({
     return () => observer.disconnect();
   }, []);
 
-  // Publish measurements upward so connection anchors stay in sync.
-  useEffect(() => {
-    if (!onMetrics) return;
-    onMetrics({
-      tableViewport: viewportRef.current,
-      columnOffsets: offsets,
-      columnWidths,
-      headerHeight: HEADER_HEIGHT,
-    });
-  }, [onMetrics, offsets, columnWidths]);
-
   const handleScroll = useCallback(() => {
     const el = viewportRef.current;
     if (!el) return;
     setScrollLeft(el.scrollLeft);
     setScrollTop(el.scrollTop);
-    // The connection layer reads `viewport.scrollLeft` live (see cardMetrics.headerAnchor),
-    // so a scrolled column moves its anchor — and may cross into or out of the viewport,
-    // which is exactly when the line must snap to an edge. Nothing else bumps the layout
-    // version on scroll: setTableMetrics only runs when offsets/widths change, and rows are
-    // absolutely positioned so no resize fires. Without this the line drifts off its header
-    // and stays stale until the next drag or resize.
-    invalidateLayout();
   }, []);
 
   const firstRow = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);

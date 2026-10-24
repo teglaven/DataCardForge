@@ -8,10 +8,10 @@
  *   - right-clicking a column header offers "draw line chart for this column",
  *   - switching files notifies the workspace so dependent charts refresh.
  *
- * It also publishes its table geometry (`cardMetrics`) so connection lines can
- * anchor to column headers.
+ * Columns that feed a chart are marked on their headers; the connection lines
+ * themselves are card-level (see ConnectionLayer).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
 import { MatrixData } from '../../core/MatrixData.ts';
 import {
@@ -20,12 +20,11 @@ import {
   minimumColumns,
   type ChartTypeId,
 } from '../../charts/chartTypes.ts';
-import { setTableMetrics, invalidateLayout } from '../cardMetrics.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
 import type { MatrixCardModel } from '../types.ts';
 import { CardShell } from './CardShell.tsx';
 import { Popup } from './Popup.tsx';
-import { VirtualTable, type TableMetrics } from './VirtualTable.tsx';
+import { VirtualTable } from './VirtualTable.tsx';
 
 interface MatrixCardProps {
   card: MatrixCardModel;
@@ -62,35 +61,6 @@ export function MatrixCard({
 
   const [menu, setMenu] = useState<{ x: number; y: number; column: number } | null>(null);
   const [highlightColumn, setHighlightColumn] = useState<number | null>(null);
-
-  // VirtualTable reports its geometry; keep the latest in a ref so the callback
-  // identity can stay stable (an unstable callback would loop with its effect).
-  const metricsRef = useRef<TableMetrics | null>(null);
-
-  const handleMetrics = useCallback(
-    (metrics: TableMetrics) => {
-      metricsRef.current = metrics;
-      setTableMetrics(card.id, metrics);
-    },
-    [card.id],
-  );
-
-  // Re-publish while the card is resized so anchors follow the header row.
-  useEffect(() => {
-    const observer = new ResizeObserver(() => {
-      invalidateLayout();
-    });
-    const node = metricsRef.current?.tableViewport;
-    if (node) observer.observe(node);
-    return () => observer.disconnect();
-  }, [matrix]);
-
-  // Clear published metrics when this card goes away.
-  useEffect(() => {
-    return () => {
-      metricsRef.current = null;
-    };
-  }, []);
 
   const rows = matrix?.rowCount() ?? 0;
   const cols = matrix?.columnCount() ?? 0;
@@ -187,7 +157,6 @@ export function MatrixCard({
             rowLabel={(n) => t('table.rowHeader', { n })}
             highlightColumn={highlightColumn}
             sourceColumns={sourceColumns}
-            onMetrics={handleMetrics}
             onCellChange={(row, col, value) => editCell(card.id, row, col, value)}
             onInvalidEdit={(raw) => showToast('error', t('table.invalidNumber', { value: raw }))}
             onHeaderClick={(column) =>

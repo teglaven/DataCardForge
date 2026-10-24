@@ -76,6 +76,11 @@ export interface ChartCardModel extends CardBase {
   /** Chart type plus its attached columns and presentation options. */
   config: ChartConfig;
   smoothing: SmoothingOptions;
+  /**
+   * Whether the column dock is open on this chart card (pure UI state, persisted with
+   * the card). Absent on older snapshots — normalizeRestoredCards reads it as false.
+   */
+  columnPanelOpen?: boolean;
 }
 
 /**

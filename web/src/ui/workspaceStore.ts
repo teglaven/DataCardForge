@@ -242,6 +242,8 @@ interface WorkspaceState {
   setChartConfig: (cardId: number, patch: Partial<ChartConfig>) => void;
   addChartSource: (cardId: number, matrixId: number, columnIndex: number) => void;
   removeChartSource: (cardId: number, matrixId: number, columnIndex: number) => void;
+  /** Persist the column-dock open state on a chart card. */
+  setChartColumnPanel: (cardId: number, open: boolean) => void;
 
   // ── formula card behaviour ──────────────────────────────────────────
   /** Create a formula card that reads from a source matrix card. */
@@ -407,13 +409,20 @@ function resizeNodeStatuses(
  * Snapshots saved before formula cards were backed by compute nodes have no `nodes` field;
  * older ones may even carry pre-computed result data. Restoring must never resurrect local
  * computation, so every formula card comes back with empty node slots — the sources are
- * re-registered on demand and results flow from the backend again. Non-formula cards pass
- * through untouched.
+ * re-registered on demand and results flow from the backend again. Chart cards saved before
+ * the column dock existed lack `columnPanelOpen`; it is normalised to `false`. Matrix cards
+ * pass through untouched.
  */
 function normalizeRestoredCards(cards: CardModel[]): CardModel[] {
-  return cards.map((card) =>
-    isFormulaCard(card) ? { ...card, nodes: resizeNodeStatuses(card.nodes ?? [], card.formulas.length) } : card,
-  );
+  return cards.map((card) => {
+    if (isFormulaCard(card)) {
+      return { ...card, nodes: resizeNodeStatuses(card.nodes ?? [], card.formulas.length) };
+    }
+    if (isChartCard(card)) {
+      return { ...card, columnPanelOpen: card.columnPanelOpen ?? false };
+    }
+    return card;
+  });
 }
 
 /**
@@ -843,6 +852,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         createdAt: Date.now(),
         config: defaultChartConfig(type, sources),
         smoothing: { ...DEFAULT_SMOOTHING },
+        // The column dock starts closed; the user's toggle is persisted via
+        // setChartColumnPanel.
+        columnPanelOpen: false,
       };
 
       // The chart depends on the matrix *card*: this is what makes "switch file in the
@@ -1128,58 +1140,103 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     },
 
     addChartSource(cardId, matrixId, columnIndex) {
-      set((state) => ({
-        cards: state.cards.map((card) => {
-          if (card.id !== cardId || !isChartCard(card)) return card;
-          // Never attach the same column twice.
-          if (
-            card.config.sources.some(
-              (source) => source.matrixId === matrixId && source.columnIndex === columnIndex,
-            )
-          ) {
-            return card;
-          }
-          const matrix = state.matrices.get(matrixId);
-          if (!matrix || columnIndex < 0 || columnIndex >= matrix.columnCount()) return card;
-          const column = matrix.column(columnIndex);
-          const source: ChartSource = {
-            matrixId,
-            columnIndex,
-            label: columnLabel(column),
-            raw: column.data.slice(),
-          };
-          return {
-            ...card,
-            config: { ...card.config, sources: [...card.config.sources, source] },
-          };
-        }),
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isChartCard(card)) return;
+      // Never attach the same column twice.
+      if (
+        card.config.sources.some(
+          (source) => source.matrixId === matrixId && source.columnIndex === columnIndex,
+        )
+      ) {
+        return;
+      }
+      const matrix = state.matrices.get(matrixId);
+      if (!matrix || columnIndex < 0 || columnIndex >= matrix.columnCount()) return;
+
+      // The line is registered against the matrix *card* that owns this matrix — the same
+      // rule as `addChartCard`, so one card-level line covers every attached column.
+      const owner = state.cards.find(
+        (c) => isMatrixCard(c) && c.sources.some((s) => s.matrixId === matrixId),
+      );
+      if (!owner || !isMatrixCard(owner)) return;
+
+      // Guarded against loops, mirroring `addChartCard`: the source is only attached when
+      // the edge was accepted, so a refused cycle leaves the chart untouched.
+      const cycle = state.dependencies.addDependency(cardId, owner.id);
+      if (cycle) {
+        get().showToast(
+          'error',
+          translatorFor(get().locale)('status.cycle', { path: cycle.join(' → ') }),
+        );
+        return;
+      }
+
+      const column = matrix.column(columnIndex);
+      const source: ChartSource = {
+        matrixId,
+        columnIndex,
+        label: columnLabel(column),
+        raw: column.data.slice(),
+      };
+      set((current) => ({
+        cards: current.cards.map((entry) =>
+          entry.id === cardId && isChartCard(entry)
+            ? { ...entry, config: { ...entry.config, sources: [...entry.config.sources, source] } }
+            : entry,
+        ),
       }));
     },
 
     removeChartSource(cardId, matrixId, columnIndex) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isChartCard(card)) return;
+
+      const sources = card.config.sources.filter(
+        (source) => !(source.matrixId === matrixId && source.columnIndex === columnIndex),
+      );
+      // A chart with no columns has nothing to draw; keep at least one. Also refuse to
+      // drop below what the *current type* needs: silently degrading a scatter to
+      // "needs at least 2 columns" destroys work the user cannot undo.
+      const floor = Math.max(1, minimumColumns(card.config.type));
+      if (sources.length < floor) return;
+      // The X axis may have pointed at the column just removed.
+      const xAxisSource =
+        card.config.xAxisSource &&
+        card.config.xAxisSource.matrixId === matrixId &&
+        card.config.xAxisSource.columnIndex === columnIndex
+          ? null
+          : card.config.xAxisSource;
+
+      // The line is registered against the matrix card that owns the detached matrix.
+      // Once neither a remaining source nor the surviving X axis points at one of that
+      // card's matrices, the chart no longer reads it: drop the card-level edge.
+      const owner = state.cards.find(
+        (c) => isMatrixCard(c) && c.sources.some((s) => s.matrixId === matrixId),
+      );
+      if (owner && isMatrixCard(owner)) {
+        const ownedMatrixIds = new Set(owner.sources.map((s) => s.matrixId));
+        const stillReadsOwned =
+          sources.some((source) => ownedMatrixIds.has(source.matrixId)) ||
+          (xAxisSource !== null && ownedMatrixIds.has(xAxisSource.matrixId));
+        if (!stillReadsOwned) state.dependencies.removeDependency(cardId, owner.id);
+      }
+
+      set((current) => ({
+        cards: current.cards.map((entry) =>
+          entry.id === cardId && isChartCard(entry)
+            ? { ...entry, config: { ...entry.config, sources, xAxisSource } }
+            : entry,
+        ),
+      }));
+    },
+
+    setChartColumnPanel(cardId, open) {
       set((state) => ({
-        cards: state.cards.map((card) => {
-          if (card.id !== cardId || !isChartCard(card)) return card;
-          const sources = card.config.sources.filter(
-            (source) => !(source.matrixId === matrixId && source.columnIndex === columnIndex),
-          );
-          // A chart with no columns has nothing to draw; keep at least one. Also refuse to
-          // drop below what the *current type* needs: silently degrading a scatter to
-          // "needs at least 2 columns" destroys work the user cannot undo.
-          const floor = Math.max(1, minimumColumns(card.config.type));
-          if (sources.length < floor) return card;
-          // The X axis may have pointed at the column just removed.
-          const xAxisSource =
-            card.config.xAxisSource &&
-            card.config.xAxisSource.matrixId === matrixId &&
-            card.config.xAxisSource.columnIndex === columnIndex
-              ? null
-              : card.config.xAxisSource;
-          return {
-            ...card,
-            config: { ...card.config, sources, xAxisSource },
-          };
-        }),
+        cards: state.cards.map((card) =>
+          card.id === cardId && isChartCard(card) ? { ...card, columnPanelOpen: open } : card,
+        ),
       }));
     },
 

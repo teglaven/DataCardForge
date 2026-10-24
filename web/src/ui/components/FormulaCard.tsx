@@ -12,15 +12,14 @@
  * code — never silent). A formula column is *not* yet a chart source: charts are built from
  * a matrix card's columns (`addChartCard` requires a `MatrixCardModel`).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { MatrixData } from '../../core/MatrixData.ts';
-import { setTableMetrics, invalidateLayout } from '../cardMetrics.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
 import type { FormulaCardModel, NodeStatus } from '../types.ts';
 import type { MessageKey } from '../i18n.ts';
 import { CardShell } from './CardShell.tsx';
-import { VirtualTable, type TableMetrics } from './VirtualTable.tsx';
+import { VirtualTable } from './VirtualTable.tsx';
 
 /** How long to wait after the last keystroke before re-sending each formula to the backend. */
 const FORMULA_DEBOUNCE_MS = 250;
@@ -50,8 +49,6 @@ export function FormulaCard({
   const setBounds = useWorkspace((s) => s.setBounds);
   const setFormula = useWorkspace((s) => s.setFormula);
   const removeFormula = useWorkspace((s) => s.removeFormula);
-
-  const metricsRef = useRef<TableMetrics | null>(null);
 
   /**
    * The editor keeps its own draft and only commits after a pause.
@@ -83,21 +80,6 @@ export function FormulaCard({
     }, FORMULA_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [draft, card.formulas, card.id, setFormula]);
-
-  const handleMetrics = useCallback(
-    (metrics: TableMetrics) => {
-      metricsRef.current = metrics;
-      setTableMetrics(card.id, metrics);
-    },
-    [card.id],
-  );
-
-  useEffect(() => {
-    const observer = new ResizeObserver(() => invalidateLayout());
-    const node = metricsRef.current?.tableViewport;
-    if (node) observer.observe(node);
-    return () => observer.disconnect();
-  }, [resultMatrix]);
 
   /**
    * Per-column error text, straight from the node's structured status.
@@ -217,7 +199,6 @@ export function FormulaCard({
             matrix={resultMatrix}
             readOnly
             rowLabel={(n) => t('table.rowHeader', { n })}
-            onMetrics={handleMetrics}
           />
         ) : (
           <div className="formula-card__empty">
