@@ -1218,6 +1218,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         cards,
         matrices,
         matrixIdByIdentity,
+        // An offer names a card that no longer exists; keeping it would leave a banner
+        // pointing at nothing (and `applyRepoint` would silently do nothing).
+        repointOffers: state.repointOffers.filter(
+          (offer) => offer.cardId !== id && offer.ownerCardId !== id,
+        ),
         selectedId: state.selectedId === id ? null : state.selectedId,
         blockedCardId: state.blockedCardId === id ? null : state.blockedCardId,
       });
@@ -2044,6 +2049,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         dependencies: new DependencyGraph(),
         blockedCardId: null,
         blockNonce: 0,
+        repointOffers: [],
         toast: null,
         // The plane is empty again, so bring the view back to the origin — otherwise the
         // next workspace would open panned into the void left by the previous one.

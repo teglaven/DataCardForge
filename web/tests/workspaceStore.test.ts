@@ -1315,3 +1315,31 @@ describe('charts from a function card', () => {
     }
   });
 });
+
+describe('offer hygiene', () => {
+  it('drops an offer whose card is closed', async () => {
+    const srcId = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1], [2]], ['A']) },
+      { name: 'b.txt', matrix: matrix([[3], [4]], ['A']) },
+    ]);
+    const card = store().cards.find((c) => c.id === srcId) as MatrixCardModel;
+    const fId = store().addFormulaCard(srcId, card.sources[0].matrixId)!;
+    store().setActiveSource(srcId, 1);
+    expect(store().repointOffers).toHaveLength(1);
+    store().removeCard(fId);
+    expect(store().repointOffers).toHaveLength(0);
+  });
+
+  it('drops every offer when the workspace resets', () => {
+    const srcId = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1], [2]], ['A']) },
+      { name: 'b.txt', matrix: matrix([[3], [4]], ['A']) },
+    ]);
+    const card = store().cards.find((c) => c.id === srcId) as MatrixCardModel;
+    store().addFormulaCard(srcId, card.sources[0].matrixId);
+    store().setActiveSource(srcId, 1);
+    expect(store().repointOffers.length).toBeGreaterThan(0);
+    store().reset();
+    expect(store().repointOffers).toHaveLength(0);
+  });
+});
