@@ -5,6 +5,7 @@
 namespace dc {
 
 const char* const kSigExpressionColumns = "builtin:expression-columns";
+const char* const kSigLinearRegression = "builtin:linear-regression";
 
 namespace {
 
@@ -29,15 +30,35 @@ const FunctionSignature& expressionColumns() {
   return kSig;
 }
 
+// `builtin:linear-regression` — the first signature that is NOT expression-shaped.
+//
+// Two input ports (x and y), no expression parameters, and one output whose shape does not
+// follow the input at all: a single row of five named statistics. It exists to prove the
+// signature registry is general — N inputs, parameters that are not formulas, and an output
+// whose height is fixed by the signature rather than by the data.
+const FunctionSignature& linearRegression() {
+  static const FunctionSignature kSig = [] {
+    FunctionSignature s;
+    s.id = kSigLinearRegression;
+    s.version = 1;
+    s.displayName = "linear regression";
+    s.inputs = {{"x", "x values", true}, {"y", "y values", true}};
+    s.outputs = {{"fit"}};
+    return s;
+  }();
+  return kSig;
+}
+
 }  // namespace
 
 const FunctionSignature* findSignature(const std::string& id) {
   if (id == kSigExpressionColumns) return &expressionColumns();
+  if (id == kSigLinearRegression) return &linearRegression();
   return nullptr;
 }
 
 std::vector<const FunctionSignature*> allSignatures() {
-  return {&expressionColumns()};
+  return {&expressionColumns(), &linearRegression()};
 }
 
 }  // namespace dc

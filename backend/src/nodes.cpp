@@ -324,9 +324,11 @@ std::vector<int64_t> NodeRegistry::allNodeIds() const {
 bool NodeRegistry::gatherInputs(const std::vector<PortBinding>& bindings,
                                 std::vector<std::string>* names,
                                 std::vector<std::vector<double>>* data, size_t* length,
-                                std::string* errorCode, std::string* errorName) {
+                                std::vector<PortSlice>* slices, std::string* errorCode,
+                                std::string* errorName) {
   names->clear();
   data->clear();
+  slices->clear();
   *length = 0;
   // Port semantics (B-plan v1): a port binds a whole table to a declared variable.
   // Every column stays addressable under its natural label; a single-column table is
@@ -387,6 +389,7 @@ bool NodeRegistry::gatherInputs(const std::vector<PortBinding>& bindings,
 
     size_t columnCount = 0;
     const std::string alias = b.varName;
+    const size_t firstColumn = names->size();
     const bool found = store_->withMatrix(matrixId, [&](const Matrix& m) {
       for (const auto& col : m.columns()) {
         names->push_back(Matrix::label(col));
@@ -406,6 +409,7 @@ bool NodeRegistry::gatherInputs(const std::vector<PortBinding>& bindings,
       *errorName = b.varName;
       return false;
     }
+    slices->push_back({firstColumn, columnCount});
   }
   return true;
 }
@@ -454,7 +458,8 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   size_t length = 0;
   std::string gatherCode;
   std::string gatherName;
-  if (!gatherInputs(bindings, &names, &data, &length, &gatherCode, &gatherName)) {
+  std::vector<PortSlice> slices;
+  if (!gatherInputs(bindings, &names, &data, &length, &slices, &gatherCode, &gatherName)) {
     std::lock_guard<std::mutex> lock(mu_);
     failNodeLocked(nodeId, gatherCode, Json::object({{"name", Json(gatherName)}}));
     return;
@@ -470,7 +475,76 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   const size_t rowLength = length == 0 ? 1 : length;
   try {
     if (!signatureId.empty()) {
-      if (signatureId == kSigExpressionColumns) {
+      if (signatureId == kSigLinearRegression) {
+        // Least squares over the two declared ports, mirroring web/src/core/stats.ts
+        // `linearRegression` (the reference the charts already use): non-finite pairs are
+        // dropped, n < 2 or zero x-variance yields NaN statistics rather than a made-up
+        // line — NaN is this project's word for "undefined", never 0.
+        // Each port must carry exactly ONE column: the signature declares a column, not a
+        // table, so a multi-column binding is a shape mismatch, not "use the first one".
+        const bool shapesOk = slices.size() >= 2 && slices[0].columnCount == 1 &&
+                              slices[1].columnCount == 1;
+        if (!shapesOk) {
+          errorCode = "shapeMismatch";
+          errorName = "x/y";
+        } else {
+          const auto& xs = data[slices[0].firstColumn];
+          const auto& ys = data[slices[1].firstColumn];
+          const size_t n = std::min(xs.size(), ys.size());
+          std::vector<double> xv;
+          std::vector<double> yv;
+          for (size_t i = 0; i < n; ++i) {
+            if (std::isfinite(xs[i]) && std::isfinite(ys[i])) {
+              xv.push_back(xs[i]);
+              yv.push_back(ys[i]);
+            }
+          }
+          const size_t count = xv.size();
+          double slope = NAN;
+          double intercept = NAN;
+          double correlation = NAN;
+          double r2 = NAN;
+          if (count >= 2) {
+            double sx = 0;
+            double sy = 0;
+            for (size_t i = 0; i < count; ++i) {
+              sx += xv[i];
+              sy += yv[i];
+            }
+            const double mx = sx / static_cast<double>(count);
+            const double my = sy / static_cast<double>(count);
+            double sxx = 0;
+            double sxy = 0;
+            double syy = 0;
+            for (size_t i = 0; i < count; ++i) {
+              const double dx = xv[i] - mx;
+              const double dy = yv[i] - my;
+              sxx += dx * dx;
+              sxy += dx * dy;
+              syy += dy * dy;
+            }
+            if (sxx > 0) {
+              slope = sxy / sxx;
+              intercept = my - slope * mx;
+              correlation = syy > 0 ? sxy / std::sqrt(sxx * syy) : 0.0;
+              r2 = correlation * correlation;
+            }
+          }
+          // One row, five named columns: the output's height is fixed by the signature.
+          const char* statNames[5] = {"slope", "intercept", "r", "r2", "n"};
+          const double values[5] = {slope, intercept, correlation, r2,
+                                    static_cast<double>(count)};
+          std::vector<Column> columns;
+          for (int i = 0; i < 5; ++i) {
+            Column column;
+            column.posName = "Pos." + std::to_string(i + 1);
+            column.annotation = statNames[i];
+            column.data = {values[i]};
+            columns.push_back(std::move(column));
+          }
+          outputs.push_back(std::move(columns));
+        }
+      } else if (signatureId == kSigExpressionColumns) {
         // builtin:expression-columns — one wide table, one column per expression. This is
         // the v1 formula card's semantics, now computed once in one node instead of once
         // per column in N nodes (the browser-side merge disappears with it).

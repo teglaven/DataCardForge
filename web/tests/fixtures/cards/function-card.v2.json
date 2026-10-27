@@ -7,19 +7,50 @@
         {
           "id": 1,
           "columns": [
-            { "posName": "Pos.1", "annotation": "A", "data": [1, 2, 3] },
-            { "posName": "Pos.2", "annotation": "B", "data": [10, 20, 30] }
+            {
+              "posName": "Pos.1",
+              "annotation": "A",
+              "data": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "posName": "Pos.2",
+              "annotation": "B",
+              "data": [
+                10,
+                20,
+                30
+              ]
+            }
           ]
         }
       ],
       "card": {
         "kind": "formula",
-        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 1, "matrixId": 1 } }],
+        "inputs": [
+          {
+            "portId": "src",
+            "target": {
+              "type": "matrix",
+              "cardId": 1,
+              "matrixId": 1
+            }
+          }
+        ],
         "signatureId": "builtin:expression-columns",
         "params": {
           "formulas": [
-            { "name": "double", "expression": "A * 2" },
-            { "name": "sum", "expression": "A + B" }
+            {
+              "name": "double",
+              "expression": "A * 2"
+            },
+            {
+              "name": "sum",
+              "expression": "A + B"
+            }
           ]
         }
       },
@@ -28,8 +59,22 @@
           {
             "outputId": "result",
             "columns": [
-              { "name": "double", "data": [2, 4, 6] },
-              { "name": "sum", "data": [11, 22, 33] }
+              {
+                "name": "double",
+                "data": [
+                  2,
+                  4,
+                  6
+                ]
+              },
+              {
+                "name": "sum",
+                "data": [
+                  11,
+                  22,
+                  33
+                ]
+              }
             ]
           }
         ]
@@ -41,20 +86,61 @@
         {
           "id": 2,
           "columns": [
-            { "posName": "Pos.1", "annotation": "", "data": [3, 4] },
-            { "posName": "Pos.2", "annotation": "", "data": [1, 1] }
+            {
+              "posName": "Pos.1",
+              "annotation": "",
+              "data": [
+                3,
+                4
+              ]
+            },
+            {
+              "posName": "Pos.2",
+              "annotation": "",
+              "data": [
+                1,
+                1
+              ]
+            }
           ]
         }
       ],
       "card": {
         "kind": "formula",
-        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 2, "matrixId": 2 } }],
+        "inputs": [
+          {
+            "portId": "src",
+            "target": {
+              "type": "matrix",
+              "cardId": 2,
+              "matrixId": 2
+            }
+          }
+        ],
         "signatureId": "builtin:expression-columns",
-        "params": { "formulas": [{ "name": "diff", "expression": "Pos.1 - Pos.2" }] }
+        "params": {
+          "formulas": [
+            {
+              "name": "diff",
+              "expression": "Pos.1 - Pos.2"
+            }
+          ]
+        }
       },
       "expect": {
         "outputs": [
-          { "outputId": "result", "columns": [{ "name": "diff", "data": [2, 3] }] }
+          {
+            "outputId": "result",
+            "columns": [
+              {
+                "name": "diff",
+                "data": [
+                  2,
+                  3
+                ]
+              }
+            ]
+          }
         ]
       }
     },
@@ -63,68 +149,541 @@
       "matrices": [
         {
           "id": 3,
-          "columns": [{ "posName": "Pos.1", "annotation": "A", "data": [1, "NaN", 3] }]
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "A",
+              "data": [
+                1,
+                "NaN",
+                3
+              ]
+            }
+          ]
         }
       ],
       "card": {
         "kind": "formula",
-        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 3, "matrixId": 3 } }],
+        "inputs": [
+          {
+            "portId": "src",
+            "target": {
+              "type": "matrix",
+              "cardId": 3,
+              "matrixId": 3
+            }
+          }
+        ],
         "signatureId": "builtin:expression-columns",
-        "params": { "formulas": [{ "name": "shift", "expression": "A + 1" }] }
+        "params": {
+          "formulas": [
+            {
+              "name": "shift",
+              "expression": "A + 1"
+            }
+          ]
+        }
       },
       "expect": {
         "outputs": [
-          { "outputId": "result", "columns": [{ "name": "shift", "data": [2, "NaN", 4] }] }
+          {
+            "outputId": "result",
+            "columns": [
+              {
+                "name": "shift",
+                "data": [
+                  2,
+                  "NaN",
+                  4
+                ]
+              }
+            ]
+          }
         ]
       }
     },
     {
       "name": "expression-columns-unknown-column-errors",
       "matrices": [
-        { "id": 4, "columns": [{ "posName": "Pos.1", "annotation": "A", "data": [1, 2] }] }
+        {
+          "id": 4,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "A",
+              "data": [
+                1,
+                2
+              ]
+            }
+          ]
+        }
       ],
       "card": {
         "kind": "formula",
-        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 4, "matrixId": 4 } }],
+        "inputs": [
+          {
+            "portId": "src",
+            "target": {
+              "type": "matrix",
+              "cardId": 4,
+              "matrixId": 4
+            }
+          }
+        ],
         "signatureId": "builtin:expression-columns",
-        "params": { "formulas": [{ "name": "nope", "expression": "ZZ * 2" }] }
+        "params": {
+          "formulas": [
+            {
+              "name": "nope",
+              "expression": "ZZ * 2"
+            }
+          ]
+        }
       },
-      "expectError": { "code": "unknownColumn" }
+      "expectError": {
+        "code": "unknownColumn"
+      }
     },
     {
       "name": "expression-columns-contract-violation",
       "matrices": [
-        { "id": 5, "columns": [{ "posName": "Pos.1", "annotation": "A", "data": [1, 2] }] }
+        {
+          "id": 5,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "A",
+              "data": [
+                1,
+                2
+              ]
+            }
+          ]
+        }
       ],
       "card": {
         "kind": "formula",
-        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 5, "matrixId": 5 } }],
+        "inputs": [
+          {
+            "portId": "src",
+            "target": {
+              "type": "matrix",
+              "cardId": 5,
+              "matrixId": 5
+            }
+          }
+        ],
         "signatureId": "builtin:expression-columns",
         "params": {
           "formulas": [
-            { "name": "a", "expression": "A" },
-            { "name": "b", "expression": "A * 2" }
+            {
+              "name": "a",
+              "expression": "A"
+            },
+            {
+              "name": "b",
+              "expression": "A * 2"
+            }
           ],
-          "columnContract": { "outputId": "result", "columns": 1 }
+          "columnContract": {
+            "outputId": "result",
+            "columns": 1
+          }
         }
       },
       "expectError": {
         "code": "columnContractViolation",
-        "params": { "expected": 1, "actual": 2 }
+        "params": {
+          "expected": 1,
+          "actual": 2
+        }
       }
     },
     {
       "name": "expression-columns-missing-params",
       "matrices": [
-        { "id": 6, "columns": [{ "posName": "Pos.1", "annotation": "A", "data": [1] }] }
+        {
+          "id": 6,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "A",
+              "data": [
+                1
+              ]
+            }
+          ]
+        }
       ],
       "card": {
         "kind": "formula",
-        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 6, "matrixId": 6 } }],
+        "inputs": [
+          {
+            "portId": "src",
+            "target": {
+              "type": "matrix",
+              "cardId": 6,
+              "matrixId": 6
+            }
+          }
+        ],
         "signatureId": "builtin:expression-columns",
         "params": {}
       },
-      "expectError": { "code": "badSignatureParams" }
+      "expectError": {
+        "code": "badSignatureParams"
+      }
+    },
+    {
+      "name": "linear-regression-exact-line",
+      "matrices": [
+        {
+          "id": 7,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "X",
+              "data": [
+                1,
+                2,
+                3,
+                4
+              ]
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "Y",
+              "data": [
+                2,
+                4,
+                6,
+                8
+              ]
+            }
+          ]
+        }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [
+          {
+            "portId": "x",
+            "target": {
+              "type": "matrix",
+              "cardId": 7,
+              "matrixId": 7
+            }
+          },
+          {
+            "portId": "y",
+            "target": {
+              "type": "matrix",
+              "cardId": 8,
+              "matrixId": 8
+            }
+          }
+        ],
+        "signatureId": "builtin:linear-regression",
+        "params": {}
+      },
+      "expect": {
+        "outputs": [
+          {
+            "outputId": "fit",
+            "columns": [
+              {
+                "name": "slope",
+                "data": [
+                  2
+                ]
+              },
+              {
+                "name": "intercept",
+                "data": [
+                  0
+                ]
+              },
+              {
+                "name": "r",
+                "data": [
+                  1
+                ]
+              },
+              {
+                "name": "r2",
+                "data": [
+                  1
+                ]
+              },
+              {
+                "name": "n",
+                "data": [
+                  4
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "linear-regression-drops-nan-pairs",
+      "matrices": [
+        {
+          "id": 9,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "X",
+              "data": [
+                1,
+                2,
+                "NaN",
+                4
+              ]
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "Y",
+              "data": [
+                2,
+                4,
+                6,
+                8
+              ]
+            }
+          ]
+        }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [
+          {
+            "portId": "x",
+            "target": {
+              "type": "matrix",
+              "cardId": 9,
+              "matrixId": 9
+            }
+          },
+          {
+            "portId": "y",
+            "target": {
+              "type": "matrix",
+              "cardId": 10,
+              "matrixId": 10
+            }
+          }
+        ],
+        "signatureId": "builtin:linear-regression",
+        "params": {}
+      },
+      "expect": {
+        "outputs": [
+          {
+            "outputId": "fit",
+            "columns": [
+              {
+                "name": "slope",
+                "data": [
+                  2
+                ]
+              },
+              {
+                "name": "intercept",
+                "data": [
+                  0
+                ]
+              },
+              {
+                "name": "r",
+                "data": [
+                  1
+                ]
+              },
+              {
+                "name": "r2",
+                "data": [
+                  1
+                ]
+              },
+              {
+                "name": "n",
+                "data": [
+                  3
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "linear-regression-single-point-is-undefined",
+      "matrices": [
+        {
+          "id": 11,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "X",
+              "data": [
+                1
+              ]
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "Y",
+              "data": [
+                5
+              ]
+            }
+          ]
+        }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [
+          {
+            "portId": "x",
+            "target": {
+              "type": "matrix",
+              "cardId": 11,
+              "matrixId": 11
+            }
+          },
+          {
+            "portId": "y",
+            "target": {
+              "type": "matrix",
+              "cardId": 12,
+              "matrixId": 12
+            }
+          }
+        ],
+        "signatureId": "builtin:linear-regression",
+        "params": {}
+      },
+      "expect": {
+        "outputs": [
+          {
+            "outputId": "fit",
+            "columns": [
+              {
+                "name": "slope",
+                "data": [
+                  "NaN"
+                ]
+              },
+              {
+                "name": "intercept",
+                "data": [
+                  "NaN"
+                ]
+              },
+              {
+                "name": "r",
+                "data": [
+                  "NaN"
+                ]
+              },
+              {
+                "name": "r2",
+                "data": [
+                  "NaN"
+                ]
+              },
+              {
+                "name": "n",
+                "data": [
+                  1
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "linear-regression-rejects-a-table-port",
+      "matrices": [
+        {
+          "id": 13,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "X",
+              "data": [
+                1,
+                2
+              ]
+            },
+            {
+              "posName": "Pos.2",
+              "annotation": "Z",
+              "data": [
+                3,
+                4
+              ]
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "columns": [
+            {
+              "posName": "Pos.1",
+              "annotation": "Y",
+              "data": [
+                2,
+                4
+              ]
+            }
+          ]
+        }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [
+          {
+            "portId": "x",
+            "target": {
+              "type": "matrix",
+              "cardId": 13,
+              "matrixId": 13
+            }
+          },
+          {
+            "portId": "y",
+            "target": {
+              "type": "matrix",
+              "cardId": 14,
+              "matrixId": 14
+            }
+          }
+        ],
+        "signatureId": "builtin:linear-regression",
+        "params": {}
+      },
+      "expectError": {
+        "code": "shapeMismatch"
+      }
     }
   ]
 }

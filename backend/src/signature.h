@@ -42,5 +42,6 @@ std::vector<const FunctionSignature*> allSignatures();
 
 // Well-known built-in ids.
 extern const char* const kSigExpressionColumns;
+extern const char* const kSigLinearRegression;
 
 }  // namespace dc

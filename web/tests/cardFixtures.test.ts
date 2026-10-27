@@ -45,6 +45,23 @@ interface FixtureCase {
 
 const here = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'cards');
 
+/**
+ * The signatures the fixtures are allowed to describe, and the port list each one declares.
+ *
+ * This table is the TS half of the port contract: the backend validates the same thing at
+ * creation time (`unknownPort` / `unboundPort`), so a fixture that disagrees with its
+ * signature fails on both sides instead of documenting a card nobody can build.
+ */
+const DECLARED_PORTS: Record<string, string[]> = {
+  'builtin:expression-columns': ['src'],
+  'builtin:linear-regression': ['x', 'y'],
+};
+
+/** Output column names each signature promises (order matters; names are its contract). */
+const DECLARED_OUTPUT_COLUMNS: Record<string, string[]> = {
+  'builtin:linear-regression': ['slope', 'intercept', 'r', 'r2', 'n'],
+};
+
 function loadCases(file: string): FixtureCase[] {
   return (JSON.parse(readFileSync(join(here, file), 'utf8')) as { cases: FixtureCase[] }).cases;
 }
@@ -90,8 +107,16 @@ for (const file of ['function-card.v2.json']) {
               sourceMatrixId: input.target.matrixId,
             });
           });
-          // The signature declares this port; the card must use that id, not an index.
-          expect(c.card.inputs.some((input) => input.portId === SOURCE_PORT)).toBe(true);
+          // The signature declares these ports; the card must use those ids, not positions.
+          const declared = DECLARED_PORTS[c.card.signatureId];
+          expect(declared).toBeDefined();
+          expect(c.card.inputs.map((input) => input.portId)).toEqual(declared);
+          // …and no port may be bound twice.
+          const ids = c.card.inputs.map((input) => input.portId);
+          expect(new Set(ids).size).toBe(ids.length);
+          if (c.card.signatureId === 'builtin:expression-columns') {
+            expect(ids).toContain(SOURCE_PORT);
+          }
         });
 
         it('is internally coherent (a broken judge would convict both sides)', () => {
@@ -105,11 +130,23 @@ for (const file of ['function-card.v2.json']) {
           const outputs = c.expect!.outputs;
           expect(outputs).toHaveLength(1);
           const columns = outputs[0].columns;
-          // One expression ⇒ one column, in declaration order.
-          expect(columns).toHaveLength(formulas.length);
-          // Every column is the same height, and it matches the source table's height.
           const sourceRows = c.matrices[0]?.columns[0]?.data.length ?? 0;
-          for (const column of columns) expect(column.data).toHaveLength(sourceRows);
+          if (c.card.signatureId === 'builtin:expression-columns') {
+            // One expression ⇒ one column, in declaration order, as tall as the input.
+            expect(columns).toHaveLength(formulas.length);
+            for (const column of columns) expect(column.data).toHaveLength(sourceRows);
+          } else {
+            // A non-expression signature fixes its own shape: the fixture must say so
+            // (this is the "output shape follows the signature, not the data" rule).
+            const expectedNames = DECLARED_OUTPUT_COLUMNS[c.card.signatureId];
+            expect(expectedNames).toBeDefined();
+            expect(columns.map((column) => column.name)).toEqual(expectedNames);
+            for (const column of columns) expect(column.data).toHaveLength(1);
+            const nColumn = columns[expectedNames!.indexOf('n')];
+            const n = Number(nColumn.data[0]);
+            expect(Number.isFinite(n)).toBe(true);
+            expect(n).toBeLessThanOrEqual(sourceRows);
+          }
           // Names are unique (the rename surface distinguishes columns by name).
           const names = columns.map((column) => column.name);
           expect(new Set(names).size).toBe(names.length);

@@ -142,12 +142,23 @@ class NodeRegistry {
   // Transition to Error, clear the stale result, publish the error event.
   // REQUIRES mu_ to be held by the caller.
   void failNodeLocked(int64_t nodeId, const std::string& code, Json params);
+  // Where one input port's columns landed in the flattened (names, data) view.
+  // Multi-input signatures address their ports through this instead of re-deriving
+  // offsets (that duplication is how port order bugs get introduced).
+  struct PortSlice {
+    size_t firstColumn = 0;
+    size_t columnCount = 0;
+  };
+
   // Resolve every binding to its current columns. The registry lock is taken per binding
   // (to check the upstream state) and released before touching the matrix store, so a
-  // large table copy never blocks the writer of an unrelated node.
+  // large table copy never blocks the writer of an unrelated node. `slices` is filled in
+  // binding order, one entry per binding, so a signature can say "port x is columns
+  // [first, first+count)".
   bool gatherInputs(const std::vector<PortBinding>& inputs, std::vector<std::string>* names,
                     std::vector<std::vector<double>>* data, size_t* length,
-                    std::string* errorCode, std::string* errorName);
+                    std::vector<PortSlice>* slices, std::string* errorCode,
+                    std::string* errorName);
 
   mutable std::mutex mu_;
   MatrixStore* store_;
