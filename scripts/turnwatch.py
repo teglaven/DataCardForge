@@ -262,6 +262,20 @@ def line(data: dict) -> str:
 # The prompt that goes into the stopped turn. It asks for evidence, never for a verdict,
 # and it names exactly three exits so the answer cannot be "I will keep going, everything is
 # fine". Kept short on purpose: a long prompt is itself context growth.
+# 软问询（第一档）：语气是好奇而非问责——责问换来防御性的长篇报告，好奇换来简短的事实回答。
+# 但只问"在做什么"不够：昨晚那轮完全知道自己在于什么（在盘点门禁），它缺的是"还要读多久才落盘"。
+# 所以第二问是**向前且可证伪**的：下一步要写出哪个文件的哪一处？答不出"要写什么"就说明阅读已成目的。
+ASK_PROMPT = """[看门狗 {level}] 注意到：已经连续一段时间只有阅读、没有落盘。
+
+你现在在做什么？用两句话回答，不要复述过程、不要列计划、不要解释努力程度：
+
+1. 眼下这一步要解决什么问题？（一句话）
+2. 接下来你**会写出**哪个文件的哪一处改动（文件名 + 函数/位置）？
+   如果答案还是"要再看几处"——直接说"还要读 <具体什么>"，这也算诚实回答。
+
+答完停在这里等指示，不要继续。
+"""
+
 AUDIT_PROMPT = """[看门狗 {level}] 触发：{why}
 
 停下手里的活，先做一次执行审计。只许读和报告，不许继续原任务。逐条给出，不许省略输出：
@@ -285,7 +299,12 @@ def main() -> int:
     ap.add_argument(
         "--notify",
         action="store_true",
-        help="on yellow/red, write the STOP marker and print the audit prompt",
+        help="on yellow/red, write the STOP marker and print the prompt",
+    )
+    ap.add_argument(
+        "--ask",
+        action="store_true",
+        help="use the soft check-in prompt ('what are you doing?') instead of the audit",
     )
     ap.add_argument(
         "--stop-file",
@@ -304,7 +323,7 @@ def main() -> int:
                 seen = text
                 if args.notify:
                     if data.get("level") in ("YELLOW", "RED"):
-                        prompt = AUDIT_PROMPT.format(
+                        prompt = (ASK_PROMPT if args.ask else AUDIT_PROMPT).format(
                             level=data["level"], why="; ".join(data["reasons"])
                         )
                         with open(args.stop_file, "w", encoding="utf-8") as f:
@@ -336,7 +355,7 @@ def main() -> int:
             pass
     if args.notify and level in ("YELLOW", "RED"):
         why = "; ".join(data["reasons"])
-        prompt = AUDIT_PROMPT.format(level=level, why=why)
+        prompt = (ASK_PROMPT if args.ask else AUDIT_PROMPT).format(level=level, why=why)
         try:
             os.unlink(args.stop_file)
         except OSError:
