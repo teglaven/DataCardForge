@@ -612,133 +612,157 @@ describe('compute-backend sync (B-plan)', () => {
 });
 
 // ── Stage 3: formula cards are computed by the backend, not the browser ─────────
-describe('formula-card compute authority (B-plan stage 3)', () => {
-  interface Call {
-    url: string;
-    method: string;
-    body?: string;
-  }
+// ── shared backend stub (module scope: several suites drive the same fake) ──
+interface Call {
+  url: string;
+  method: string;
+  body?: string;
+}
 
-  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-  /** Let queued promise continuations settle — one macrotask flushes the whole chain. */
-  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+/** Let queued promise continuations settle — one macrotask flushes the whole chain. */
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  /** Encode a DCM1 frame exactly as the C++ server does (see decodeMatrixFrame). */
-  function encodeFrame(columns: number[][], names: string[]): ArrayBuffer {
-    const rows = columns.reduce((max, c) => Math.max(max, c.length), 0);
-    const cols = columns.length;
-    const namesJson = JSON.stringify(names);
-    const namesBytes = new TextEncoder().encode(namesJson);
-    const buffer = new ArrayBuffer(16 + cols * rows * 8 + namesBytes.length);
-    const view = new DataView(buffer);
-    view.setUint32(0, 0x44434d31, true);
-    view.setUint32(4, rows, true);
-    view.setUint32(8, cols, true);
-    view.setUint32(12, namesBytes.length, true);
-    let offset = 16;
-    for (const col of columns) {
-      for (let r = 0; r < rows; ++r) {
-        view.setFloat64(offset + r * 8, col[r] ?? NaN, true);
-      }
-      offset += rows * 8;
+/** Encode a DCM1 frame exactly as the C++ server does (see decodeMatrixFrame). */
+function encodeFrame(columns: number[][], names: string[]): ArrayBuffer {
+  const rows = columns.reduce((max, c) => Math.max(max, c.length), 0);
+  const cols = columns.length;
+  const namesJson = JSON.stringify(names);
+  const namesBytes = new TextEncoder().encode(namesJson);
+  const buffer = new ArrayBuffer(16 + cols * rows * 8 + namesBytes.length);
+  const view = new DataView(buffer);
+  view.setUint32(0, 0x44434d31, true);
+  view.setUint32(4, rows, true);
+  view.setUint32(8, cols, true);
+  view.setUint32(12, namesBytes.length, true);
+  let offset = 16;
+  for (const col of columns) {
+    for (let r = 0; r < rows; ++r) {
+      view.setFloat64(offset + r * 8, col[r] ?? NaN, true);
     }
-    new Uint8Array(buffer, offset, namesBytes.length).set(namesBytes);
-    return buffer;
+    offset += rows * 8;
   }
+  new Uint8Array(buffer, offset, namesBytes.length).set(namesBytes);
+  return buffer;
+}
 
-  function stubBackend(opts: {
-    nodeResult?: number[][];
-    nodeNames?: string[];
-    /** Serve this many rows through real start/count paging (exercises the window loop). */
-    resultRows?: number;
-    createState?: 'done' | 'error';
-    error?: { code: string; params?: Record<string, unknown> };
-    failAll?: boolean;
-  }) {
-    const calls: Call[] = [];
-    let nextNodeId = 1;
-    let nextMatrixId = 100;
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
-      const url = String(input);
-      const method = init?.method ?? 'GET';
-      const body = typeof init?.body === 'string' ? init.body : undefined;
-      calls.push({ url, method, body });
-      if (opts.failAll) {
-        return { ok: false, status: 503, text: async () => '', json: async () => ({}) } as unknown as Response;
+function stubBackend(opts: {
+  nodeResult?: number[][];
+  nodeNames?: string[];
+  /** Serve this many rows through real start/count paging (exercises the window loop). */
+  resultRows?: number;
+  createState?: 'done' | 'error';
+  error?: { code: string; params?: Record<string, unknown> };
+  failAll?: boolean;
+  /** Override the advertised capabilities (to test version negotiation). */
+  capabilities?: string[];
+}) {
+  const calls: Call[] = [];
+  let nextNodeId = 1;
+  let nextMatrixId = 100;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    const body = typeof init?.body === 'string' ? init.body : undefined;
+    calls.push({ url, method, body });
+    if (opts.failAll) {
+      return { ok: false, status: 503, text: async () => '', json: async () => ({}) } as unknown as Response;
+    }
+    if (url.includes('/events')) {
+      return json([]);
+    }
+    if (url.endsWith('/signatures')) {
+      return json({
+        signatures: [
+          {
+            id: 'builtin:expression-columns',
+            version: 1,
+            displayName: 'expression columns',
+            inputs: [{ portId: 'src', displayName: 'source table', required: true }],
+            outputs: [{ outputId: 'result' }],
+          },
+        ],
+      });
+    }
+    if (url.endsWith('/hello')) {
+      return json({
+        protocol: 1,
+        build: 'test',
+        capabilities: opts.capabilities ?? ['expr.v1', 'matrix.v1', 'signature.v1', 'card.v2'],
+        limits: { maxWindowRows: 5000 },
+      });
+    }
+    if (url.endsWith('/matrices') && method === 'POST') {
+      return json({ matrixId: nextMatrixId++, revision: 1 });
+    }
+    if (url.endsWith('/nodes') && method === 'POST') {
+      const nodeId = nextNodeId++;
+      const resultMatrixId = nextMatrixId++;
+      if (opts.createState === 'error') {
+        return err(opts.error?.code ?? 'unexpectedToken', opts.error?.params ?? {});
       }
-      if (url.endsWith('/hello')) {
-        return json({ protocol: 1, build: 'test', capabilities: [], limits: { maxWindowRows: 5000 } });
-      }
-      if (url.endsWith('/matrices') && method === 'POST') {
-        return json({ matrixId: nextMatrixId++, revision: 1 });
-      }
-      if (url.endsWith('/nodes') && method === 'POST') {
-        const nodeId = nextNodeId++;
-        const resultMatrixId = nextMatrixId++;
-        if (opts.createState === 'error') {
-          return err(opts.error?.code ?? 'unexpectedToken', opts.error?.params ?? {});
-        }
-        return json({
-          nodeId,
-          resultMatrixId,
-          resultMatrixIds: [resultMatrixId],
-          signatureId: 'builtin:expression-columns',
-          state: opts.createState ?? 'done',
-        });
-      }
-      if (/\/nodes\/\d+$/.test(url) && method === 'PATCH') {
-        const id = Number(url.split('/').pop());
-        return json({ nodeId: id, state: opts.createState ?? 'done', resultMatrixIds: [nextMatrixId - 1] });
-      }
-      if (/\/nodes\/\d+$/.test(url) && method === 'DELETE') {
-        return json({ deleted: Number(url.split('/').pop()) });
-      }
-      if (url.includes('/window')) {
-        if (opts.resultRows !== undefined) {
-          const query = new URL(url, 'http://x').searchParams;
-          const start = Number(query.get('start') ?? 0);
-          const count = Number(query.get('count') ?? 500);
-          const end = Math.min(opts.resultRows, start + count);
-          const column = Array.from({ length: Math.max(0, end - start) }, (_, i) => start + i);
-          return {
-            ok: true,
-            status: 200,
-            arrayBuffer: async () => encodeFrame([column], ['Pos.1 big']),
-            json: async () => ({}),
-            text: async () => '',
-          } as unknown as Response;
-        }
-        const bytes = encodeFrame(opts.nodeResult ?? [[2, 4]], opts.nodeNames ?? ['Pos.1']);
+      return json({
+        nodeId,
+        resultMatrixId,
+        resultMatrixIds: [resultMatrixId],
+        signatureId: 'builtin:expression-columns',
+        state: opts.createState ?? 'done',
+      });
+    }
+    if (/\/nodes\/\d+$/.test(url) && method === 'PATCH') {
+      const id = Number(url.split('/').pop());
+      return json({ nodeId: id, state: opts.createState ?? 'done', resultMatrixIds: [nextMatrixId - 1] });
+    }
+    if (/\/nodes\/\d+$/.test(url) && method === 'DELETE') {
+      return json({ deleted: Number(url.split('/').pop()) });
+    }
+    if (url.includes('/window')) {
+      if (opts.resultRows !== undefined) {
+        const query = new URL(url, 'http://x').searchParams;
+        const start = Number(query.get('start') ?? 0);
+        const count = Number(query.get('count') ?? 500);
+        const end = Math.min(opts.resultRows, start + count);
+        const column = Array.from({ length: Math.max(0, end - start) }, (_, i) => start + i);
         return {
           ok: true,
           status: 200,
-          arrayBuffer: async () => bytes,
+          arrayBuffer: async () => encodeFrame([column], ['Pos.1 big']),
           json: async () => ({}),
           text: async () => '',
         } as unknown as Response;
       }
-      return json({});
-    }) as typeof fetch;
-    return { calls, restore: () => (globalThis.fetch = originalFetch) };
-  }
+      const bytes = encodeFrame(opts.nodeResult ?? [[2, 4]], opts.nodeNames ?? ['Pos.1']);
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => bytes,
+        json: async () => ({}),
+        text: async () => '',
+      } as unknown as Response;
+    }
+    return json({});
+  }) as typeof fetch;
+  return { calls, restore: () => (globalThis.fetch = originalFetch) };
+}
 
-  function json(body: unknown): Response {
-    const text = JSON.stringify(body);
-    return { ok: true, status: 200, text: async () => text, json: async () => body } as unknown as Response;
-  }
-  function err(code: string, params: Record<string, unknown>): Response {
-    const text = JSON.stringify({ code, params });
-    return { ok: false, status: 400, text: async () => text, json: async () => ({ code, params }) } as unknown as Response;
-  }
+function json(body: unknown): Response {
+  const text = JSON.stringify(body);
+  return { ok: true, status: 200, text: async () => text, json: async () => body } as unknown as Response;
+}
+function err(code: string, params: Record<string, unknown>): Response {
+  const text = JSON.stringify({ code, params });
+  return { ok: false, status: 400, text: async () => text, json: async () => ({ code, params }) } as unknown as Response;
+}
 
-  /** Load a source table and wait for its fire-and-forget backend registration. */
-  async function loadSource(rows: number[][], annotations: string[]) {
-    const cardId = store().addMatrixCard([{ name: 's.txt', matrix: matrix(rows, annotations) }]);
-    await tick();
-    return cardId;
-  }
+/** Load a source table and wait for its fire-and-forget backend registration. */
+async function loadSource(rows: number[][], annotations: string[]) {
+  const cardId = store().addMatrixCard([{ name: 's.txt', matrix: matrix(rows, annotations) }]);
+  await tick();
+  return cardId;
+}
 
+describe('formula-card compute authority (B-plan stage 3)', () => {
   it('registers ONE signature node binding the whole table', async () => {
     const stub = stubBackend({ nodeResult: [[2, 4, 6]] });
     try {
@@ -1183,5 +1207,37 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
       expect(restored.params.columnContract).toEqual({ outputId: 'result', columns: 1 });
       expect(restored.params.formulas[0].name).toBe('kept');
     });
+  });
+});
+
+// ── version negotiation (capabilities, not just protocol number) ────────────────
+describe('backend capability gate', () => {
+  it('refuses a backend that cannot evaluate signatures', async () => {
+    const stub = stubBackend({ capabilities: ['expr.v1', 'matrix.v1'] });
+    try {
+      await store().connectBackend();
+      // Additive fields on the wire are not enough: an old backend would ignore
+      // `signatureId` and evaluate an empty formula, producing a node that looks alive.
+      expect(store().backend.state).toBe('mismatch');
+      expect(store().backend.error).toContain('signature.v1');
+    } finally {
+      store().stopBackendEventLoop();
+      stub.restore();
+    }
+  });
+
+  it('accepts a v2 backend and records its advertised signatures', async () => {
+    const stub = stubBackend({});
+    try {
+      await store().connectBackend();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(store().backend.state).toBe('online');
+      expect(store().signatures.map((s) => s.id)).toEqual(['builtin:expression-columns']);
+      expect(store().signatures[0].inputs[0].portId).toBe('src');
+    } finally {
+      // connectBackend arms the long-poll; a test must not leave it running.
+      store().stopBackendEventLoop();
+      stub.restore();
+    }
   });
 });

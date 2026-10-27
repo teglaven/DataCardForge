@@ -16,7 +16,8 @@
 
 ```
 GET /api/hello
-→ { "protocol": 1, "build": "<git-sha>", "capabilities": ["expr.v1", "matrix.v1"],
+→ { "protocol": 1, "build": "<git-sha>",
+    "capabilities": ["expr.v1", "matrix.v1", "signature.v1", "card.v2"],
     "limits": { "maxWindowRows": 5000 } }
 ```
 
@@ -99,6 +100,13 @@ names     namesLen 字节的 JSON 数组（UTF-8），元素是 "Pos.1 annotatio
 - `PATCH /api/nodes/{id}` 接受 `params`（替换整个参数包并置 dirty）。
 - `builtin:expression-columns`：一节点、一宽表输出，每表达式一列（列名作 annotation）；
   取代 v1 的「每公式列一个节点」。列数随表达式个数变化属于**数据**，K 仍为 1。
+- `GET /api/signatures` → `{signatures:[{id, version, displayName, inputs:[{portId,
+  displayName, required}], outputs:[{outputId}]}]}`：后端能求值的全部函数签名。
+  前端当前只建一种卡，但这是**函数选择器与插件工具**的发现接口——按端口语义规格，
+  内置函数与插件注册进同一张表。
+- **能力协商**：`signature.v1` / `card.v2` 是 v2 客户端**必需**的能力。协议号仍是 1
+  （字段全增量），但一个不认 `signatureId` 的旧后端会忽略它并求值空 `formula`——
+  看起来活着、其实什么都没算。缺能力 ⇒ 前端走既有的「后端版本不兼容」横幅，拒绝进入工作区。
 
 ## 结构化错误
 

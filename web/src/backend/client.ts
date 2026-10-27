@@ -11,6 +11,16 @@
  */
 
 export const PROTOCOL_VERSION = 1;
+
+/**
+ * Capabilities this frontend needs from the backend.
+ *
+ * `protocol` stayed 1 because every v2 field is additive on the wire — but a backend that
+ * does not know `signatureId` would ignore it and evaluate an empty formula, i.e. create a
+ * node that looks alive and computes nothing. Capabilities are how a client refuses that
+ * combination up front instead of discovering it as an empty table.
+ */
+export const REQUIRED_CAPABILITIES = ['signature.v1'] as const;
 const DEFAULT_BASE = '/api';
 
 export interface HelloInfo {
@@ -46,6 +56,15 @@ export interface NodeCreateResult {
 }
 
 /** A compute node as the server reports it (`GET /api/nodes/{id}`). */
+/** One function signature as the backend advertises it. */
+export interface SignatureDto {
+  id: string;
+  version: number;
+  displayName: string;
+  inputs: Array<{ portId: string; displayName: string; required: boolean }>;
+  outputs: Array<{ outputId: string }>;
+}
+
 export interface NodeStatusDto {
   nodeId: number;
   state: NodeStateName;
@@ -211,6 +230,21 @@ export class BackendClient {
    * v1 shape: `{inputs, formula}` for a single expression. v2 shape: `{inputs, signatureId,
    * params}` for a signature-driven node with K declared outputs.
    */
+  /**
+   * Every signature this backend can evaluate.
+   *
+   * The card UI hard-codes the one signature it creates today; this call is the seam that
+   * lets a future function picker (and plugin tooling) ask instead of assume.
+   */
+  async signatures(): Promise<SignatureDto[]> {
+    try {
+      const r = await jsonRequest<{ signatures: SignatureDto[] }>(this.base, '/signatures');
+      return Array.isArray(r.signatures) ? r.signatures : [];
+    } catch {
+      return [];
+    }
+  }
+
   async createNode(
     inputs: PortBindingDto[],
     arg: string | { signatureId: string; params: Record<string, unknown> },

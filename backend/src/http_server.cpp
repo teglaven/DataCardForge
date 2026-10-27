@@ -13,6 +13,7 @@
 #include <thread>
 
 #include "expression.h"
+#include "signature.h"
 
 namespace dc {
 
@@ -365,6 +366,12 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
     Json caps = Json::array();
     caps.push(Json("expr.v1"));
     caps.push(Json("matrix.v1"));
+    // v2 (cards/signatures) is additive on the wire, so `protocol` stays 1 — but a client
+    // that NEEDS signatures has to be able to tell an old backend apart, otherwise it
+    // would create nodes the server silently misinterprets (it would ignore `signatureId`
+    // and evaluate an empty `formula`). Capabilities are that seam.
+    caps.push(Json("signature.v1"));
+    caps.push(Json("card.v2"));
     Json limits = Json::object({{"maxWindowRows", Json(5000)}});
     return jsonOk(Json::object({{"protocol", Json(1)},
                                 {"build", Json(std::string(DC_GIT_SHA))},
@@ -497,6 +504,29 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
     }
     bus_->publish(Json::object({{"matrixId", Json(matrixId)}, {"deleted", Json(true)}}));
     return jsonOk(Json::object({{"deleted", Json(matrixId)}}));
+  }
+
+  // GET /api/signatures — every function signature this backend can evaluate.
+  // docs/architecture/port-semantics-v1.md: a signature is the shape of a function card;
+  // built-ins register today, plugin implementations will register into the same table.
+  if (req.path == "/api/signatures" && req.method == "GET") {
+    Json list = Json::array();
+    for (const FunctionSignature* sig : allSignatures()) {
+      Json inputs = Json::array();
+      for (const auto& port : sig->inputs) {
+        inputs.push(Json::object({{"portId", Json(port.portId)},
+                                  {"displayName", Json(port.displayName)},
+                                  {"required", Json(port.required)}}));
+      }
+      Json outputs = Json::array();
+      for (const auto& output : sig->outputs) outputs.push(Json::object({{"outputId", Json(output.outputId)}}));
+      list.push(Json::object({{"id", Json(sig->id)},
+                              {"version", Json(sig->version)},
+                              {"displayName", Json(sig->displayName)},
+                              {"inputs", std::move(inputs)},
+                              {"outputs", std::move(outputs)}}));
+    }
+    return jsonOk(Json::object({{"signatures", std::move(list)}}));
   }
 
   // GET /api/nodes — the ids of every live compute node. Lets a client reconcile a

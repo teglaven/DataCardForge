@@ -27,11 +27,24 @@ afterAll(async () => {
 });
 
 describe.skipIf(!enabled)('live backend integration', () => {
-  it('handshakes with protocol 1', async () => {
+  it('handshakes with protocol 1 and advertises the v2 capabilities', async () => {
     const hello = await client.hello();
     expect(hello.ok).toBe(true);
     expect(hello.protocol).toBe(1);
     expect(hello.maxWindowRows).toBeGreaterThan(0);
+    // Additive fields are not self-announcing: a client that needs signatures must be able
+    // to refuse a backend that would silently ignore `signatureId`.
+    expect(hello.capabilities).toContain('signature.v1');
+    expect(hello.capabilities).toContain('card.v2');
+  });
+
+  it('lists the function signatures it can evaluate', async () => {
+    const signatures = await client.signatures();
+    const expressionColumns = signatures.find((s) => s.id === 'builtin:expression-columns');
+    expect(expressionColumns).toBeDefined();
+    expect(expressionColumns!.version).toBe(1);
+    expect(expressionColumns!.inputs.map((input) => input.portId)).toEqual(['src']);
+    expect(expressionColumns!.outputs.map((output) => output.outputId)).toEqual(['result']);
   });
 
   it('registers a table and reads it back through a DCM1 window', async () => {

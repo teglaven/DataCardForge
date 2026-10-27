@@ -53,7 +53,7 @@ import {
 } from './migrate.ts';
 import { portBindingsFor } from './bindings.ts';
 import { translatorFor, detectLocale, type Locale } from './i18n.ts';
-import { BackendClient, type NodeEvent } from '../backend/client.ts';
+import { BackendClient, REQUIRED_CAPABILITIES, type NodeEvent, type SignatureDto } from '../backend/client.ts';
 
 export { lineColor };
 
@@ -330,6 +330,8 @@ interface WorkspaceState {
 
   // ── compute backend (B-plan: docs/decisions/2026-10-17-backend-owns-compute.md) ──
   backend: BackendStatus;
+  /** Function signatures the connected backend advertises (empty until a handshake). */
+  signatures: SignatureDto[];
   /** Handshake with the compute backend; result is stored in `backend`, never silent. */
   connectBackend: () => Promise<void>;
   /** Register a freshly parsed matrix server-side; records the node/matrix id mapping. */
@@ -1772,10 +1774,27 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     // ── compute backend ───────────────────────────────────────────────
 
     backend: { state: 'unknown' },
+    signatures: [],
     connectBackend: async () => {
       const info = await backendClient.hello();
+      const missing = info.ok
+        ? REQUIRED_CAPABILITIES.filter((cap) => !(info.capabilities ?? []).includes(cap))
+        : [];
+      if (info.ok && missing.length > 0) {
+        // Additive or not, this backend cannot evaluate function cards: say so instead of
+        // creating nodes it will silently misinterpret.
+        stopEventLoop();
+        set({
+          backend: { state: 'mismatch', error: `missing-capability:${missing.join(',')}` },
+        });
+        return;
+      }
       if (info.ok) {
         set({ backend: { state: 'online', build: info.build, protocol: info.protocol } });
+        // Advertised signatures (built-ins today, plugin registrations later).
+        void backendClient.signatures().then((signatures: SignatureDto[]) => {
+          if (signatures.length > 0) set({ signatures });
+        });
         // The event stream is the only way results reach the browser; re-arm it whenever we
         // (re)connect so a reconnect after an outage resumes pushing node states.
         get().startBackendEventLoop();
@@ -1824,10 +1843,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         while (!controller.signal.aborted) {
           const events = await backendClient.events(lastEventSeq, controller.signal);
           if (controller.signal.aborted) break;
-          for (const event of events) get().applyNodeEvent(event);
-          // `events()` resolves empty on timeout or transport failure; a small pause keeps
-          // a dead backend from spinning the loop while the offline banner stays visible.
-          if (events.length === 0) await sleep(250);
+          // A malformed answer must not kill the long-poll loop (the banner is the signal
+          // for "the backend is unusable", not an exception in a detached async task)…
+          const list = Array.isArray(events) ? events : [];
+          for (const event of list) get().applyNodeEvent(event);
+          // …and it must not turn the loop into a busy poll: `events()` resolves empty on
+          // timeout or transport failure, and "not even an array" is the same situation.
+          // Without this the pause was skipped and the loop hammered the backend at full
+          // speed (found by a test whose stub answered the wrong shape).
+          if (list.length === 0) await sleep(250);
         }
       })();
     },
