@@ -415,6 +415,7 @@ const dictionaries = {
     'formula.error.columnContractViolation':
       'Column contract broken ({expected} locked, {actual} produced)',
     'menu.newFormula': 'New Formula Card…',
+    'menu.newRegression': 'New Regression Card…',
   },
 } as const;
 

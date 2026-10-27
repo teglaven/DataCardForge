@@ -356,3 +356,64 @@ describe('wheel zoom of the whole workbench', () => {
     expect((5000 + 560) * after - store().view.x).toBeLessThanOrEqual(1000 + 1);
   });
 });
+
+// ── card menus are wired to the store (the seam no component test reaches) ──────
+describe('card context menus drive the store', () => {
+  it('creates a regression card from a data column pair via the menu', async () => {
+    // jsdom's navigator.language is en-US; pin the locale the assertions read.
+    store().setLocale('zh');
+    const mat = new MatrixData();
+    mat.appendColumn('Pos.1', [1, 2, 3, 4]);
+    mat.appendColumn('Pos.2', [2, 4, 6, 8]);
+    const matrixCardId = store().addMatrixCard([{ name: 'a.csv', matrix: mat }]);
+    store().setBounds(matrixCardId, { x: 0, y: 0, width: 640, height: 420 });
+
+    const host = await mountCanvas();
+    const header = host.querySelector<HTMLElement>('.card--matrix .vtable__colhead');
+    expect(header).not.toBeNull();
+    await act(async () => {
+      header!.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 140 }),
+      );
+    });
+
+    const items = [...document.querySelectorAll<HTMLButtonElement>('.context-menu__item')];
+    const regression = items.find((item) => item.textContent?.includes('新建回归卡'));
+    expect(regression).toBeDefined();
+    expect(regression!.disabled).toBe(false);
+    await act(async () => {
+      regression!.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const created = store().cards.find((c) => c.kind === 'formula');
+    expect(created).toBeDefined();
+    expect(created && 'signatureId' in created ? created.signatureId : '').toBe(
+      'builtin:linear-regression',
+    );
+    // Two cell ports into the same table, one column each.
+    if (created && 'inputs' in created) {
+      expect(created.inputs.map((input) => input.portId)).toEqual(['x', 'y']);
+    }
+  });
+
+  it('disables the regression entry on the last column (no pair to take)', async () => {
+    store().setLocale('zh');
+    const matrixCardId = store().addMatrixCard([{ name: 'a.csv', matrix: matrix([1, 2, 3]) }]);
+    store().setBounds(matrixCardId, { x: 0, y: 0, width: 640, height: 420 });
+
+    const host = await mountCanvas();
+    const header = host.querySelector<HTMLElement>('.card--matrix .vtable__colhead');
+    await act(async () => {
+      header!.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 140 }),
+      );
+    });
+    const items = [...document.querySelectorAll<HTMLButtonElement>('.context-menu__item')];
+    const regression = items.find((item) => item.textContent?.includes('新建回归卡'));
+    expect(regression).toBeDefined();
+    expect(regression!.disabled).toBe(true);
+  });
+});
