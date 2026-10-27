@@ -480,6 +480,10 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       return jsonError(400, "shapeMismatch");
     }
     bus_->publish(Json::object({{"matrixId", Json(matrixId)}, {"revision", Json(revision)}}));
+    // A cell edit is a content change like any other: every node reading this matrix has
+    // to recompute. The insert path always did this; the PATCH path was missing it, so an
+    // edited table left its function card showing the pre-edit numbers.
+    nodes_->onMatrixChanged(matrixId);
     return jsonOk(Json::object({{"matrixId", Json(matrixId)}, {"revision", Json(revision)}}));
   }
 
