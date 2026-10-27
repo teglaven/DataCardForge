@@ -1081,8 +1081,13 @@ body {
   background: var(--border);
 }
 
-/* ── Formula card ───────────────────────────────────────────────────── */
+/* ── Function card (three zones) ─────────────────────────────────────── */
 
+/*
+ * Left = inputs (the card's dependency list), right = formulas on top and outputs below.
+ * The split is a grid rather than flex so the input rail keeps its width while the result
+ * grid takes every remaining pixel — a table squeezed by its sibling is unusable.
+ */
 .formula-card {
   display: flex;
   flex-direction: column;
@@ -1091,31 +1096,151 @@ body {
   overflow: hidden;
 }
 
-.formula-card__editor {
-  flex: 0 0 auto;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-alt);
-  max-height: 40%;
-  overflow-y: auto;
+.formula-card__zones {
+  display: grid;
+  grid-template-columns: minmax(104px, 30%) minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.formula-card__hint {
-  font-size: 11px;
+.formula-card__inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 5px 6px;
+  overflow-y: auto;
+  background: var(--surface-alt);
+  border-right: 1px solid var(--border);
+}
+
+.formula-card__zone-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--text-dim);
-  margin-bottom: 4px;
+}
+
+.formula-card__zone-title .node-light {
+  margin: 0;
+}
+
+.formula-card__zone-empty {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.formula-card__port-list,
+.formula-card__output-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.formula-card__port {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 5px;
+  min-width: 0;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+}
+
+.formula-card__port-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formula-card__mode {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 13px;
+  border-radius: 3px;
+  color: var(--text-dim);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+}
+
+.formula-card__mode--matrix {
+  color: var(--accent);
+  border-color: var(--accent-soft);
+  background: var(--accent-soft);
+}
+
+.formula-card__port-src {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A reference whose matrix is gone: visible, and visibly wrong (the card cannot compute). */
+.formula-card__port-src--missing {
+  color: var(--danger);
+}
+
+.formula-card__port-shape {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
 }
 
 .formula-card__cols {
+  margin: 2px 0 0;
   font-family: var(--mono);
-  color: var(--accent);
+  font-size: 10px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formula-card__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.formula-card__formulas {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 0 1 auto;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
 }
 
 .formula-card__row {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-bottom: 3px;
+  min-width: 0;
   flex-wrap: wrap;
 }
 
@@ -1124,7 +1249,8 @@ body {
 }
 
 .formula-card__name {
-  width: 80px;
+  width: 76px;
+  flex: 0 0 auto;
   font-size: 12px;
   padding: 2px 6px;
   border: 1px solid var(--border);
@@ -1140,8 +1266,8 @@ body {
 }
 
 .formula-card__expr {
-  flex: 1 1 auto;
-  min-width: 120px;
+  flex: 1 1 90px;
+  min-width: 70px;
   font-size: 12px;
   font-family: var(--mono);
   padding: 2px 6px;
@@ -1157,6 +1283,7 @@ body {
 }
 
 .formula-card__remove {
+  flex: 0 0 auto;
   font-size: 14px;
   padding: 0 4px;
   color: var(--text-dim);
@@ -1171,14 +1298,8 @@ body {
   background: var(--danger);
 }
 
-.formula-card__error {
-  font-size: 11px;
-  color: var(--danger);
-  width: 100%;
-  padding-left: 90px;
-}
-
 .formula-card__add {
+  align-self: flex-start;
   font-size: 11px;
   padding: 2px 8px;
   color: var(--accent);
@@ -1193,13 +1314,81 @@ body {
   background: var(--accent-soft);
 }
 
+.formula-card__error {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--danger);
+}
+
+/* Upstream died: this card's own definition is fine, so it is dimmed rather than red. */
+.formula-card__stale {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.formula-card__outputs {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 5px 6px 0;
+}
+
+.formula-card__output-shape {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-dim);
+}
+
+.formula-card__output-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-alt);
+}
+
+.formula-card__output-id {
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formula-card__output-cols {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.formula-card__grid {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -6px;
+}
+
 .formula-card__empty {
   flex: 1 1 auto;
   display: grid;
   place-items: center;
   color: var(--text-dim);
-  padding: 16px;
+  padding: 12px;
   text-align: center;
+  font-size: 12px;
 }
 
 /*
@@ -1237,6 +1426,12 @@ body {
 
 .node-light--error {
   background: var(--danger);
+}
+
+/* Invalidated by an upstream failure: visible, but not this card's fault. */
+.node-light--stale {
+  background: transparent;
+  border: 1px solid var(--border-strong);
 }
 
 @keyframes node-pulse {

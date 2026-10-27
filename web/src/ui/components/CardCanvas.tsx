@@ -33,7 +33,7 @@ import { isChartCard, isFormulaCard, isMatrixCard } from '../types.ts';
 import { ConnectionLayer } from '../ConnectionLayer.tsx';
 import { CardShell } from './CardShell.tsx';
 import { ChartCard } from './ChartCard.tsx';
-import { FormulaCard } from './FormulaCard.tsx';
+import { FormulaCard, type ResolvedInput } from './FormulaCard.tsx';
 import { EmptyState } from './EmptyState.tsx';
 import { MatrixCard } from './MatrixCard.tsx';
 
@@ -439,13 +439,41 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
         }
 
         if (isFormulaCard(card)) {
-          // v2: the card reads ONE explicit matrix (its own input), not "whatever file the
-          // source table happens to show". Resolve that reference directly.
-          const input = card.inputs.find((entry) => entry.target.type === 'matrix');
-          const sourceMatrix =
-            input && input.target.type === 'matrix'
-              ? matrices.get(input.target.matrixId)
-              : undefined;
+          // v2: the card reads explicit matrices (its own `inputs`), not "whatever file the
+          // source table happens to show". Resolve every port for the left zone.
+          const resolveInput = (entry: (typeof card.inputs)[number]): ResolvedInput => {
+            const matrix = matrices.get(entry.target.matrixId);
+            const owner = cards.find(
+              (other) =>
+                other.id === entry.target.cardId &&
+                isMatrixCard(other) &&
+                other.sources.some((source) => source.matrixId === entry.target.matrixId),
+            );
+            const fileName =
+              owner && isMatrixCard(owner)
+                ? (owner.sources.find((source) => source.matrixId === entry.target.matrixId)?.name ??
+                  undefined)
+                : undefined;
+            const column = entry.target.type === 'cell' ? entry.target.column : undefined;
+            const label = [
+              fileName ?? `#${entry.target.matrixId}`,
+              column !== undefined ? `col ${column + 1}` : '',
+            ]
+              .filter(Boolean)
+              .join(' · ');
+            return {
+              portId: entry.portId,
+              mode: entry.target.type === 'cell' ? 'cell' : 'matrix',
+              label,
+              rows: matrix?.rowCount() ?? 0,
+              cols: matrix?.columnCount() ?? 0,
+              missing: !matrix,
+            };
+          };
+          const resolvedInputs = card.inputs.map(resolveInput);
+          // Column labels of the first matrix input, for the "available columns" hint.
+          const firstMatrix = card.inputs.find((entry) => entry.target.type === 'matrix');
+          const sourceMatrix = firstMatrix ? matrices.get(firstMatrix.target.matrixId) : undefined;
           const sourceColumnNames = sourceMatrix
             ? sourceMatrix.columns().map((c) => c.annotation || c.posName)
             : [];
@@ -455,6 +483,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
               card={card}
               resultMatrix={matrices.get(card.displayMatrixId)}
               sourceColumnNames={sourceColumnNames}
+              inputs={resolvedInputs}
               active={active}
               closeBlocked={closeBlocked}
               onActivate={() => bringToFront(card.id)}
