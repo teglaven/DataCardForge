@@ -1,7 +1,7 @@
 # 决策：前端选型定为 Web（React + Vite + TypeScript）
 
 - **日期**：2026-10-14
-- **状态**：✅ 已确定（取代 [[2026-08-07-backend-first-frontend-paused|后端先行，前端搁置]] 中"前端选型暂停"部分）
+- **状态**：✅ 已确定（取代 [后端先行，前端搁置](2026-08-07-backend-first-frontend-paused.md) 中"前端选型暂停"部分）
 - **标签**：`#架构 #前端选型 #决策 #web`
 
 ## 背景
@@ -37,7 +37,7 @@
 3. **性能顾虑被证伪或可解**：
    - 表格：虚拟滚动后 10 000 行只需 **23 个 DOM 行节点**（实测）。
    - 图表：ECharts 对 10⁵ 点序列有 LTTB 降采样，且渲染在 SVG/Canvas 两条路上都成熟。
-   - 8 月担心的"WebView 嵌入 ImGui"复杂度（见 [[frontend-imgui-vs-web|旧权衡文档]]）**直接消失**——不再有宿主，浏览器就是宿主。
+   - 8 月担心的"WebView 嵌入 ImGui"复杂度（见 [旧权衡文档](../architecture/frontend-imgui-vs-web.md)）**直接消失**——不再有宿主，浏览器就是宿主。
 4. **连线从属原则天然满足**：连线是一层 `pointer-events: none` 的 SVG 覆盖层，永远不抢事件、不参与布局。Qt 版要两个 overlay + 20ms 定时器轮询，Web 版由布局版本号驱动，实测无掉帧。
 
 ## 代价（明确记录）
@@ -72,7 +72,7 @@
 
 ## 关联
 
-- 被取代：[[2026-08-07-backend-first-frontend-paused|后端先行，前端搁置]]（前端暂停部分）
-- 已论证：[[frontend-imgui-vs-web|前端选型：ImGui vs Web]]（权重已反转）
-- 原则：[[2026-08-07-connection-subordination|连线从属原则]]（Web 实现天然满足）
+- 被取代：[后端先行，前端搁置](2026-08-07-backend-first-frontend-paused.md)（前端暂停部分）
+- 已论证：[前端选型：ImGui vs Web](../architecture/frontend-imgui-vs-web.md)（权重已反转）
+- 原则：[连线从属原则](2026-08-07-connection-subordination.md)（Web 实现天然满足）
 - 模块：`web/src/core`、`web/src/loaders`、`web/src/ui`

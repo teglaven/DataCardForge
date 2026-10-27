@@ -30,4 +30,4 @@ Assertion failed: (0) && "Calling PopStyleColor() too many times!"
 ## 关联
 
 - 项目：`imguitest/`
-- [[frontend-imgui-vs-web|前端选型：ImGui vs Web]]
+- [前端选型：ImGui vs Web](../architecture/frontend-imgui-vs-web.md)

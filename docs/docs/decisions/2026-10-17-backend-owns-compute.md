@@ -13,7 +13,7 @@
 
 ## 背景
 
-- [[2026-10-15-max-headroom-principle|兜底原则]] 确立了三层：T1 浏览器 TS（基线）、
+- [兜底原则](2026-10-15-max-headroom-principle.md) 确立了三层：T1 浏览器 TS（基线）、
   T2 WASM、T3 原生后端。其中 T1 承担"永远可用"的基线角色。
 - 函数卡设计评审中暴露出该分层**没有覆盖数据流图的账**：函数卡是"多卡连线、
   频繁卡间信号触发"的负载。实测（本机 localhost HTTP+JSON，300 次中位数）：
@@ -50,10 +50,10 @@
    "后端持不可变缓存、编辑永远产出新卡"。
 3. **传输**：HTTP（JSON 控制消息 + 二进制矩阵帧 + 文件上传），带长轮询/SSE 的
    状态推送。版本与能力握手先行；WebSocket 升级留待需要更低推送延迟时再做，
-   不改变消息语义。（协议规范见 [[../architecture/backend-protocol-v1|backend-protocol-v1]]。）
+   不改变消息语义。（协议规范见 [backend-protocol-v1](../architecture/backend-protocol-v1.md)。）
 4. **错误契约**：服务端只发结构化错误码 + 参数（沿用 `expression.ts` 的
    `code + params` 模式），**面向用户的文案由前端 i18n 渲染**。服务端永不发送文案。
-5. **对兜底原则的修订**（[[2026-10-15-max-headroom-principle]] 的分层表就此改写）：
+5. **对兜底原则的修订**（[2026-10-15-max-headroom-principle](2026-10-15-max-headroom-principle.md) 的分层表就此改写）：
    - ~~T1 浏览器 TS = 基线~~ → **后端 = 基线**；T1 退出生产计算路径，
      其现有实现（`expression.ts`/`stats.ts`/`Smoothing.ts`）**转为差分测试的参考基准**，
      逐步退役，不再是"永远可用的兜底层"。

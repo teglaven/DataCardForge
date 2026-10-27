@@ -260,8 +260,8 @@ C++/Qt 树曾作"行为参照"保留 → 发现它**成本 215 MB、还让主实
 
 ## 9. 关联
 
-- 导航：[[README|vault 导航]]
-- 核心原则：[[2026-10-15-max-headroom-principle|兜底原则]]
-- 当前裁定：[[2026-10-17-backend-owns-compute|后端持有数据与计算（B 方案）]]
-- 协议：[[../architecture/backend-protocol-v1|后端协议 v1]]
+- 导航：[vault 导航](README.md)
+- 核心原则：[兜底原则](decisions/2026-10-15-max-headroom-principle.md)
+- 当前裁定：[后端持有数据与计算（B 方案）](decisions/2026-10-17-backend-owns-compute.md)
+- 协议：[后端协议 v1](architecture/backend-protocol-v1.md)
 - 权威文档（"是什么"）：仓库根 [`README.zh-CN.md`](../../README.zh-CN.md)；本 vault 记录"为什么"

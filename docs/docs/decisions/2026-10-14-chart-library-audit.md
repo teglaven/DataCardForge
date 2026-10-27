@@ -82,7 +82,7 @@ chart.getDataURL({ type: 'svg' | 'png' | 'jpeg' })// 类型定义中明确列出
 
 ## 与既有决策的关系
 
-本次决策**强化**了 [[2026-10-14-frontend-web-chosen|前端选型定为 Web]] 的核心论据：
+本次决策**强化**了 [前端选型定为 Web](2026-10-14-frontend-web-chosen.md) 的核心论据：
 「矢量导出是硬需求」。审计确认该能力是 ECharts 原生提供的，因此选型逻辑成立，
 且**不需要为了矢量导出而额外更换绘图库**。
 
@@ -98,6 +98,6 @@ chart.getDataURL({ type: 'svg' | 'png' | 'jpeg' })// 类型定义中明确列出
 
 ## 关联
 
-- 决策：[[2026-10-14-frontend-web-chosen|前端选型定为 Web]]（矢量导出为核心论据）
+- 决策：[前端选型定为 Web](2026-10-14-frontend-web-chosen.md)（矢量导出为核心论据）
 - 模块：`web/src/charts/`、`web/src/core/stats.ts`
 - 文档：[`web/README.md`](../../../web/README.md)（图型表与导出说明）

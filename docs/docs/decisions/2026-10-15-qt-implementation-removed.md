@@ -3,7 +3,7 @@
 - **日期**：2026-10-15
 - **状态**：✅ 已执行（不可逆，工作树层面）
 - **标签**：`#架构 #清理 #qt #决策`
-- **取代**：[[2026-10-14-frontend-web-chosen|前端选型定为 Web]] 中"存量 Qt 前端保留不清除"的处置结论
+- **取代**：[前端选型定为 Web](2026-10-14-frontend-web-chosen.md) 中"存量 Qt 前端保留不清除"的处置结论
 
 ## 背景
 
@@ -64,7 +64,7 @@ data-workbench/.qtcreator/  .vscode/
 
 - ✅ 仓库体积 221 MB → 约 6.7 MB（不含 `node_modules`）
 - ✅ GitHub 首页从此展示的是主实现
-- ⚠️ 历史文档（`docs/log/2026-08-07.md`、`docs/lessons/*`、本决策引用的旧约定）中的 C++ 文件名成为**悬空引用**。处理原则见 [[../README|docs/README]] 第 5 条：保留文字作为出处标注，不去改写历史
+- ⚠️ 历史文档（`docs/log/2026-08-07.md`、`docs/lessons/*`、本决策引用的旧约定）中的 C++ 文件名成为**悬空引用**。处理原则见 [docs/README](../README.md) 第 5 条：保留文字作为出处标注，不去改写历史
 - ⚠️ `docs/lessons/implot-v1.1-api.md`、`imgui-docking-pushstylecolor.md` 记录的坑不再有代码对应。它们属于"当时为什么犹豫"的资产，继续保留
 - 🔒 若将来要做 WYSIWYG / SVG 编辑，按 10-14 决策的追记：**在 Web 侧扩展，不回头捡 Qt**
 
@@ -81,6 +81,6 @@ git --git-dir=.pre-qt-removal-backup/repo.git archive 27276fd src ui i18n | tar 
 
 ## 关联
 
-- 被取代：[[2026-10-14-frontend-web-chosen|前端选型定为 Web]] §存量 Qt 前端的处置
-- 相关：[[2026-08-07-backend-first-frontend-paused|后端先行，前端搁置]]（其中"后端"载体即本次删除的 C++ 代码）
-- 后续：Eigen / 公式计算路线需重新立项，见 [[2026-10-15|2026-10-15 日志]]
+- 被取代：[前端选型定为 Web](2026-10-14-frontend-web-chosen.md) §存量 Qt 前端的处置
+- 相关：[后端先行，前端搁置](2026-08-07-backend-first-frontend-paused.md)（其中"后端"载体即本次删除的 C++ 代码）
+- 后续：Eigen / 公式计算路线需重新立项，见 [2026-10-15 日志](../log/2026-10-15.md)

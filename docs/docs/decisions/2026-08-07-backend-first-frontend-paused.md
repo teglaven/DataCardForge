@@ -1,7 +1,7 @@
 # 决策：后端先行，前端搁置
 
 - **日期**：2026-08-07
-- **状态**：🔄 部分取代 —— **"前端选型暂停"已被 [[2026-10-14-frontend-web-chosen|前端选型定为 Web]] 取代**（2026-10-14）；"后端优先"的优先级判断仍然有效
+- **状态**：🔄 部分取代 —— **"前端选型暂停"已被 [前端选型定为 Web](2026-10-14-frontend-web-chosen.md) 取代**（2026-10-14）；"后端优先"的优先级判断仍然有效
 - **标签**：`#架构 #优先级 #前端选型`
 
 ## 背景
@@ -28,8 +28,8 @@
 ## 关联
 
 - 模块：`core/`、`loaders/`、`MatrixData`
-- 相关权衡：[[frontend-imgui-vs-web|前端选型：ImGui vs Web]]
-- 取代者：[[2026-10-14-frontend-web-chosen|前端选型定为 Web]]
+- 相关权衡：[前端选型：ImGui vs Web](../architecture/frontend-imgui-vs-web.md)
+- 取代者：[前端选型定为 Web](2026-10-14-frontend-web-chosen.md)
 - README 短期目标第一、二条
 
 ## 后续（2026-10-14 追记）
@@ -46,5 +46,5 @@
 
 ## 未来影响
 
-- 后端落地后，重新评估 [[frontend-imgui-vs-web|前端选型]]
+- 后端落地后，重新评估 [前端选型](../architecture/frontend-imgui-vs-web.md)
 - 若矢量导出、3D、SVG 编辑等需求被证实高频 → 前端选型权重将向 Web 倾斜

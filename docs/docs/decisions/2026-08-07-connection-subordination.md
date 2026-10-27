@@ -37,5 +37,5 @@
 ## 关联
 
 - 模块：`ConnectionOverlay`、`CardRegistry`
-- 决策背景：[[2026-08-07-backend-first-frontend-paused|后端先行，前端搁置]]
+- 决策背景：[后端先行，前端搁置](2026-08-07-backend-first-frontend-paused.md)
 - 未来对齐时机：前端重做或 `ConnectionOverlay` 重构时

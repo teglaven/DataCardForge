@@ -1,6 +1,6 @@
 # 架构权衡：前端选型 ImGui vs Web
 
-- **状态**：✅ 已收敛 —— 结论为 **Web**，见 [[2026-10-14-frontend-web-chosen|前端选型定为 Web]]（2026-10-14）
+- **状态**：✅ 已收敛 —— 结论为 **Web**，见 [前端选型定为 Web](../decisions/2026-10-14-frontend-web-chosen.md)（2026-10-14）
 - **标签**：`#架构 #前端选型 #权衡`
 
 > **追记（2026-10-14）**：本文档的对比表仍然有效，但**权重判断已经反转**，因此结论改为 Web。
@@ -34,9 +34,9 @@
 
 ## 已论证的关键结论（勿重复讨论）
 
-1. **连线从属原则**下，WebView 若作为卡片嵌入 ImGui，**走子窗口模式即可**，无需 OSR（见 [[2026-08-07-connection-subordination|连线从属原则]]）
+1. **连线从属原则**下，WebView 若作为卡片嵌入 ImGui，**走子窗口模式即可**，无需 OSR（见 [连线从属原则](../decisions/2026-08-07-connection-subordination.md)）
 2. **若"矢量导出 + SVG 编辑"被证实为高频需求** → Web 权重应大幅上调（这是 ImGui 最大相对劣势）
-3. ImPlot 生态：健康但偏小，v1.1 处于 API 重写期（见 [[implot-v1.1-api|ImPlot v1.1 API 大改]]）；ImGui 生态庞大且极其健康
+3. ImPlot 生态：健康但偏小，v1.1 处于 API 重写期（见 [ImPlot v1.1 API 大改](../lessons/implot-v1.1-api.md)）；ImGui 生态庞大且极其健康
 4. 导出管线应**与交互显示分离**（交互用 ImGui/ImPlot，导出用 matplotlib 桥或数据驱动 SVG），无论选哪条路都成立
 
 ## 未来重新评估的触发条件
@@ -48,5 +48,5 @@
 
 ## 关联
 
-- 决策：[[2026-08-07-backend-first-frontend-paused|后端先行，前端搁置]]
+- 决策：[后端先行，前端搁置](../decisions/2026-08-07-backend-first-frontend-paused.md)
 - 实验项目：`imguitest/`（ImGui 验证 Demo）

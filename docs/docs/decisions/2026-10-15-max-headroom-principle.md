@@ -21,8 +21,8 @@
 - 2026-10-15 本会话用户重新锚定项目核心诉求：**不是低成本换性能，而是最大兜底**。
   判据落到最坏情况后，"交叉点在哪"的论证**作废**：后端/T2 存在的理由不是平均更快，
   而是**移除天花板**（算法覆盖、内存上限、最坏算力）。
-- 关联文件：[[../README|vault 导航]]、[仓库根 README「设计理念」](../../../README.zh-CN.md#设计理念)、
-  [[2026-08-07-backend-first-frontend-paused|后端先行]]、[[2026-10-14-frontend-web-chosen|前端定 Web]]
+- 关联文件：[vault 导航](../README.md)、[仓库根 README「设计理念」](../../../README.zh-CN.md#设计理念)、
+  [后端先行](2026-08-07-backend-first-frontend-paused.md)、[前端定 Web](2026-10-14-frontend-web-chosen.md)
 
 ## 测量依据（本机 Zen 1 单核，2026-10-15 实测摘要）
 

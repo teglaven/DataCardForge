@@ -27,5 +27,5 @@ ImPlot 2025 年交接维护者（Evan Pezent → Breno Cunha Queiroz），v1.1 �
 
 ## 关联
 
-- [[frontend-imgui-vs-web|前端选型：ImGui vs Web]]
+- [前端选型：ImGui vs Web](../architecture/frontend-imgui-vs-web.md)
 - 项目：`imguitest/`
