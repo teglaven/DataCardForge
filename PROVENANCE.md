@@ -8,7 +8,7 @@
 | 项 | 值 |
 |---|---|
 | 项目名 | Data Workbench（仓库名 `DataCardForge`） |
-| 作者 / 著作权人 | **teglaven** `<141315067@qq.com>` |
+| 作者 / 著作权人 | **teglaven** `<57093716+teglaven@users.noreply.github.com>`（GitHub 账号 57093716） |
 | GitHub | <https://github.com/teglaven> |
 | 许可证 | GPL-3.0（见 [`LICENSE`](LICENSE)） |
 | 项目起始 | 2026-08-07（Qt/C++ 单体版） |
@@ -18,13 +18,17 @@
 ## 二、身份统一记录（公开前）
 
 身份统一时覆盖了当时的全部 63 个提交，**author / committer 统一为**
-`teglaven <141315067@qq.com>`，两个注解 tag 的 tagger 同样统一。
+`teglaven <57093716+teglaven@users.noreply.github.com>`——即 GitHub 账号 `teglaven`（id 57093716）的 noreply 地址，
+GitHub 会把这些提交直接归到该账号名下；三个注解 tag 的 tagger 同样统一。
+
+选用 noreply 而非真实邮箱，是为了让**公开历史不暴露个人邮箱**，同时归属仍然成立：
+noreply 地址由账号 id + 用户名构成，只有该账号的持有者能使用它。
 
 提交作者串及数量：
 
 | 作者 | 提交数 | 说明 |
 |---|---|---|
-| `teglaven <141315067@qq.com>` | 3 | 本身就是作者本人 |
+| `teglaven <邮箱>` | 3 | 作者本人 |
 | `DataCardForge Dev <dev@datacardforge.local>` | 57 | 本地工具身份，`.local` 域不可认领、无法与任何 GitHub 账号关联 |
 | `DataCardForge audit <agent@local>` | 3 | 自动审计脚本使用的工具身份 |
 
@@ -87,5 +91,5 @@ git 里的 commit date 是**作者自报**的，任何人克隆后都能原样�
 ## 六、变更规则
 
 - 公开推送后**不再重写历史**。若将来必须重写，须在此文件追加一段说明（日期、原因、新旧 SHA）。
-- 新增提交一律使用 `teglaven <141315067@qq.com>`（已在仓库 `git config --local` 固定）。
+- 新增提交一律使用 `teglaven <57093716+teglaven@users.noreply.github.com>`（已在仓库 `git config --local` 固定）。
 - 本文件自身的历史即证据：它随仓库一起提交。
