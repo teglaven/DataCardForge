@@ -175,6 +175,8 @@ const dictionaries = {
     // 函数卡三区布局（左：输入 / 右上：公式 / 右下：输出）
     'formula.zoneInputs': '输入',
     'formula.zoneFormulas': '计算公式',
+    'formula.zoneParams': '参数',
+    'formula.noParams': '此函数没有表达式参数：输入由端口决定（{signature}）',
     'formula.zoneOutputs': '输出',
     'formula.modeMatrix': '矩阵',
     'formula.modeCell': '列',
@@ -207,6 +209,7 @@ const dictionaries = {
     'formula.contractClear': '解除锁定',
     'formula.error.columnContractViolation': '列数契约被破坏（锁定 {expected} 列，实际 {actual} 列）',
     'menu.newFormula': '新建公式卡…',
+    'menu.newRegression': '新建回归卡…',
   },
 
   en: {
@@ -374,6 +377,8 @@ const dictionaries = {
     // Function card three-zone layout (left: inputs / top-right: formulas / bottom-right: outputs)
     'formula.zoneInputs': 'Inputs',
     'formula.zoneFormulas': 'Formulas',
+    'formula.zoneParams': 'Parameters',
+    'formula.noParams': 'This function takes no expressions: its inputs come from the ports ({signature})',
     'formula.zoneOutputs': 'Outputs',
     'formula.modeMatrix': 'matrix',
     'formula.modeCell': 'column',

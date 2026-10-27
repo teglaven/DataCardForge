@@ -20,6 +20,7 @@ import {
   type MatrixCardModel,
 } from '../src/ui/types.ts';
 import { decodeMatrixFrame } from '../src/backend/client.ts';
+import { REGRESSION_SIGNATURE } from '../src/ui/migrate.ts';
 
 /**
  * Build a matrix from row-major data, mirroring how a text file is laid out.
@@ -1170,7 +1171,7 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
       expect(before.params.columnContract).toBeUndefined();
       store().renameOutputColumn(before.id, 0, 'temperature');
       const after = store().cards.find((c) => c.id === before.id) as FunctionCardModel;
-      expect(after.params.formulas[0].name).toBe('temperature');
+      expect(after.params.formulas![0].name).toBe('temperature');
       expect(after.params.columnContract).toEqual({ outputId: 'result', columns: 1 });
     });
 
@@ -1205,7 +1206,7 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
       store().loadSnapshot(snapshot);
       const restored = store().cards.find((e) => e.id === c.id) as FunctionCardModel;
       expect(restored.params.columnContract).toEqual({ outputId: 'result', columns: 1 });
-      expect(restored.params.formulas[0].name).toBe('kept');
+      expect(restored.params.formulas![0].name).toBe('kept');
     });
   });
 });
@@ -1418,6 +1419,52 @@ describe('restore does not leak derived matrices', () => {
       expect(matrixPosts).toHaveLength(1);
       const restored = store().cards.find((c) => c.id === fId) as FunctionCardModel;
       expect(restored.displayMatrixId).toBeGreaterThan(0);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+// ── the second signature: a regression card (two cell ports, no expressions) ────
+describe('regression card', () => {
+  it('binds two consecutive columns as cell ports and sends them as such', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 0, 1, 1, 4]], nodeNames: ['Pos.1 slope', 'Pos.2 intercept', 'Pos.3 r', 'Pos.4 r2', 'Pos.5 n'] });
+    try {
+      const srcId = await loadSource([[1, 2], [2, 4], [3, 6], [4, 8]], ['X', 'Y']);
+      const id = store().addRegressionCard(srcId, 0)!;
+      expect(id).not.toBeNull();
+      const card = store().cards.find((c) => c.id === id) as FunctionCardModel;
+      expect(card.signatureId).toBe(REGRESSION_SIGNATURE);
+      // Two declared ports, one column each — not one port with the whole table.
+      expect(card.inputs.map((input) => input.portId)).toEqual(['x', 'y']);
+      expect(card.inputs.map((input) => input.target.type)).toEqual(['cell', 'cell']);
+      expect(card.outputs).toEqual([{ outputId: 'fit', resultMatrixId: -1 }]);
+      // The signature carries no expressions: an empty formula list would be a lie.
+      expect(card.params.formulas).toBeUndefined();
+
+      const binding = stub.calls.find((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(binding).toBeDefined();
+      const payload = JSON.parse(binding!.body ?? '{}') as {
+        signatureId: string;
+        inputs: Array<{ portId: string; mode: string; columnIndex?: number }>;
+      };
+      expect(payload.signatureId).toBe(REGRESSION_SIGNATURE);
+      expect(payload.inputs).toEqual([
+        expect.objectContaining({ portId: 'x', mode: 'cell', columnIndex: 0 }),
+        expect.objectContaining({ portId: 'y', mode: 'cell', columnIndex: 1 }),
+      ]);
+      // The edge exists, so the table cannot be closed under it.
+      expect(store().dependencies.getDependents(srcId)).toContain(id);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('refuses when there is no second column to pair with', async () => {
+    const stub = stubBackend({});
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      expect(store().addRegressionCard(srcId, 0)).toBeNull();
     } finally {
       stub.restore();
     }

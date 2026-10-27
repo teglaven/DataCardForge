@@ -34,7 +34,10 @@ interface MatrixCardProps {
   onClose: () => void;
   onCloseBlocked: () => void;
   onOpenChart: (columnIndex: number, type: ChartTypeId) => number | null;
-  onOpenFormula: () => void;
+  /** New function card reading this table, created from the clicked column. */
+  onOpenFormula: (column: number) => void;
+  /** Regression card from this column and the next one (two cell ports). */
+  onOpenRegression: (column: number) => void;
   onActivate: () => void;
   /** Columns of the displayed matrix that feed the currently selected chart. */
   sourceColumns?: readonly number[];
@@ -49,6 +52,7 @@ export function MatrixCard({
   onCloseBlocked,
   onOpenChart,
   onOpenFormula,
+  onOpenRegression,
   onActivate,
   sourceColumns = [],
 }: MatrixCardProps) {
@@ -226,11 +230,31 @@ export function MatrixCard({
             type="button"
             className="context-menu__item"
             onClick={() => {
-              onOpenFormula();
+              onOpenFormula(menu.column);
               setMenu(null);
             }}
           >
             {t('menu.newFormula')}
+          </button>
+          <button
+            type="button"
+            className="context-menu__item"
+            title={
+              cols - menu.column >= 2
+                ? t('menu.newRegression')
+                : t('status.needTrailingColumns', {
+                    type: t('menu.newRegression'),
+                    n: 2,
+                    have: cols - menu.column,
+                  })
+            }
+            disabled={cols - menu.column < 2}
+            onClick={() => {
+              onOpenRegression(menu.column);
+              setMenu(null);
+            }}
+          >
+            {t('menu.newRegression')}
           </button>
         </Popup>
       ) : null}

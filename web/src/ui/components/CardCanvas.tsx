@@ -71,6 +71,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
   const dismissRepoint = useWorkspace((s) => s.dismissRepoint);
   const applyRepointsForOwner = useWorkspace((s) => s.applyRepointsForOwner);
   const renameOutputColumn = useWorkspace((s) => s.renameOutputColumn);
+  const addRegressionCard = useWorkspace((s) => s.addRegressionCard);
   const setColumnContract = useWorkspace((s) => s.setColumnContract);
   const view = useWorkspace((s) => s.view);
   const setView = useWorkspace((s) => s.setView);
@@ -440,6 +441,10 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
                 const id = addFormulaCard(card.id);
                 if (id !== null) select(id);
               }}
+              onOpenRegression={(column) => {
+                const id = addRegressionCard(card.id, column);
+                if (id !== null) select(id);
+              }}
             />
           );
         }
@@ -545,6 +550,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
       dismissRepoint,
       applyRepointsForOwner,
       renameOutputColumn,
+      addRegressionCard,
       setColumnContract,
       dependencies,
       bringToFront,

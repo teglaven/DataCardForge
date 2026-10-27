@@ -39,6 +39,8 @@ export class WorkspaceFormatError extends Error {
 
 /** The signature every migrated formula card lands on. */
 export const EXPRESSION_COLUMNS_SIGNATURE = 'builtin:expression-columns';
+/** Second built-in: two cell ports, no formula parameters, signature-fixed output shape. */
+export const REGRESSION_SIGNATURE = 'builtin:linear-regression';
 
 /**
  * Port id a function card uses for its single matrix input.

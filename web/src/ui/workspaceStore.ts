@@ -49,9 +49,10 @@ import {
   CHART_PORT_X,
   EXPRESSION_COLUMNS_SIGNATURE,
   INPUT_PORT_SOURCE,
+  REGRESSION_SIGNATURE,
   chartPortId,
 } from './migrate.ts';
-import { portBindingsFor } from './bindings.ts';
+import { portBindingsFor, REGRESSION_PORT_X, REGRESSION_PORT_Y } from './bindings.ts';
 import { translatorFor, detectLocale, type Locale } from './i18n.ts';
 import { BackendClient, REQUIRED_CAPABILITIES, type NodeEvent, type SignatureDto } from '../backend/client.ts';
 
@@ -292,6 +293,15 @@ interface WorkspaceState {
    * frozen from this moment on (switching the table's file no longer re-points it).
    */
   addFormulaCard: (sourceCardId: number, matrixId?: number) => number | null;
+  /**
+   * Create a regression card from two consecutive columns of the source's current table.
+   *
+   * The second signature exists to prove the card model is not expression-shaped: two
+   * declared ports (x, y), no formula parameters, an output whose shape the signature
+   * fixes. It binds one COLUMN per port (`mode: 'cell'`), which is why the cell port mode
+   * had to become real.
+   */
+  addRegressionCard: (sourceCardId: number, columnIndex: number) => number | null;
   /** Add or update a formula column. One node ⇒ one PATCH, whatever the column count. */
   setFormula: (cardId: number, index: number, name: string, expression: string) => void;
   /** Remove a formula column (keeps at least one; no node is created or deleted). */
@@ -1575,7 +1585,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const card = state.cards.find((c) => c.id === cardId);
       if (!card || !isFormulaCard(card)) return;
 
-      const formulas = card.params.formulas.slice();
+      const formulas = (card.params.formulas ?? []).slice();
       if (index >= 0 && index < formulas.length) {
         formulas[index] = { name, expression };
       } else {
@@ -1599,9 +1609,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const state = get();
       const card = state.cards.find((c) => c.id === cardId);
       if (!card || !isFormulaCard(card)) return;
-      if (card.params.formulas.length <= 1) return; // keep at least one
+      const current = card.params.formulas ?? [];
+      if (current.length <= 1) return; // keep at least one
 
-      const formulas = card.params.formulas.filter((_, i) => i !== index);
+      const formulas = current.filter((_, i) => i !== index);
 
       set({
         cards: state.cards.map((c) =>
@@ -1613,6 +1624,66 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       // No node to release: the node stays, it simply computes fewer columns next time.
       void syncFunctionCard(cardId);
+    },
+
+    addRegressionCard(sourceCardId, columnIndex) {
+      const state = get();
+      const sourceCard = state.cards.find((c) => c.id === sourceCardId);
+      if (!sourceCard || isChartCard(sourceCard)) return null;
+      const matrixId = chartSourceMatrixId(sourceCard);
+      if (matrixId === null) return null;
+      const matrix = state.matrices.get(matrixId);
+      if (!matrix) return null;
+      // Two consecutive columns, like a scatter chart takes a pair — the product's
+      // existing idiom for "this column and the one after it".
+      if (columnIndex < 0 || columnIndex + 1 >= matrix.columnCount()) return null;
+
+      const inputs: PortConnection[] = [
+        {
+          portId: REGRESSION_PORT_X,
+          target: { type: 'cell', cardId: sourceCardId, matrixId, column: columnIndex },
+        },
+        {
+          portId: REGRESSION_PORT_Y,
+          target: { type: 'cell', cardId: sourceCardId, matrixId, column: columnIndex + 1 },
+        },
+      ];
+      const cardId = state.nextCardId;
+      const size = { width: 480, height: 320 };
+      const spot = placeOnPlane(
+        { x: sourceCard.x + sourceCard.width + 32, y: sourceCard.y + 40 },
+        size,
+        state.cards,
+      );
+      const card: FunctionCardModel = {
+        kind: 'formula',
+        id: cardId,
+        title: '',
+        ...spot,
+        width: size.width,
+        height: size.height,
+        z: topZ() + 1,
+        createdAt: Date.now(),
+        inputs,
+        signatureId: REGRESSION_SIGNATURE,
+        // Payload-free params: a regression has no expressions, which is exactly the case
+        // the card UI must handle without showing a formula editor.
+        params: {},
+        outputs: [{ outputId: 'fit', resultMatrixId: -1 }],
+        node: null,
+        displayMatrixId: state.nextMatrixId,
+      };
+      state.dependencies.addDependency(cardId, sourceCardId);
+      set({
+        cards: [...state.cards, card],
+        dependencies: state.dependencies,
+        nextCardId: cardId + 1,
+        nextMatrixId: state.nextMatrixId + 1,
+        selectedId: cardId,
+      });
+      revealCard({ ...spot, ...size });
+      void syncFunctionCard(cardId);
+      return cardId;
     },
 
     refreshDependentsOf(cardId) {
@@ -1680,7 +1751,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const state = get();
       const card = state.cards.find((c) => c.id === cardId);
       if (!card || !isFormulaCard(card)) return;
-      const formulas = card.params.formulas.slice();
+      // Only expression-shaped signatures name their columns positionally; a signature
+      // that fixes its own output names has nothing to rename.
+      const formulas = card.params.formulas?.slice();
+      if (!formulas) return;
       if (index < 0 || index >= formulas.length) return;
       const current = formulas[index];
       if (current.name === name) return;

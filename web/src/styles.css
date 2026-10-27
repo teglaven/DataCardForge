@@ -1130,6 +1130,13 @@ body {
   margin: 0;
 }
 
+.formula-card__no-params {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
 .formula-card__zone-empty {
   margin: 0;
   font-size: 11px;

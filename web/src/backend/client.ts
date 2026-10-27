@@ -105,6 +105,8 @@ export interface PortBindingDto {
   sourceNodeId?: number;
   /** Which output of a K-output upstream node (v1 data is always 0). */
   sourceOutputIndex?: number;
+  /** Required when `mode === 'cell'`: which column of the source to bind. */
+  columnIndex?: number;
 }
 
 async function jsonRequest<T>(base: string, path: string, init?: RequestInit): Promise<T> {

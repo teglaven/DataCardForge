@@ -452,3 +452,47 @@ describe('chaining from the output menu', () => {
     expect(chained).toBe(1);
   });
 });
+
+describe('a signature without expressions', () => {
+  const regressionCard = (): FunctionCardModel => ({
+    ...makeCard(),
+    signatureId: 'builtin:linear-regression',
+    params: {},
+    outputs: [{ outputId: 'fit', resultMatrixId: 7 }],
+    inputs: [
+      {
+        portId: 'x',
+        target: { type: 'cell', cardId: 1, matrixId: 10, column: 0 },
+      },
+      {
+        portId: 'y',
+        target: { type: 'cell', cardId: 1, matrixId: 10, column: 1 },
+      },
+    ],
+  });
+
+  it('shows both ports and states that the signature has no parameters', async () => {
+    const host = await mount(regressionCard(), {
+      inputs: [
+        { portId: 'x', mode: 'cell', label: 'X', rows: 4, cols: 1, missing: false },
+        { portId: 'y', mode: 'cell', label: 'Y', rows: 4, cols: 1, missing: false },
+      ],
+      resultMatrix: matrix(5, 1),
+    });
+    const ports = [...host.querySelectorAll('.formula-card__port-id')].map((p) => p.textContent);
+    expect(ports).toEqual(['x', 'y']);
+    // No formula editor, and it says why instead of showing an empty box.
+    expect(host.querySelectorAll('.formula-card__formula-row')).toHaveLength(0);
+    expect(host.textContent).toContain('此函数没有表达式参数');
+    // The parameter zone is still there — it just carries a statement, not an editor.
+    expect(host.querySelector('.formula-card__formulas')).not.toBeNull();
+  });
+
+  it('hides the rename entry (a signature-owned output names its own columns)', async () => {
+    const host = await mount(regressionCard(), {
+      inputs: [{ portId: 'x', mode: 'cell', label: 'X', rows: 4, cols: 1, missing: false }],
+      resultMatrix: matrix(5, 1),
+    });
+    expect(host.querySelector('.formula-card__rename')).toBeNull();
+  });
+});

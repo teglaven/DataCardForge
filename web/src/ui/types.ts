@@ -160,11 +160,25 @@ export interface ColumnContract {
   columns: number;
 }
 
-/** Parameters of `builtin:expression-columns` (one expression per output column). */
-export interface ExpressionColumnsParams {
-  formulas: FormulaColumn[];
-  /** Present once the user has named the output's columns. */
+/**
+ * A function card's parameter bag.
+ *
+ * Deliberately open: parameters belong to the SIGNATURE, not to the card. An expression
+ * signature carries `formulas`; a signature like `builtin:linear-regression` carries none
+ * at all. Typing this as "must have formulas" would force every future signature to
+ * pretend it has an empty formula list — the kind of lie that later reads as data.
+ */
+export interface FunctionParams {
+  /** Present for expression-shaped signatures (one expression per output column). */
+  formulas?: FormulaColumn[];
+  /** Present once the user has named an output column. */
   columnContract?: ColumnContract;
+  [key: string]: unknown;
+}
+
+/** Parameters of `builtin:expression-columns` — the signature that requires formulas. */
+export interface ExpressionColumnsParams extends FunctionParams {
+  formulas: FormulaColumn[];
 }
 
 /**
@@ -177,7 +191,7 @@ export interface FunctionCardModel extends CardBase {
   kind: 'formula';
   signatureId: string;
   /** Parameters are separate from the dataflow graph: changing one adds/removes no edge. */
-  params: ExpressionColumnsParams;
+  params: FunctionParams;
   /** K outputs = one node. K is fixed by the signature, never by the data. */
   outputs: OutputBinding[];
   /** The single backend compute node; null while registration is pending/offline. */

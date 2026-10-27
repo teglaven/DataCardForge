@@ -110,8 +110,18 @@ export function FormulaCard({
    * asynchronously — so committing on each keystroke would spam the server and re-render on
    * every character.
    */
+  /**
+   * The card's expressions, or `null` when the signature has no expression parameters.
+   *
+   * A signature's parameters are its own business: `builtin:linear-regression` declares two
+   * column ports and no expressions, so this card must render its ports and its result
+   * without pretending there is an editor to show.
+   */
+  const formulas = Array.isArray(card.params.formulas) ? card.params.formulas : null;
+  const expressionShaped = formulas !== null;
+
   const [draft, setDraft] = useState(() =>
-    card.params.formulas.map((formula) => ({ ...formula })),
+    (formulas ?? []).map((formula) => ({ ...formula })),
   );
   /**
    * Rename mode: the output list turns into one name input per column.
@@ -121,39 +131,39 @@ export function FormulaCard({
    */
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState<string[]>(() =>
-    card.params.formulas.map((formula) => formula.name),
+    (formulas ?? []).map((formula) => formula.name),
   );
   useEffect(() => {
-    setNameDraft(card.params.formulas.map((formula) => formula.name));
-  }, [card.params.formulas]);
+    setNameDraft((formulas ?? []).map((formula) => formula.name));
+  }, [formulas]);
 
   const commitName = (index: number): void => {
     const next = nameDraft[index] ?? '';
-    if (next === card.params.formulas[index]?.name) return;
+    if (next === formulas?.[index]?.name) return;
     onRenameOutputColumn(index, next);
   };
-  const identityRef = useRef({ id: card.id, count: card.params.formulas.length });
+  const identityRef = useRef({ id: card.id, count: (formulas ?? []).length });
 
   // Re-sync only when the card itself or the number of formulas changes; re-syncing on
   // every store update would fight the user's typing.
   useEffect(() => {
     const previous = identityRef.current;
-    if (previous.id === card.id && previous.count === card.params.formulas.length) return;
-    identityRef.current = { id: card.id, count: card.params.formulas.length };
-    setDraft(card.params.formulas.map((formula) => ({ ...formula })));
-  }, [card.id, card.params.formulas]);
+    if (previous.id === card.id && previous.count === (formulas ?? []).length) return;
+    identityRef.current = { id: card.id, count: (formulas ?? []).length };
+    setDraft((formulas ?? []).map((formula) => ({ ...formula })));
+  }, [card.id, formulas]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       draft.forEach((formula, index) => {
-        const current = card.params.formulas[index];
+        const current = formulas?.[index];
         if (!current) return;
         if (current.name === formula.name && current.expression === formula.expression) return;
         setFormula(card.id, index, formula.name, formula.expression);
       });
     }, FORMULA_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [draft, card.params.formulas, card.id, setFormula]);
+  }, [draft, formulas, card.id, setFormula]);
 
   /**
    * The card-level error text, straight from the node's structured status.
@@ -183,9 +193,11 @@ export function FormulaCard({
   const rows = resultMatrix?.rowCount() ?? 0;
   const cols = resultMatrix?.columnCount() ?? 0;
   const title = t('card.formula', {
-    name: draft[0]?.name || card.params.formulas[0]?.name || t('card.unlabeled'),
+    name: draft[0]?.name || formulas?.[0]?.name || t('card.unlabeled'),
   });
-  const badge = `${card.params.formulas.length} ${t('formula.columns')} · ${rows} ${t('formula.rows')}`;
+  const badge = expressionShaped
+    ? `${(formulas ?? []).length} ${t('formula.columns')} · ${rows} ${t('formula.rows')}`
+    : `${card.signatureId.replace(/^builtin:/, '')} · ${rows} ${t('formula.rows')}`;
   const state: NodeStatus['state'] | 'idle' | 'stale' = invalidated
     ? 'stale'
     : (card.node?.state ?? 'idle');
@@ -252,7 +264,14 @@ export function FormulaCard({
           {/* ── zone 2 + 3: formulas above, outputs below ── */}
           <div className="formula-card__main">
             <section className="formula-card__formulas" aria-label={t('formula.zoneFormulas')}>
-              <div className="formula-card__zone-title">{t('formula.zoneFormulas')}</div>
+              <div className="formula-card__zone-title">
+                {expressionShaped ? t('formula.zoneFormulas') : t('formula.zoneParams')}
+              </div>
+              {!expressionShaped ? (
+                <p className="formula-card__no-params">
+                  {t('formula.noParams', { signature: card.signatureId.replace(/^builtin:/, '') })}
+                </p>
+              ) : null}
               {draft.map((formula, index) => (
                 <div
                   key={index}
@@ -331,19 +350,21 @@ export function FormulaCard({
                       {t('formula.outputColumns', { n: cols, rows })}
                     </span>
                   ) : null}
-                  <button
-                    type="button"
-                    className={`card__control formula-card__rename${renaming ? ' is-open' : ''}`}
-                    aria-pressed={renaming}
-                    onClick={() => setRenaming((open) => !open)}
-                  >
-                    {renaming ? t('formula.renameDone') : t('formula.rename')}
-                  </button>
+                  {expressionShaped ? (
+                    <button
+                      type="button"
+                      className={`card__control formula-card__rename${renaming ? ' is-open' : ''}`}
+                      aria-pressed={renaming}
+                      onClick={() => setRenaming((open) => !open)}
+                    >
+                      {renaming ? t('formula.renameDone') : t('formula.rename')}
+                    </button>
+                  ) : null}
                 </span>
               </div>
               {renaming ? (
                 <ul className="formula-card__rename-list">
-                  {card.params.formulas.map((_formula, index) => (
+                  {(formulas ?? []).map((_formula, index) => (
                     <li key={index} className="formula-card__rename-item">
                       <span className="formula-card__rename-index">{index + 1}</span>
                       <input
