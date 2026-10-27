@@ -100,6 +100,11 @@ names     namesLen 字节的 JSON 数组（UTF-8），元素是 "Pos.1 annotatio
 - `PATCH /api/nodes/{id}` 接受 `params`（替换整个参数包并置 dirty）。
 - `builtin:expression-columns`：一节点、一宽表输出，每表达式一列（列名作 annotation）；
   取代 v1 的「每公式列一个节点」。列数随表达式个数变化属于**数据**，K 仍为 1。
+- **端口绑定 `mode`**：`"matrix"` 绑整张表；`"cell"` + `columnIndex` 只绑该列（越界 ⇒
+  `unknownColumn`）。v1 里 `mode` 是装饰字段——标了 `cell` 其实仍绑整表，双输入签名需要的
+  正是「端口=一列」，所以它现在真的有语义。
+- `builtin:linear-regression`：端口 `x` / `y`（各一列），无参数，输出 `fit` 为签名固定的
+  1 行 × 5 列（slope/intercept/r/r2/n）。它不是表达式形状——存在的意义是证明签名模型通用。
 - `GET /api/signatures` → `{signatures:[{id, version, displayName, inputs:[{portId,
   displayName, required}], outputs:[{outputId}]}]}`：后端能求值的全部函数签名。
   前端当前只建一种卡，但这是**函数选择器与插件工具**的发现接口——按端口语义规格，

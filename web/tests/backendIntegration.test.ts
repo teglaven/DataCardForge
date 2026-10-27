@@ -160,6 +160,69 @@ describe.skipIf(!enabled)('live backend integration', () => {
     expect(cleared.columns).toBe(0);
   });
 
+  it('evaluates a regression card bound to two columns of ONE table', async () => {
+    const registered = await client.registerMatrix('it-regression', [
+      { posName: 'Pos.1', annotation: 'X', data: [1, 2, 3, 4] },
+      { posName: 'Pos.2', annotation: 'Y', data: [2, 4, 6, 8] },
+    ]);
+    createdMatrices.push(registered.matrixId!);
+
+    // Exactly what the store sends for a regression card: two cell ports, one column each,
+    // both pointing at the same table.
+    const created = await client.createNode(
+      [
+        {
+          portId: 'x',
+          varName: 'x',
+          mode: 'cell',
+          sourceMatrixId: registered.matrixId!,
+          columnIndex: 0,
+        },
+        {
+          portId: 'y',
+          varName: 'y',
+          mode: 'cell',
+          sourceMatrixId: registered.matrixId!,
+          columnIndex: 1,
+        },
+      ],
+      { signatureId: 'builtin:linear-regression', params: {} },
+    );
+    expect(created.ok).toBe(true);
+    createdNodes.push(created.nodeId!);
+    createdMatrices.push(created.resultMatrixIds![0]);
+
+    const result = await client.nodeResult(created.resultMatrixIds![0]);
+    // The output's shape is fixed by the signature: one row, five named statistics.
+    expect(result.rows).toBe(1);
+    expect(result.names).toEqual([
+      'Pos.1 slope',
+      'Pos.2 intercept',
+      'Pos.3 r',
+      'Pos.4 r2',
+      'Pos.5 n',
+    ]);
+    // One row × five columns: the row index is constant, the columns carry the statistics.
+    const values = result.data!.map((column) => column[0]);
+    expect(values[0]).toBeCloseTo(2, 12);
+    expect(values[1]).toBeCloseTo(0, 12);
+    expect(values[2]).toBeCloseTo(1, 12);
+    expect(values[4]).toBe(4);
+  });
+
+  it('refuses a port the signature does not declare', async () => {
+    const registered = await client.registerMatrix('it-port', [
+      { posName: 'Pos.1', annotation: 'A', data: [1] },
+    ]);
+    createdMatrices.push(registered.matrixId!);
+    const created = await client.createNode(
+      [{ portId: 'nope', varName: 'nope', mode: 'matrix', sourceMatrixId: registered.matrixId! }],
+      { signatureId: 'builtin:expression-columns', params: { formulas: [] } },
+    );
+    expect(created.ok).toBe(false);
+    expect(created.code).toBe('unknownPort');
+  });
+
   it('rejects an unknown signature with a structured refusal', async () => {
     const registered = await client.registerMatrix('it-unknown', [
       { posName: 'Pos.1', annotation: 'A', data: [1] },
