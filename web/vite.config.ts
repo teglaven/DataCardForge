@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
 export default defineConfig({
+  // Sub-path deployments (GitHub Pages serves at /<repo>/) need every asset URL prefixed.
+  // Local dev and the systemd service keep the default '/'.
+  base: process.env.VITE_BASE ?? '/',
   plugins: [react()],
   resolve: {
     alias: {
