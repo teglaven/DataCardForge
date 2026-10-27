@@ -574,8 +574,11 @@ async function fetchFullResult(
       return null;
     }
     const rows = frame.rows ?? 0;
-    if (fetched === 0) names = frame.names ?? [];
     const data = frame.data ?? [];
+    // An empty result matrix is a legitimate state (an erroring node clears its output);
+    // reading past it must stop, not spin the row counter forward.
+    if (data.length === 0) break;
+    if (fetched === 0) names = frame.names ?? [];
     for (let c = 0; c < data.length; ++c) {
       const chunk = Array.from(data[c]);
       if (columns[c]) columns[c].push(...chunk);
@@ -2027,7 +2030,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // the local→server mapping is deterministic; function cards that cannot register
       // (offline backend) simply stay grey and the banner carries the failure (contract 1).
       void (async () => {
-        const ordered = [...matrices.entries()].sort((a, b) => a[0] - b[0]);
+        // A function card's display cache is a *derived* view: its numbers come from the
+        // node's result matrix server-side. Registering it as a source would create a
+        // duplicate table that nothing reads (and leak one per restore).
+        const derivedIds = new Set(
+          restored.filter(isFormulaCard).map((card) => card.displayMatrixId),
+        );
+        const ordered = [...matrices.entries()]
+          .filter(([localId]) => !derivedIds.has(localId))
+          .sort((a, b) => a[0] - b[0]);
         for (const [localId, matrix] of ordered) {
           if (backendMatrixIds.has(localId)) continue;
           const columns = matrix.columns().map((col) => ({

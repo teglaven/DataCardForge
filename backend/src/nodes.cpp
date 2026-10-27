@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <queue>
+#include <set>
 
 #include "expression.h"
 #include "matrix_value.h"  // ShapeError (matrix-mode failures)
@@ -158,6 +159,36 @@ NodeRegistry::CreateResult NodeRegistry::createV2(const std::string& signatureId
     CreateResult refused;
     refused.errorCode = "unknownSignature";
     return refused;
+  }
+
+  // The signature declares the ports; a card may not invent its own. Refusing unknown or
+  // missing REQUIRED ports here (rather than failing later inside evaluation) keeps the
+  // contract where the spec puts it: the signature is the shape of the card.
+  // See docs/architecture/port-semantics-v1.md §inputs.
+  {
+    std::set<std::string> bound;
+    for (const auto& b : inputs) bound.insert(b.portId.empty() ? b.varName : b.portId);
+    for (const auto& binding : bound) {
+      bool declared = false;
+      for (const auto& port : sig->inputs) {
+        if (port.portId == binding) {
+          declared = true;
+          break;
+        }
+      }
+      if (!declared) {
+        CreateResult refused;
+        refused.errorCode = "unknownPort";
+        return refused;
+      }
+    }
+    for (const auto& port : sig->inputs) {
+      if (port.required && bound.count(port.portId) == 0) {
+        CreateResult refused;
+        refused.errorCode = "unboundPort";
+        return refused;
+      }
+    }
   }
 
   // Atomic edge check (same rule as v1): every source must exist, no edge may close a loop.

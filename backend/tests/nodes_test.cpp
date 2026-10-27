@@ -294,6 +294,17 @@ int main() {
   auto extended = nodes.get(sigNode.nodeId);
   CHECK(extended && extended->state == NodeState::Done);
 
+  // The signature declares the ports; a card may not invent its own. Refused at creation
+  // (not later inside evaluation), so a bad binding never produces a half-alive node.
+  PortBinding wrongPort;
+  wrongPort.portId = "nope";
+  wrongPort.varName = "nope";
+  wrongPort.sourceMatrixId = m2;
+  auto unknownPort = nodes.createV2("builtin:expression-columns", {wrongPort}, params);
+  CHECK(unknownPort.nodeId < 0 && unknownPort.errorCode == "unknownPort");
+  auto noBinding = nodes.createV2("builtin:expression-columns", {}, params);
+  CHECK(noBinding.nodeId < 0 && noBinding.errorCode == "unboundPort");
+
   // Definition version: an edit invalidates an in-flight evaluation. The registry cannot
   // be paused mid-run from a test, so this pins the mechanism (the version moves on every
   // definition change) plus the observable contract: after an edit + recompute, the node

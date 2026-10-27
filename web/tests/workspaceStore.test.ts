@@ -1391,3 +1391,35 @@ describe('function card chains', () => {
     }
   });
 });
+
+// ── restore hygiene (an adversarial review found this one) ──────────────────────
+describe('restore does not leak derived matrices', () => {
+  it('registers the source table on restore, not the function card display cache', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], nodeNames: ['Pos.1 double'] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const snapshot = store().toSnapshot();
+      // The snapshot carries two matrices: the source file and the result cache.
+      expect(snapshot.matrices).toHaveLength(2);
+
+      stub.calls.length = 0;
+      store().reset();
+      store().loadSnapshot(snapshot);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      const matrixPosts = stub.calls.filter(
+        (c) => c.url.endsWith('/matrices') && c.method === 'POST',
+      );
+      // Only the source is a real input; the display cache is a derived view and must NOT
+      // be re-registered (that would leak one duplicate table per restore).
+      expect(matrixPosts).toHaveLength(1);
+      const restored = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(restored.displayMatrixId).toBeGreaterThan(0);
+    } finally {
+      stub.restore();
+    }
+  });
+});
