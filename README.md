@@ -19,6 +19,9 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 verifiable author identity, timeline and commit anchors.
 **Verified state** (last verified 2026-10-27): 394 frontend unit tests · 7 backend ctest cases
 (3 opt-in) · 65 end-to-end smoke checks — all green.
+**Not finished yet**: function cards are a work in progress and the per-port logical-connection hints
+are being repaired after the schema v2 refactor — both are spelled out under
+[Status & known gaps](#status--known-gaps).
 
 ## Try it
 
@@ -153,6 +156,53 @@ Every image below is real headless-Chromium output of the production build, not 
 - > ⚠️ **Not suitable** for scenarios requiring exact decimal arithmetic (e.g., financial / accounting amounts) or arbitrary-precision computation — Excel and most similar tools cannot satisfy these either
 - The compute backend is a **required dependency** — without it, file loading and chart rendering still work locally, but formula evaluation and matrix operations are unavailable (with a visible banner)
 
+## Status & known gaps
+
+This repository is intentionally honest about what is finished: the table/chart path is complete and
+gated by tests, while the card-graph layer is still being closed out.
+
+| Area | State |
+|---|---|
+| Data cards, virtualised table, 9 chart types, exports, i18n, workspace persistence | **Done**, covered by unit + end-to-end gates |
+| Compute backend (expression engine, matrix operators, dependency graph, scheduling) | **Done** for the two shipped signatures (`builtin:expr`, `builtin:linear-regression`) |
+| **Function cards** | **Half-finished (WIP)** — see below |
+| **Logical-connection hints** | **Broken by the schema v2 refactor, repair pending** — see below |
+
+### Function cards are still a work in progress
+
+What already works: creating a function card from a column or from the toolbar, editing expressions
+(one row per output), the three-pane layout (input ports / formula editor / result grid), chaining a
+function card into the next one, plotting a function card's output, single-column port binding
+(`mode: "cell"`) and the column-count contract with its violation escape hatches.
+
+What is still missing, and why it is not "done":
+
+- **Per-signature parameter forms** — the parameter zone renders `params.formulas` only. A signature
+  whose parameters are not a formula list (e.g. confidence level, window size) has no form yet; the
+  card states its inputs in words instead of rendering controls.
+- **Output selector (K > 1)** — the card model carries one display cache, so a signature with several
+  outputs can only show output 0's table.
+- **Port anchors** — `portId` exists in the data model, but connection endpoints are still card-level,
+  so a port cannot be pointed at individually.
+- Interaction polish (layout, spacing, states) around the three panes.
+
+The data model and the contracts are settled (see
+[`docs/docs/decisions/2026-10-27-card-contracts.md`](docs/docs/decisions/2026-10-27-card-contracts.md),
+[`2026-10-26-card-schema-v2.md`](docs/docs/decisions/2026-10-26-card-schema-v2.md)); what is missing is
+UI on top of it. Treat the function card as **API-stable, UX-incomplete**.
+
+### Logical-connection hints need repair after the refactor
+
+The **per-port logical connection** hint is currently out of order. Connections are drawn at card
+level (one line per card-to-card dependency, with the "this table still feeds a chart" blink when a
+close is refused), and the card-level path is tested; the per-port layer — which port feeds which
+port, and what each connection means — lost its wiring when card schema v2 reshaped dependencies into
+an envelope and moved bindings onto ports. `portId` is in the model, the geometry and interaction are
+not.
+
+Consequence for users: connection behaviour you can trust is the card-level one; anything that would
+explain a link *at port granularity* should be treated as under repair, not as a bug report.
+
 ## Tech Stack
 
 | Component | Purpose | Notes |
@@ -260,12 +310,15 @@ GitHub Pages on every push that touches `web/` — that is what serves the live 
 - [x] **Frontend transport client** → backend handshake, matrix registration, event polling, visible offline banner (2026-10-17)
 - [x] **One-command dev + CI gate** → `scripts/dev.sh`, vite proxy, GitHub Actions backend-test job (2026-10-17)
 - [x] **Eigen matrix operators** → matmul, transpose, det, inv, solve + matrix-mode expression evaluator + 14 matrix fixtures (2026-10-17)
-- [x] **Function card UI**: three-pane layout (left: variable blocks + input ports + mode badges; top-right: formula editor; bottom-right: result grid + output port)
+- [ ] **Function card UI** — *partial*: the three-pane skeleton (input ports / formula editor / result grid),
+  expression + linear-regression signatures, card chaining and "result can be plotted" all work; still
+  missing per-signature parameter forms, an output selector for K > 1 signatures, and interaction polish
 - [x] **Unbounded canvas (pan)** → plane grows with the cards, four pan gestures, View → Reset View (2026-10-21)
 - [x] **Whole-workbench zoom** → wheel zoom anchored on the cursor, 10%–300%, cards/fonts/charts/connections scale together (2026-10-21)
 - [ ] **Canvas minimap / zoom shortcuts**: overview and keyboard zoom (the entry point is clear: reuse resetView's fit maths)
 - [ ] **VirtualTable windowed data source**: large matrices fetched by visible-row window, not loaded whole
 - [ ] **Port anchors**: per-port connection endpoints in `cardMetrics` + `ConnectionLayer`
+- [ ] **Per-port logical-connection hints** (regressed by the schema v2 refactor — see [Status & known gaps](#status--known-gaps))
 - [x] **Four-state status lamps** (2026-10-27): driven by node state events (gray/yellow/green/red)
 - [ ] Data **editing** capability (non-file-backed cards, double-click edit + formula evaluation)
 - [ ] Connection arrows / red-blue bidirectional highlight
