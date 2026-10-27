@@ -1,0 +1,130 @@
+{
+  "comment": "Card-layer differential fixtures — the referee format for schema-v2 function cards. BOTH sides run this file: web/tests/cardFixtures.test.ts (parses each card exactly like the store does and checks the derived port bindings + fixture invariants) and backend/tests/card_fixture_run.cpp (creates the same node through NodeRegistry and compares the produced matrices / structured errors). Non-finite values are the strings \"NaN\" / \"Infinity\" / \"-Infinity\" (JSON cannot carry them).",
+  "cases": [
+    {
+      "name": "expression-columns-wide-table",
+      "matrices": [
+        {
+          "id": 1,
+          "columns": [
+            { "posName": "Pos.1", "annotation": "A", "data": [1, 2, 3] },
+            { "posName": "Pos.2", "annotation": "B", "data": [10, 20, 30] }
+          ]
+        }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 1, "matrixId": 1 } }],
+        "signatureId": "builtin:expression-columns",
+        "params": {
+          "formulas": [
+            { "name": "double", "expression": "A * 2" },
+            { "name": "sum", "expression": "A + B" }
+          ]
+        }
+      },
+      "expect": {
+        "outputs": [
+          {
+            "outputId": "result",
+            "columns": [
+              { "name": "double", "data": [2, 4, 6] },
+              { "name": "sum", "data": [11, 22, 33] }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "expression-columns-posn-labels",
+      "matrices": [
+        {
+          "id": 2,
+          "columns": [
+            { "posName": "Pos.1", "annotation": "", "data": [3, 4] },
+            { "posName": "Pos.2", "annotation": "", "data": [1, 1] }
+          ]
+        }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 2, "matrixId": 2 } }],
+        "signatureId": "builtin:expression-columns",
+        "params": { "formulas": [{ "name": "diff", "expression": "Pos.1 - Pos.2" }] }
+      },
+      "expect": {
+        "outputs": [
+          { "outputId": "result", "columns": [{ "name": "diff", "data": [2, 3] }] }
+        ]
+      }
+    },
+    {
+      "name": "expression-columns-nan-propagates",
+      "matrices": [
+        {
+          "id": 3,
+          "columns": [{ "posName": "Pos.1", "annotation": "A", "data": [1, "NaN", 3] }]
+        }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 3, "matrixId": 3 } }],
+        "signatureId": "builtin:expression-columns",
+        "params": { "formulas": [{ "name": "shift", "expression": "A + 1" }] }
+      },
+      "expect": {
+        "outputs": [
+          { "outputId": "result", "columns": [{ "name": "shift", "data": [2, "NaN", 4] }] }
+        ]
+      }
+    },
+    {
+      "name": "expression-columns-unknown-column-errors",
+      "matrices": [
+        { "id": 4, "columns": [{ "posName": "Pos.1", "annotation": "A", "data": [1, 2] }] }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 4, "matrixId": 4 } }],
+        "signatureId": "builtin:expression-columns",
+        "params": { "formulas": [{ "name": "nope", "expression": "ZZ * 2" }] }
+      },
+      "expectError": { "code": "unknownColumn" }
+    },
+    {
+      "name": "expression-columns-contract-violation",
+      "matrices": [
+        { "id": 5, "columns": [{ "posName": "Pos.1", "annotation": "A", "data": [1, 2] }] }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 5, "matrixId": 5 } }],
+        "signatureId": "builtin:expression-columns",
+        "params": {
+          "formulas": [
+            { "name": "a", "expression": "A" },
+            { "name": "b", "expression": "A * 2" }
+          ],
+          "columnContract": { "outputId": "result", "columns": 1 }
+        }
+      },
+      "expectError": {
+        "code": "columnContractViolation",
+        "params": { "expected": 1, "actual": 2 }
+      }
+    },
+    {
+      "name": "expression-columns-missing-params",
+      "matrices": [
+        { "id": 6, "columns": [{ "posName": "Pos.1", "annotation": "A", "data": [1] }] }
+      ],
+      "card": {
+        "kind": "formula",
+        "inputs": [{ "portId": "src", "target": { "type": "matrix", "cardId": 6, "matrixId": 6 } }],
+        "signatureId": "builtin:expression-columns",
+        "params": {}
+      },
+      "expectError": { "code": "badSignatureParams" }
+    }
+  ]
+}

@@ -47,6 +47,14 @@ add_executable(dc_nodes_test tests/nodes_test.cpp)
 target_link_libraries(dc_nodes_test PRIVATE dc_core)
 add_test(NAME node_registry COMMAND dc_nodes_test)
 
+# Card-layer fixtures: the SAME JSON the TypeScript side parses
+# (web/tests/cardFixtures.test.ts). TS judges how a card becomes port bindings; this judges
+# what those bindings compute. Together they are the referee the v2 schema decision demands.
+add_executable(dc_card_fixture_run tests/card_fixture_run.cpp)
+target_link_libraries(dc_card_fixture_run PRIVATE dc_core)
+add_test(NAME card_fixtures
+  COMMAND dc_card_fixture_run ${CMAKE_SOURCE_DIR}/../web/tests/fixtures/cards/function-card.v2.json)
+
 # Both opt-in gates below need a Python interpreter, and find_package must run BEFORE
 # the add_test calls that expand ${Python3_EXECUTABLE} — otherwise the variable is empty,
 # the command degenerates to the bare script path, and ctest fails with BAD_COMMAND

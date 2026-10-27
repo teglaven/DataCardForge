@@ -51,8 +51,9 @@ import {
   INPUT_PORT_SOURCE,
   chartPortId,
 } from './migrate.ts';
+import { portBindingsFor } from './bindings.ts';
 import { translatorFor, detectLocale, type Locale } from './i18n.ts';
-import { BackendClient, type NodeEvent, type PortBindingDto } from '../backend/client.ts';
+import { BackendClient, type NodeEvent } from '../backend/client.ts';
 
 export { lineColor };
 
@@ -394,20 +395,7 @@ function sourceColumnLabel(column: { posName: string; annotation: string }): str
   return column.annotation !== '' ? column.annotation : column.posName;
 }
 
-/**
- * The single binding a function card sends: the whole source table under port `src`.
- *
- * v1 built one port per *referenced* column (a text scan per expression) because each
- * formula was its own node. With one node per card, one whole-table binding is both
- * simpler and cheaper: the engine already resolves every column by its label, and the
- * scan that decided which columns to bind disappears with the per-column mapping.
- */
-function buildTableBinding(
-  sourceBackendMatrixId: number,
-  portId = INPUT_PORT_SOURCE,
-): PortBindingDto {
-  return { portId, varName: portId, mode: 'matrix', sourceMatrixId: sourceBackendMatrixId };
-}
+
 
 /**
  * Make restored cards safe for the B-plan model.
@@ -453,16 +441,11 @@ async function syncFunctionCard(cardId: number): Promise<void> {
   const card = state.cards.find((c) => c.id === cardId);
   if (!card || !isFormulaCard(card)) return;
 
-  const input = card.inputs.find((entry) => entry.portId === INPUT_PORT_SOURCE);
-  if (!input || input.target.type !== 'matrix') return;
-
-  // The node must read the *server-side* copy of the referenced matrix. If it is not
+  // The node must read the *server-side* copies of the referenced matrices. If one is not
   // registered yet (offline at load time), there is nothing authoritative to bind to —
   // leave the node unregistered and let the offline banner carry the failure.
-  const sourceBackendId = backendMatrixIds.get(input.target.matrixId);
-  if (sourceBackendId === undefined) return;
-
-  const bindings = [buildTableBinding(sourceBackendId, INPUT_PORT_SOURCE)];
+  const bindings = portBindingsFor(card, (localId) => backendMatrixIds.get(localId) ?? null);
+  if (!bindings) return;
   const params: Record<string, unknown> = { formulas: card.params.formulas };
 
   const existing = card.node;
