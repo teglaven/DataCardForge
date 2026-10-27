@@ -439,10 +439,12 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
         }
 
         if (isFormulaCard(card)) {
-          const sourceCard = cards.find((c) => c.id === card.sourceCardId);
+          // v2: the card reads ONE explicit matrix (its own input), not "whatever file the
+          // source table happens to show". Resolve that reference directly.
+          const input = card.inputs.find((entry) => entry.target.type === 'matrix');
           const sourceMatrix =
-            sourceCard && isMatrixCard(sourceCard)
-              ? matrices.get(sourceCard.sources[sourceCard.activeSource]?.matrixId ?? -1)
+            input && input.target.type === 'matrix'
+              ? matrices.get(input.target.matrixId)
               : undefined;
           const sourceColumnNames = sourceMatrix
             ? sourceMatrix.columns().map((c) => c.annotation || c.posName)
@@ -451,7 +453,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
             <FormulaCard
               key={card.id}
               card={card}
-              resultMatrix={matrices.get(card.resultMatrixId)}
+              resultMatrix={matrices.get(card.displayMatrixId)}
               sourceColumnNames={sourceColumnNames}
               active={active}
               closeBlocked={closeBlocked}

@@ -78,6 +78,28 @@ names     namesLen 字节的 JSON 数组（UTF-8），元素是 "Pos.1 annotatio
 （不带 HTTP 分块），服务端解码后与 JSON 端点等价入库。NaN 原样传输（IEEE 754），
 前端渲染为 `—` 的既有约定不变。
 
+## v2 增量（卡片 schema v2 / 函数签名）
+
+以下字段全部**纯增量**：只发 `varName` 的 v1 客户端行为不变。
+
+- `PortBinding` 增加 `portId`（稳定身份，缺省回退为 `varName`）与 `sourceOutputIndex`
+  （引用 K 输出节点的第几个输出，v1 数据恒为 0）。
+- `POST /api/nodes` 增加 `signatureId` + `params`（对象）：
+
+  ```json
+  { "signatureId": "builtin:expression-columns",
+    "inputs": [{ "portId": "src", "varName": "src", "mode": "matrix", "sourceMatrixId": 7 }],
+    "params": { "formulas": [{ "name": "double", "expression": "A * 2" }] } }
+  ```
+
+  未知签名 ⇒ `400 {code:"unknownSignature"}`；签名参数缺失/非法 ⇒ 节点进入 error，
+  `code:"badSignatureParams"`。`params` 不产生也不删除任何边（参数不是数据流）。
+- 节点响应（`POST` / `GET /api/nodes/{id}`）增加 `resultMatrixIds`（按签名输出序的数组，
+  K 由签名固定）；单值 `resultMatrixId` 保留为输出 0，向后兼容。
+- `PATCH /api/nodes/{id}` 接受 `params`（替换整个参数包并置 dirty）。
+- `builtin:expression-columns`：一节点、一宽表输出，每表达式一列（列名作 annotation）；
+  取代 v1 的「每公式列一个节点」。列数随表达式个数变化属于**数据**，K 仍为 1。
+
 ## 结构化错误
 
 ```

@@ -33,7 +33,12 @@ export interface MatrixRegisterResult {
 export interface NodeCreateResult {
   ok: boolean;
   nodeId?: number;
+  /** Output 0 (legacy field). */
   resultMatrixId?: number;
+  /** Every declared output, indexed by the signature's output ordinal. */
+  resultMatrixIds?: number[];
+  /** Echoes the signature the server created the node with (v2). */
+  signatureId?: string;
   state?: NodeStateName;
   /** Structured refusal data when ok=false (cycle path etc.). Never user prose. */
   code?: string;
@@ -73,10 +78,14 @@ export interface MatrixWindow {
 }
 
 export interface PortBindingDto {
+  /** Stable port identity (v2); the server falls back to `varName` when omitted. */
+  portId?: string;
   varName: string;
   mode: 'cell' | 'matrix';
   sourceMatrixId?: number;
   sourceNodeId?: number;
+  /** Which output of a K-output upstream node (v1 data is always 0). */
+  sourceOutputIndex?: number;
 }
 
 async function jsonRequest<T>(base: string, path: string, init?: RequestInit): Promise<T> {
@@ -196,13 +205,27 @@ export class BackendClient {
     }
   }
 
-  async createNode(inputs: PortBindingDto[], formula: string): Promise<NodeCreateResult> {
+  /**
+   * Create a compute node.
+   *
+   * v1 shape: `{inputs, formula}` for a single expression. v2 shape: `{inputs, signatureId,
+   * params}` for a signature-driven node with K declared outputs.
+   */
+  async createNode(
+    inputs: PortBindingDto[],
+    arg: string | { signatureId: string; params: Record<string, unknown> },
+  ): Promise<NodeCreateResult> {
+    const body = typeof arg === 'string'
+      ? { inputs, formula: arg }
+      : { inputs, signatureId: arg.signatureId, params: arg.params };
     try {
-      const r = await jsonRequest<{ nodeId: number; resultMatrixId: number; state: NodeStateName }>(
-        this.base,
-        '/nodes',
-        { method: 'POST', body: JSON.stringify({ inputs, formula }) },
-      );
+      const r = await jsonRequest<{
+        nodeId: number;
+        resultMatrixId: number;
+        resultMatrixIds?: number[];
+        signatureId?: string;
+        state: NodeStateName;
+      }>(this.base, '/nodes', { method: 'POST', body: JSON.stringify(body) });
       return { ok: true, ...r };
     } catch (e) {
       const err = e as { code?: string; params?: { path?: number[] } };
@@ -210,7 +233,14 @@ export class BackendClient {
     }
   }
 
-  async patchNode(nodeId: number, patch: { formula?: string; inputs?: PortBindingDto[] }): Promise<NodeCreateResult> {
+  async patchNode(
+    nodeId: number,
+    patch: {
+      formula?: string;
+      inputs?: PortBindingDto[];
+      params?: Record<string, unknown>;
+    },
+  ): Promise<NodeCreateResult> {
     try {
       const r = await jsonRequest<{ nodeId: number; state: NodeStateName }>(this.base, `/nodes/${nodeId}`, {
         method: 'PATCH',

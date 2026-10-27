@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { MatrixData } from '../../core/MatrixData.ts';
 import { useTranslator, useWorkspace } from '../workspaceStore.ts';
-import type { FormulaCardModel, NodeStatus } from '../types.ts';
+import type { FormulaColumn, FunctionCardModel, NodeStatus } from '../types.ts';
 import type { MessageKey } from '../i18n.ts';
 import { CardShell } from './CardShell.tsx';
 import { VirtualTable } from './VirtualTable.tsx';
@@ -25,7 +25,7 @@ import { VirtualTable } from './VirtualTable.tsx';
 const FORMULA_DEBOUNCE_MS = 250;
 
 interface FormulaCardProps {
-  card: FormulaCardModel;
+  card: FunctionCardModel;
   resultMatrix: MatrixData | undefined;
   sourceColumnNames: string[];
   active: boolean;
@@ -57,29 +57,31 @@ export function FormulaCard({
    * asynchronously — so committing on each keystroke would spam the server and re-render on
    * every character.
    */
-  const [draft, setDraft] = useState(() => card.formulas.map((formula) => ({ ...formula })));
-  const identityRef = useRef({ id: card.id, count: card.formulas.length });
+  const [draft, setDraft] = useState<FormulaColumn[]>(() =>
+    card.params.formulas.map((formula) => ({ ...formula })),
+  );
+  const identityRef = useRef({ id: card.id, count: card.params.formulas.length });
 
   // Re-sync only when the card itself or the number of formulas changes; re-syncing on
   // every store update would fight the user's typing.
   useEffect(() => {
     const previous = identityRef.current;
-    if (previous.id === card.id && previous.count === card.formulas.length) return;
-    identityRef.current = { id: card.id, count: card.formulas.length };
-    setDraft(card.formulas.map((formula) => ({ ...formula })));
-  }, [card.id, card.formulas]);
+    if (previous.id === card.id && previous.count === card.params.formulas.length) return;
+    identityRef.current = { id: card.id, count: card.params.formulas.length };
+    setDraft(card.params.formulas.map((formula) => ({ ...formula })));
+  }, [card.id, card.params.formulas]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       draft.forEach((formula, index) => {
-        const current = card.formulas[index];
+        const current = card.params.formulas[index];
         if (!current) return;
         if (current.name === formula.name && current.expression === formula.expression) return;
         setFormula(card.id, index, formula.name, formula.expression);
       });
     }, FORMULA_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [draft, card.formulas, card.id, setFormula]);
+  }, [draft, card.params.formulas, card.id, setFormula]);
 
   /**
    * Per-column error text, straight from the node's structured status.
@@ -90,26 +92,29 @@ export function FormulaCard({
    */
   const errors = useMemo(() => {
     const map = new Map<number, string>();
-    card.nodes.forEach((status: NodeStatus | null, index: number) => {
-      if (!status || status.state !== 'error') return;
+    // v2: one node for the whole card. Its structured error applies to the card, so it is
+    // shown against every row (there is no per-column node to blame any more).
+    const status: NodeStatus | null = card.node;
+    if (status && status.state === 'error') {
       const code = status.code ?? 'internalError';
       const params = normaliseErrorParams(status.params);
       const key = `formula.error.${code}` as MessageKey;
       const localised = t(key, params);
       // Unknown code ⇒ t() returns the key unchanged: show a fallback sentence + raw code.
-      map.set(index, localised === key ? `${t('formula.error.unknown')} (${code})` : localised);
-    });
+      const message = localised === key ? `${t('formula.error.unknown')} (${code})` : localised;
+      draft.forEach((_formula, index) => map.set(index, message));
+    }
     return map;
-  }, [card.nodes, t]);
+  }, [card.node, draft, t]);
 
   const rows = resultMatrix?.rowCount() ?? 0;
   const cols = resultMatrix?.columnCount() ?? 0;
   // Was `F${card.id}` — the internal card counter leaking into the title.
   const title = t('card.formula', {
-    name: draft[0]?.name || card.formulas[0]?.name || t('card.unlabeled'),
+    name: draft[0]?.name || card.params.formulas[0]?.name || t('card.unlabeled'),
   });
-  const badge = `${card.formulas.length} ${t('formula.columns')} · ${rows} ${t('formula.rows')}`;
-  const overallState = aggregateNodeState(card.nodes);
+  const badge = `${card.params.formulas.length} ${t('formula.columns')} · ${rows} ${t('formula.rows')}`;
+  const overallState = aggregateNodeState([card.node]);
 
   return (
     <CardShell
@@ -164,7 +169,7 @@ export function FormulaCard({
                   )
                 }
               />
-              <span className={`node-light node-light--${card.nodes[index]?.state ?? 'dirty'}`} aria-hidden />
+              <span className={`node-light node-light--${card.node?.state ?? 'dirty'}`} aria-hidden />
               {draft.length > 1 ? (
                 <button
                   type="button"

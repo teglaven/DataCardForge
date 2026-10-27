@@ -1,9 +1,20 @@
 /**
- * Card-layer types.
+ * Card-layer types — **schema v2** (docs/decisions/2026-10-26-card-schema-v2.md).
  *
  * A card is a record in the store and a React component renders it. Keeping cards as
  * data (rather than classes) is what makes the workspace persistable and the dependency
  * graph easy to reason about.
+ *
+ * v2 changes, all of them consequences of the function-card review:
+ *   - **Dependencies live on the envelope** (`CardBase.inputs`), not inside each payload.
+ *     Rebuilding the graph is one pass with zero per-kind knowledge — which is what makes
+ *     the old "formula dependencies silently vanish on reload" bug impossible.
+ *   - **References point at explicit matrices**, not at "a card, whatever file it happens
+ *     to be showing". Switching a table's active file no longer silently re-points a
+ *     function card's input; that is now an explicit, visible operation.
+ *   - **A function card is ONE node with K outputs** (`outputs[]`), not N nodes. The old
+ *     per-column mapping computed the same input N times and could not express a
+ *     heterogeneous K-output function (SVD's U/S/V).
  *
  * The header comment used to describe these as mirroring the Qt widget layer; that C++
  * tree was removed on 2026-10-15 (docs/decisions/2026-10-15-qt-implementation-removed.md),
@@ -24,6 +35,17 @@ export interface CardBounds {
   height: number;
 }
 
+/**
+ * One data dependency. `portId` is the stable identity — renaming a display label must
+ * never change it, and connections are recognised by it, never by position.
+ */
+export interface PortConnection {
+  portId: string;
+  target:
+    | { type: 'matrix'; cardId: number; matrixId: number }
+    | { type: 'cell'; cardId: number; matrixId: number; column: number; row?: number };
+}
+
 export interface CardBase extends CardBounds {
   id: number;
   kind: CardKind;
@@ -31,6 +53,11 @@ export interface CardBase extends CardBounds {
   /** Stacking order; the highest value is the active card. */
   z: number;
   createdAt: number;
+  /**
+   * First-class citizen: who this card reads from. The dependency graph is rebuilt by
+   * walking this array — never by inspecting a payload.
+   */
+  inputs: PortConnection[];
 }
 
 /** One parsed file inside a matrix card. */
@@ -57,7 +84,7 @@ export function identityKey(identity: FileIdentity): string {
 
 export interface MatrixCardModel extends CardBase {
   kind: 'matrix';
-  /** All files loaded into this card. */
+  /** All files loaded into this card. Content, not a dependency — `inputs` is always []. */
   sources: MatrixSource[];
   /** Index into `sources` of the file currently displayed. */
   activeSource: number;
@@ -73,7 +100,13 @@ export interface SourceRef {
 
 export interface ChartCardModel extends CardBase {
   kind: 'chart';
-  /** Chart type plus its attached columns and presentation options. */
+  /**
+   * Chart type plus its attached columns and presentation options.
+   *
+   * `config.sources` is a *display view* in v2: the authoritative dependency edges live
+   * on `inputs` (one `cell` connection per attached column, plus one `x` connection for
+   * an explicit X axis). The two are kept in step by the store.
+   */
   config: ChartConfig;
   smoothing: SmoothingOptions;
   /**
@@ -86,48 +119,63 @@ export interface ChartCardModel extends CardBase {
 /**
  * A compute node as the browser sees it (B-plan: docs/decisions/2026-10-17-backend-owns-compute.md).
  *
- * The card no longer computes anything; it mirrors one server node's state machine so the
- * UI can light an indicator (dirty/computing/done/error → 灰/黄/绿/红) and render a localised
- * message from a structured error code. `code`/`params` are present only while `state === 'error'`;
- * the user-facing sentence comes from i18n key `formula.error.<code>`, never from the server.
+ * One card owns **one** node in v2. The card no longer computes anything; it mirrors the
+ * server node's state machine so the UI can light an indicator (dirty/computing/done/error
+ * → 灰/黄/绿/红) and render a localised message from a structured error code. `code`/`params`
+ * are present only while `state === 'error'`; the user-facing sentence comes from i18n key
+ * `formula.error.<code>`, never from the server.
  */
 export interface NodeStatus {
   nodeId: number;
-  resultMatrixId: number;
   state: 'dirty' | 'computing' | 'done' | 'error';
   /** Structured error identity from the backend (never user prose). */
   code?: string;
   params?: Record<string, unknown>;
 }
 
-/** A formula card computes derived columns from expressions over a source matrix card. */
-export interface FormulaCardModel extends CardBase {
-  kind: 'formula';
-  /** The matrix card this formula reads from. */
-  sourceCardId: number;
-  /** One expression per output column. Each produces a new column in the result matrix. */
-  formulas: Array<{
-    /** Display name for the derived column. */
-    name: string;
-    /** The expression, e.g. `(A - AVG(A)) / STD(A)`. */
-    expression: string;
-  }>;
-  /**
-   * The computed result matrix id (stored in the matrices map).
-   *
-   * Under the B-plan this is a **read-only display cache**: its contents come from the
-   * backend's result matrices, keyed by revision, and nothing writes into it locally.
-   */
+/** One output declaration plus the server matrix that carries its values. */
+export interface OutputBinding {
+  /** Stable identity from the signature's output list. */
+  outputId: string;
+  /** Server-side result matrix id (authoritative copy); -1 until registration. */
   resultMatrixId: number;
-  /**
-   * One backend compute node per formula column, index-aligned with `formulas`.
-   * `null` while registration is pending or when the backend is unreachable — which is
-   * exactly why the four-state light must not silently assume a node exists.
-   */
-  nodes: Array<NodeStatus | null>;
 }
 
-export type CardModel = MatrixCardModel | ChartCardModel | FormulaCardModel;
+/** One derived column: a display name and the expression that computes it. */
+export interface FormulaColumn {
+  name: string;
+  expression: string;
+}
+
+/** Parameters of `builtin:expression-columns` (one expression per output column). */
+export interface ExpressionColumnsParams {
+  formulas: FormulaColumn[];
+}
+
+/**
+ * A function card: a signature + parameters + K declared outputs, backed by ONE node.
+ *
+ * `signatureId` names an entry in the signature registry (built-in today, plugin
+ * implementations tomorrow — the port-semantics spec forbids a second entry point).
+ */
+export interface FunctionCardModel extends CardBase {
+  kind: 'formula';
+  signatureId: string;
+  /** Parameters are separate from the dataflow graph: changing one adds/removes no edge. */
+  params: ExpressionColumnsParams;
+  /** K outputs = one node. K is fixed by the signature, never by the data. */
+  outputs: OutputBinding[];
+  /** The single backend compute node; null while registration is pending/offline. */
+  node: NodeStatus | null;
+  /**
+   * Local display-cache matrix id (frontend id space, like a matrix card's `sources[]`).
+   * Under the B-plan this is a **read-only cache** filled from the backend's result
+   * matrix; nothing writes into it locally.
+   */
+  displayMatrixId: number;
+}
+
+export type CardModel = MatrixCardModel | ChartCardModel | FunctionCardModel;
 
 export function isMatrixCard(card: CardModel): card is MatrixCardModel {
   return card.kind === 'matrix';
@@ -137,8 +185,18 @@ export function isChartCard(card: CardModel): card is ChartCardModel {
   return card.kind === 'chart';
 }
 
-export function isFormulaCard(card: CardModel): card is FormulaCardModel {
+export function isFormulaCard(card: CardModel): card is FunctionCardModel {
   return card.kind === 'formula';
+}
+
+/**
+ * Does this card read from any matrix owned by `cardId`?
+ *
+ * Reads `inputs` only — the one place dependencies live. Used by close protection and by
+ * the chart-refresh path, so neither needs kind-specific knowledge.
+ */
+export function dependsOnCard(card: CardModel, cardId: number): boolean {
+  return card.inputs.some((input) => input.target.cardId === cardId);
 }
 
 /** Persisted card snapshot (no matrix payload — that travels in `MatrixSnapshot`). */
@@ -152,7 +210,7 @@ export interface MatrixSnapshot {
 }
 
 export interface WorkspaceSnapshot {
-  version: 1;
+  version: 2;
   savedAt: string;
   cards: CardSnapshot[];
   matrices: MatrixSnapshot[];
@@ -161,4 +219,3 @@ export interface WorkspaceSnapshot {
 }
 
 export type { ChartConfig, ChartSource, ChartTypeId };
-

@@ -12,7 +12,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { MatrixData } from '../src/core/MatrixData.ts';
 import { useWorkspace } from '../src/ui/workspaceStore.ts';
-import { isChartCard, isMatrixCard, type ChartCardModel, type FormulaCardModel, type MatrixCardModel } from '../src/ui/types.ts';
+import {
+  isChartCard,
+  isMatrixCard,
+  type ChartCardModel,
+  type FunctionCardModel,
+  type MatrixCardModel,
+} from '../src/ui/types.ts';
 import { decodeMatrixFrame } from '../src/backend/client.ts';
 
 /**
@@ -328,7 +334,7 @@ describe('snapshot round-trip', () => {
     store().addMatrixCard([{ name: '1.txt', matrix: matrix([[1.5, 2.5]]) }]);
     const text = JSON.stringify(store().toSnapshot());
     expect(text).not.toContain('Infinity');
-    expect(JSON.parse(text).version).toBe(1);
+    expect(JSON.parse(text).version).toBe(2);
   });
 
   it('round-trips the column dock state and the chart→matrix edge', () => {
@@ -671,11 +677,17 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
         if (opts.createState === 'error') {
           return err(opts.error?.code ?? 'unexpectedToken', opts.error?.params ?? {});
         }
-        return json({ nodeId, resultMatrixId, state: opts.createState ?? 'done' });
+        return json({
+          nodeId,
+          resultMatrixId,
+          resultMatrixIds: [resultMatrixId],
+          signatureId: 'builtin:expression-columns',
+          state: opts.createState ?? 'done',
+        });
       }
       if (/\/nodes\/\d+$/.test(url) && method === 'PATCH') {
         const id = Number(url.split('/').pop());
-        return json({ nodeId: id, state: opts.createState ?? 'done' });
+        return json({ nodeId: id, state: opts.createState ?? 'done', resultMatrixIds: [nextMatrixId - 1] });
       }
       if (/\/nodes\/\d+$/.test(url) && method === 'DELETE') {
         return json({ deleted: Number(url.split('/').pop()) });
@@ -711,7 +723,7 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
     return cardId;
   }
 
-  it('registers one compute node per formula column on creation', async () => {
+  it('registers ONE signature node binding the whole table', async () => {
     const stub = stubBackend({ nodeResult: [[2, 4, 6]] });
     try {
       const srcId = await loadSource([[1], [2], [3]], ['A']);
@@ -720,25 +732,35 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
       const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
       expect(creates).toHaveLength(1);
       const payload = JSON.parse(creates[0].body!);
-      expect(payload.formula).toBe('A * 2');
-      expect(payload.inputs).toEqual([{ varName: 'A', mode: 'matrix', sourceMatrixId: 100 }]);
-      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
-      expect(card.nodes[0]?.nodeId).toBe(1);
-      expect(card.nodes[0]?.state).toBe('done');
+      // v2: one signature-driven node, one whole-table binding under port `src`.
+      expect(payload.signatureId).toBe('builtin:expression-columns');
+      expect(payload.formula).toBeUndefined();
+      expect(payload.inputs).toEqual([
+        { portId: 'src', varName: 'src', mode: 'matrix', sourceMatrixId: 100 },
+      ]);
+      expect(payload.params.formulas).toEqual([{ name: 'A × 2', expression: 'A * 2' }]);
+      const card = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(card.node?.nodeId).toBe(1);
+      expect(card.node?.state).toBe('done');
+      // K is fixed by the signature: one declared output carrying the server matrix.
+      expect(card.outputs).toHaveLength(1);
+      expect(card.outputs[0].resultMatrixId).toBe(101);
     } finally {
       stub.restore();
     }
   });
 
   it('pulls the done result through the window endpoint into the display cache', async () => {
-    const stub = stubBackend({ nodeResult: [[2, 4, 6]], nodeNames: ['Pos.1'] });
+    const stub = stubBackend({ nodeResult: [[2, 4, 6]], nodeNames: ['Pos.1 doubled'] });
     try {
       const srcId = await loadSource([[1], [2], [3]], ['A']);
       const fId = store().addFormulaCard(srcId)!;
       await flush();
-      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
-      const resultMatrix = store().matrices.get(card.resultMatrixId)!;
+      const card = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      const resultMatrix = store().matrices.get(card.displayMatrixId)!;
       expect(Array.from(resultMatrix.column(0).data)).toEqual([2, 4, 6]);
+      // The expression name rides on the annotation, so a wide table is self-describing.
+      expect(resultMatrix.column(0).annotation).toBe('doubled');
       // It really hit the documented window route, not a local evaluation.
       expect(stub.calls.some((c) => c.url.includes('/window'))).toBe(true);
     } finally {
@@ -746,7 +768,7 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
     }
   });
 
-  it('patches the existing node when a formula is edited', async () => {
+  it('patches the SAME node (params) when a formula is edited', async () => {
     const stub = stubBackend({ nodeResult: [[3, 6, 9]] });
     try {
       const srcId = await loadSource([[1], [2], [3]], ['A']);
@@ -755,42 +777,51 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
       stub.calls.length = 0;
       store().setFormula(fId, 0, 'Triple', 'A * 3');
       await flush();
-      const patch = stub.calls.find((c) => /\/nodes\/\d+$/.test(c.url) && c.method === 'PATCH');
-      expect(patch).toBeDefined();
-      expect(JSON.parse(patch!.body!).formula).toBe('A * 3');
+      const patches = stub.calls.filter((c) => /\/nodes\/\d+$/.test(c.url) && c.method === 'PATCH');
+      // One edit ⇒ one PATCH (v1 needed one node per column, each re-evaluating the input).
+      expect(patches).toHaveLength(1);
+      const payload = JSON.parse(patches[0].body!);
+      expect(payload.params.formulas).toEqual([{ name: 'Triple', expression: 'A * 3' }]);
+      expect(payload.formula).toBeUndefined();
+      expect(payload.inputs).toHaveLength(1);
     } finally {
       stub.restore();
     }
   });
 
-  it('deletes the node when a formula column is removed', async () => {
+  it('adding a second column still uses the one node (no node is created or deleted)', async () => {
     const stub = stubBackend({ nodeResult: [[2, 4]] });
     try {
       const srcId = await loadSource([[1], [2]], ['A']);
       const fId = store().addFormulaCard(srcId)!;
       await flush();
-      // Add a second column so removing one is allowed.
+      stub.calls.length = 0;
       store().setFormula(fId, 1, 'B2', 'A * 2');
       await flush();
-      const secondNode = (store().cards.find((c) => c.id === fId) as FormulaCardModel).nodes[1];
-      expect(secondNode?.nodeId).toBe(2);
+      const card = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(card.params.formulas).toHaveLength(2);
+      expect(card.node?.nodeId).toBe(1);
+      expect(stub.calls.some((c) => c.method === 'POST' && c.url.endsWith('/nodes'))).toBe(false);
+      expect(stub.calls.some((c) => c.method === 'DELETE')).toBe(false);
+      // Removing one column also keeps the node.
       stub.calls.length = 0;
       store().removeFormula(fId, 1);
       await flush();
-      const del = stub.calls.find((c) => c.method === 'DELETE' && /\/nodes\/2$/.test(c.url));
-      expect(del).toBeDefined();
+      expect(stub.calls.some((c) => c.method === 'DELETE')).toBe(false);
+      const after = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(after.node?.nodeId).toBe(1);
     } finally {
       stub.restore();
     }
   });
 
-  it('deletes every node and releases results when the card closes', async () => {
+  it('deletes the node when the card closes', async () => {
     const stub = stubBackend({ nodeResult: [[2, 4]] });
     try {
       const srcId = await loadSource([[1], [2]], ['A']);
       const fId = store().addFormulaCard(srcId)!;
       await flush();
-      const nodeId = (store().cards.find((c) => c.id === fId) as FormulaCardModel).nodes[0]!.nodeId;
+      const nodeId = (store().cards.find((c) => c.id === fId) as FunctionCardModel).node!.nodeId;
       stub.calls.length = 0;
       expect(store().removeCard(fId)).toBe(true);
       await flush();
@@ -806,13 +837,13 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
       const srcId = await loadSource([[1], [2]], ['A']);
       const fId = store().addFormulaCard(srcId)!;
       await flush();
-      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
-      expect(card.nodes[0]?.state).toBe('error');
-      expect(card.nodes[0]?.code).toBe('unknownColumn');
+      const card = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(card.node?.state).toBe('error');
+      expect(card.node?.code).toBe('unknownColumn');
       // The key the UI will render resolves to real copy, never a silent blank.
       const msg = (await import('../src/ui/i18n.ts')).translatorFor('en')(
-        `formula.error.${card.nodes[0]!.code}` as never,
-        card.nodes[0]!.params as never,
+        `formula.error.${card.node!.code}` as never,
+        card.node!.params as never,
       );
       expect(msg).toContain('Unknown column');
     } finally {
@@ -820,17 +851,17 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
     }
   });
 
-  it('does NOT compute locally or register nodes when the backend is unreachable', async () => {
+  it('does NOT compute locally or register a node when the backend is unreachable', async () => {
     const stub = stubBackend({ failAll: true });
     try {
       const srcId = await loadSource([[1], [2], [3]], ['A']);
       const fId = store().addFormulaCard(srcId)!;
       await flush();
-      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
+      const card = store().cards.find((c) => c.id === fId) as FunctionCardModel;
       // No node was ever created (the source matrix could not be registered either).
-      expect(card.nodes.every((n) => n === null)).toBe(true);
+      expect(card.node).toBeNull();
       // And crucially: the display cache stayed EMPTY — no fabricated [2,4,6].
-      const resultMatrix = store().matrices.get(card.resultMatrixId)!;
+      const resultMatrix = store().matrices.get(card.displayMatrixId)!;
       expect(resultMatrix.rowCount()).toBe(0);
       // Offline is VISIBLE via the banner contract (backend state flips offline on failure).
       expect(store().backend.state).toBe('offline');
@@ -845,13 +876,13 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
       const srcId = await loadSource([[1], [2]], ['A']);
       const fId = store().addFormulaCard(srcId)!;
       await flush();
-      const nid = (store().cards.find((c) => c.id === fId) as FormulaCardModel).nodes[0]!.nodeId;
+      const nid = (store().cards.find((c) => c.id === fId) as FunctionCardModel).node!.nodeId;
       // A `done`→`error` transition arrives through the stream with code + params.
       store().applyNodeEvent({ seq: 500, nodeId: nid, state: 'error', code: 'unknownColumn', params: { position: 3 } });
-      const card = store().cards.find((c) => c.id === fId) as FormulaCardModel;
-      expect(card.nodes[0]?.state).toBe('error');
-      expect(card.nodes[0]?.code).toBe('unknownColumn');
-      expect(card.nodes[0]?.params).toEqual({ position: 3 });
+      const card = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(card.node?.state).toBe('error');
+      expect(card.node?.code).toBe('unknownColumn');
+      expect(card.node?.params).toEqual({ position: 3 });
     } finally {
       stub.restore();
     }
@@ -874,15 +905,89 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
       const srcId = await loadSource([[1], [2]], ['A']);
       const fId = store().addFormulaCard(srcId)!;
       await flush();
-      const before = store().cards.find((c) => c.id === fId) as FormulaCardModel;
-      const nid = before.nodes[0]!.nodeId;
+      const before = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      const nid = before.node!.nodeId;
       store().applyNodeEvent({ seq: 999, nodeId: nid, state: 'computing' });
-      expect((store().cards.find((c) => c.id === fId) as FormulaCardModel).nodes[0]?.state).toBe('computing');
-      store().applyNodeEvent({ seq: 1000, nodeId: nid, state: 'done', matrixId: before.nodes[0]!.resultMatrixId });
+      expect((store().cards.find((c) => c.id === fId) as FunctionCardModel).node?.state).toBe('computing');
+      store().applyNodeEvent({ seq: 1000, nodeId: nid, state: 'done', matrixId: before.outputs[0].resultMatrixId });
       await flush();
-      const after = store().cards.find((c) => c.id === fId) as FormulaCardModel;
-      expect(after.nodes[0]?.state).toBe('done');
-      expect(Array.from(store().matrices.get(after.resultMatrixId)!.column(0).data)).toEqual([7, 8]);
+      const after = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(after.node?.state).toBe('done');
+      expect(Array.from(store().matrices.get(after.displayMatrixId)!.column(0).data)).toEqual([7, 8]);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('binds the explicit matrix the card was created with, not the table active file', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]] });
+    try {
+      const srcId = store().addMatrixCard([
+        { name: 'a.txt', matrix: matrix([[1], [2]], ['A']) },
+        { name: 'b.txt', matrix: matrix([[10], [20]], ['A']) },
+      ]);
+      await flush();
+      const card = store().cards.find((c) => c.id === srcId) as MatrixCardModel;
+      const secondMatrixId = card.sources[1].matrixId;
+      const fId = store().addFormulaCard(srcId, secondMatrixId)!;
+      await flush();
+      const created = JSON.parse(
+        stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST')[0].body!,
+      );
+      // The binding points at the SECOND file's server id (100 is the first, 101 the second).
+      expect(created.inputs[0].sourceMatrixId).toBe(101);
+      const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(fn.inputs).toEqual([
+        { portId: 'src', target: { type: 'matrix', cardId: srcId, matrixId: secondMatrixId } },
+      ]);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('switching the source file does NOT re-point the function card (v2 behaviour)', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      const frozenMatrixId = fn.inputs[0].target.type === 'matrix' ? fn.inputs[0].target.matrixId : -1;
+      stub.calls.length = 0;
+      // An explicit re-point is the only way to change the input…
+      store().setActiveSource(srcId, 0);
+      await flush();
+      expect(stub.calls.some((c) => /\/nodes\/\d+$/.test(c.url) && c.method === 'PATCH')).toBe(false);
+      const after = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(after.inputs[0].target).toMatchObject({ matrixId: frozenMatrixId });
+      // …and the dependency edge is still there (close protection must keep working).
+      expect(store().dependencies.getDependents(srcId)).toContain(fId);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('re-registers restored function cards once (node ids do not survive a restart)', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      const snapshot = store().toSnapshot();
+      expect(snapshot.version).toBe(2);
+      stub.calls.length = 0;
+      store().reset();
+      store().loadSnapshot(snapshot);
+      await flush();
+      // Restored card has no node until it is registered again…
+      const restored = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(restored.outputs[0].resultMatrixId).toBeGreaterThan(0);
+      // …and the restore registered it exactly once.
+      const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(creates).toHaveLength(1);
+      const payload = JSON.parse(creates[0].body!);
+      expect(payload.signatureId).toBe('builtin:expression-columns');
+      expect(payload.params.formulas).toHaveLength(1);
     } finally {
       stub.restore();
     }

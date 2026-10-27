@@ -8,6 +8,7 @@
  */
 import { MatrixData } from '../core/MatrixData.ts';
 import { FILE_ACCEPT, loadMatrixFile } from '../loaders/FileLoaderFactory.ts';
+import { migrateWorkspace, WorkspaceFormatError } from './migrate.ts';
 import type { WorkspaceSnapshot } from './types.ts';
 
 /** Open the native picker and resolve with the chosen files (empty when cancelled). */
@@ -166,19 +167,22 @@ export function downloadText(
   return downloadBlob(filename, new Blob([text], { type: mime }));
 }
 
-/** Read and validate a workspace JSON file. */
+/**
+ * Read, upgrade and validate a workspace JSON file.
+ *
+ * Accepts schema v1 and v2; v1 is migrated by `migrateWorkspace` (pure + deterministic,
+ * see docs/decisions/2026-10-26-card-schema-v2.md). Writing is always v2, so a saved file
+ * only ever needs one migration pass in a user's lifetime.
+ */
 export async function readWorkspace(file: File): Promise<WorkspaceSnapshot> {
   const text = await file.text();
-  const parsed: unknown = JSON.parse(text);
-  if (typeof parsed !== 'object' || parsed === null) {
-    throw new Error('Workspace file is not a JSON object.');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new WorkspaceFormatError(
+      `Workspace file is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  const snapshot = parsed as Partial<WorkspaceSnapshot>;
-  if (snapshot.version !== 1) {
-    throw new Error(`Unsupported workspace version: ${String(snapshot.version)}`);
-  }
-  if (!Array.isArray(snapshot.cards) || !Array.isArray(snapshot.matrices)) {
-    throw new Error('Workspace file is missing cards or matrices.');
-  }
-  return snapshot as WorkspaceSnapshot;
+  return migrateWorkspace(parsed);
 }

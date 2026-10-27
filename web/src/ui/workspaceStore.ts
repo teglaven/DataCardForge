@@ -37,13 +37,20 @@ import {
   isMatrixCard,
   type CardModel,
   type ChartCardModel,
-  type FormulaCardModel,
+  type FunctionCardModel,
   type MatrixCardModel,
   type MatrixSnapshot,
   type FileIdentity,
   type NodeStatus,
+  type PortConnection,
   type WorkspaceSnapshot,
 } from './types.ts';
+import {
+  CHART_PORT_X,
+  EXPRESSION_COLUMNS_SIGNATURE,
+  INPUT_PORT_SOURCE,
+  chartPortId,
+} from './migrate.ts';
 import { translatorFor, detectLocale, type Locale } from './i18n.ts';
 import { BackendClient, type NodeEvent, type PortBindingDto } from '../backend/client.ts';
 
@@ -245,14 +252,18 @@ interface WorkspaceState {
   /** Persist the column-dock open state on a chart card. */
   setChartColumnPanel: (cardId: number, open: boolean) => void;
 
-  // ── formula card behaviour ──────────────────────────────────────────
-  /** Create a formula card that reads from a source matrix card. */
-  addFormulaCard: (sourceCardId: number) => number | null;
-  /** Add or update a formula column. Registers / patches the backing compute node. */
+  // ── function card behaviour ─────────────────────────────────────────
+  /**
+   * Create a function card reading ONE explicit matrix of `sourceCardId`.
+   * Without `matrixId` the card's currently active file is captured — the reference is
+   * frozen from this moment on (switching the table's file no longer re-points it).
+   */
+  addFormulaCard: (sourceCardId: number, matrixId?: number) => number | null;
+  /** Add or update a formula column. One node ⇒ one PATCH, whatever the column count. */
   setFormula: (cardId: number, index: number, name: string, expression: string) => void;
-  /** Remove a formula column. Deletes its compute node and releases its result matrix. */
+  /** Remove a formula column (keeps at least one; no node is created or deleted). */
   removeFormula: (cardId: number, index: number) => void;
-  /** Re-send every formula of a card to the backend so it recomputes. */
+  /** Re-send a function card's parameters + bindings to the backend. */
   recomputeFormula: (cardId: number) => void;
 
   // ── view helpers ────────────────────────────────────────────────────
@@ -298,8 +309,6 @@ let toastCounter = 0;
 const backendClient = new BackendClient();
 const backendMatrixIds = new Map<number, number>();
 
-/** server result-matrix id → local display-cache matrix id (one per formula column). */
-const backendResultLocalIds = new Map<number, number>();
 /** Highest backend event `seq` already applied; the long-poll resumes after it. */
 let lastEventSeq = 0;
 /** The single live event subscription. Re-armed whenever the backend comes back online. */
@@ -335,36 +344,19 @@ function sourceColumnLabel(column: { posName: string; annotation: string }): str
   return column.annotation !== '' ? column.annotation : column.posName;
 }
 
-/** Case-insensitive "does this expression reference `name`?" — text inspection only. */
-function referencesName(expression: string, name: string): boolean {
-  const lower = expression.toLowerCase();
-  let from = 0;
-  for (;;) {
-    const at = lower.indexOf(name.toLowerCase(), from);
-    if (at < 0) return false;
-    const before = at === 0 ? '' : expression[at - 1];
-    const after = expression[at + name.length] ?? '';
-    // Reject substring hits inside a longer identifier (annotation `tempC` vs `temp`).
-    if (!/[A-Za-z0-9_.]/.test(before) && !/[A-Za-z0-9_.]/.test(after)) return true;
-    from = at + 1;
-  }
-}
-
-/** The bindings one formula needs: every referenced source column, bound in matrix mode. */
-function buildPortBindings(
-  expression: string,
+/**
+ * The single binding a function card sends: the whole source table under port `src`.
+ *
+ * v1 built one port per *referenced* column (a text scan per expression) because each
+ * formula was its own node. With one node per card, one whole-table binding is both
+ * simpler and cheaper: the engine already resolves every column by its label, and the
+ * scan that decided which columns to bind disappears with the per-column mapping.
+ */
+function buildTableBinding(
   sourceBackendMatrixId: number,
-  columns: ReadonlyArray<{ posName: string; annotation: string }>,
-): PortBindingDto[] {
-  const bindings: PortBindingDto[] = [];
-  for (const column of columns) {
-    const label = sourceColumnLabel(column);
-    if (label === '') continue;
-    if (referencesName(expression, label)) {
-      bindings.push({ varName: label, mode: 'matrix', sourceMatrixId: sourceBackendMatrixId });
-    }
-  }
-  return bindings;
+  portId = INPUT_PORT_SOURCE,
+): PortBindingDto {
+  return { portId, varName: portId, mode: 'matrix', sourceMatrixId: sourceBackendMatrixId };
 }
 
 /**
@@ -393,30 +385,24 @@ function frameToMatrixData(window: {
   return matrix;
 }
 
-/** A card's nodes once a formula column is added or removed (index-aligned with formulas). */
-function resizeNodeStatuses(
-  statuses: Array<NodeStatus | null>,
-  length: number,
-): Array<NodeStatus | null> {
-  const next = statuses.slice(0, length);
-  while (next.length < length) next.push(null);
-  return next;
-}
-
 /**
  * Make restored cards safe for the B-plan model.
  *
- * Snapshots saved before formula cards were backed by compute nodes have no `nodes` field;
- * older ones may even carry pre-computed result data. Restoring must never resurrect local
- * computation, so every formula card comes back with empty node slots — the sources are
- * re-registered on demand and results flow from the backend again. Chart cards saved before
- * the column dock existed lack `columnPanelOpen`; it is normalised to `false`. Matrix cards
- * pass through untouched.
+ * A restored function card has no live node (the backend was restarted, or the file
+ * predates node registration), so it comes back with `node: null` and its output id
+ * reset — `loadSnapshot` then re-registers every card once, which is what restores the
+ * four-state light and the numbers. Chart cards saved before the column dock existed lack
+ * `columnPanelOpen`; it is normalised to `false`. Matrix cards pass through untouched.
  */
 function normalizeRestoredCards(cards: CardModel[]): CardModel[] {
   return cards.map((card) => {
     if (isFormulaCard(card)) {
-      return { ...card, nodes: resizeNodeStatuses(card.nodes ?? [], card.formulas.length) };
+      return {
+        ...card,
+        node: null,
+        outputs: card.outputs.map((output) => ({ ...output, resultMatrixId: -1 })),
+        params: { formulas: card.params.formulas ?? [] },
+      };
     }
     if (isChartCard(card)) {
       return { ...card, columnPanelOpen: card.columnPanelOpen ?? false };
@@ -426,140 +412,123 @@ function normalizeRestoredCards(cards: CardModel[]): CardModel[] {
 }
 
 /**
- * Register / patch one backend compute node per formula column of a card.
+ * Register / patch the ONE backend node behind a function card.
  *
- * The mapping is deliberately **one node per formula column**: the protocol gives a node a
- * single `formula`, while a formula card holds several output columns. Index alignment lets
- * an edit PATCH the right node and a removed column DELETE its node (releasing its result
- * matrix). Each node binds exactly the source columns its expression references, in matrix
- * mode, against the source card's *active* server matrix.
+ * v2 (docs/decisions/2026-10-26-card-schema-v2.md): a card is one node with K outputs, so
+ * editing an expression PATCHes one node and recomputes once — the v1 mapping needed N
+ * nodes and evaluated the same input N times. The node binds the whole source table under
+ * port `src` (matrix mode); `params` carries the expressions.
  *
  * Fire-and-forget like registration: never blocks the UI; a genuinely unreachable backend
  * flips the banner (contract 1 — 降级必须可见), it does not fall back to local compute.
  */
-async function syncFormulaNodes(cardId: number): Promise<void> {
+async function syncFunctionCard(cardId: number): Promise<void> {
   const state = useWorkspace.getState();
   const card = state.cards.find((c) => c.id === cardId);
   if (!card || !isFormulaCard(card)) return;
 
-  const sourceCard = state.cards.find((c) => c.id === card.sourceCardId);
-  if (!sourceCard || !isMatrixCard(sourceCard)) return;
-  const activeSource = sourceCard.sources[sourceCard.activeSource];
-  if (!activeSource) return;
-  const sourceMatrix = state.matrices.get(activeSource.matrixId);
-  if (!sourceMatrix) return;
+  const input = card.inputs.find((entry) => entry.portId === INPUT_PORT_SOURCE);
+  if (!input || input.target.type !== 'matrix') return;
 
-  // The node must read the *server-side* copy of the active matrix. If it is not registered
-  // yet (offline at load time), there is nothing authoritative to bind to — leave the nodes
-  // unregistered and let the offline banner carry the failure. Never compute locally.
-  const sourceBackendId = backendMatrixIds.get(activeSource.matrixId);
+  // The node must read the *server-side* copy of the referenced matrix. If it is not
+  // registered yet (offline at load time), there is nothing authoritative to bind to —
+  // leave the node unregistered and let the offline banner carry the failure.
+  const sourceBackendId = backendMatrixIds.get(input.target.matrixId);
   if (sourceBackendId === undefined) return;
 
-  const columns = sourceMatrix.columns();
-  for (let i = 0; i < card.formulas.length; ++i) {
-    const formula = card.formulas[i];
-    const inputs = buildPortBindings(formula.expression, sourceBackendId, columns);
-    const existing = card.nodes[i] ?? null;
+  const bindings = [buildTableBinding(sourceBackendId, INPUT_PORT_SOURCE)];
+  const params: Record<string, unknown> = { formulas: card.params.formulas };
 
-    const send = existing
-      ? backendClient.patchNode(existing.nodeId, { formula: formula.expression, inputs })
-      : backendClient.createNode(inputs, formula.expression);
+  const existing = card.node;
+  const result = existing && existing.nodeId > 0
+    ? await backendClient.patchNode(existing.nodeId, { params, inputs: bindings })
+    : await backendClient.createNode(bindings, { signatureId: card.signatureId, params });
 
-    const result = await send;
-    if (!result.ok) {
-      if (result.code === 'backendUnavailable') {
-        useWorkspace.setState({ backend: { state: 'offline', error: result.code } });
-      } else {
-        // A structured refusal (e.g. cycle) is surfaced on the node so the light goes red
-        // and the i18n message renders — visible, never silent.
-        markNodeError(cardId, i, result.code ?? 'internalError', {});
-      }
-      continue;
+  if (!result.ok) {
+    if (result.code === 'backendUnavailable') {
+      useWorkspace.setState({ backend: { state: 'offline', error: result.code } });
+    } else {
+      // A structured refusal (e.g. cycle) is surfaced on the node so the light goes red
+      // and the i18n message renders — visible, never silent.
+      markNodeError(cardId, result.code ?? 'internalError', {});
     }
-
-    const nodeId = result.nodeId!;
-    const resultMatrixId =
-      result.resultMatrixId ?? (existing ? existing.resultMatrixId : -1);
-    recordResultMapping(resultMatrixId, cardId, i);
-    applyNodeSnapshot(cardId, i, {
-      nodeId,
-      resultMatrixId,
-      state: result.state ?? 'dirty',
-    });
-    if (result.state === 'done') void pullResultIntoCache(nodeId, resultMatrixId);
+    return;
   }
+
+  const nodeId = result.nodeId!;
+  const resultMatrixIds = result.resultMatrixIds ?? (result.resultMatrixId !== undefined ? [result.resultMatrixId] : []);
+  applyNodeSnapshot(cardId, {
+    nodeId,
+    state: result.state ?? 'dirty',
+  });
+  applyOutputIds(cardId, resultMatrixIds);
+  if (result.state === 'done') void pullResultIntoCache(cardId);
 }
 
-/** Remember which local display-cache column a server result matrix feeds. */
-function recordResultMapping(resultMatrixId: number, cardId: number, index: number): void {
-  if (resultMatrixId >= 0) backendResultLocalIds.set(resultMatrixId, localColumnId(cardId, index));
+/** Record a node's state on its card (drives the four-state light). */
+function applyNodeSnapshot(cardId: number, status: NodeStatus): void {
+  useWorkspace.setState((state) => ({
+    cards: state.cards.map((card) =>
+      card.id === cardId && isFormulaCard(card) ? { ...card, node: status } : card,
+    ),
+  }));
 }
 
-/**
- * Stable local id for one formula column's per-column display cache.
- *
- * Negative so it can never collide with a source-matrix id (those start at 1). Keeping a
- * slot per column is what lets several single-column node results merge into one card
- * table without clobbering each other.
- */
-function localColumnId(cardId: number, index: number): number {
-  return -(cardId * 1_000 + index + 1);
-}
-
-/** Write a node's status into the card model (drives the four-state light). */
-function applyNodeSnapshot(cardId: number, index: number, status: NodeStatus): void {
+/** Record the server result matrices behind a node's declared outputs. */
+function applyOutputIds(cardId: number, resultMatrixIds: number[]): void {
   useWorkspace.setState((state) => ({
     cards: state.cards.map((card) => {
       if (card.id !== cardId || !isFormulaCard(card)) return card;
-      const nodes = resizeNodeStatuses(card.nodes, card.formulas.length);
-      nodes[index] = status;
-      return { ...card, nodes };
+      const outputs = card.outputs.map((output, index) => ({
+        ...output,
+        resultMatrixId: resultMatrixIds[index] ?? output.resultMatrixId,
+      }));
+      return { ...card, outputs };
     }),
   }));
 }
 
-/** Mark a column's node as errored with a structured code (no result pull attempted). */
-function markNodeError(
-  cardId: number,
-  index: number,
-  code: string,
-  params: Record<string, unknown>,
-): void {
+/** Mark a card's node as errored with a structured code (no result pull attempted). */
+function markNodeError(cardId: number, code: string, params: Record<string, unknown>): void {
   useWorkspace.setState((state) => ({
     cards: state.cards.map((card) => {
       if (card.id !== cardId || !isFormulaCard(card)) return card;
-      const nodes = resizeNodeStatuses(card.nodes, card.formulas.length);
-      const prev = nodes[index];
-      nodes[index] = {
-        nodeId: prev?.nodeId ?? -1,
-        resultMatrixId: prev?.resultMatrixId ?? -1,
-        state: 'error',
-        code,
-        params,
+      const prev = card.node;
+      return {
+        ...card,
+        node: {
+          nodeId: prev?.nodeId ?? -1,
+          state: 'error',
+          code,
+          params,
+        },
       };
-      return { ...card, nodes };
     }),
   }));
 }
 
-/** Find the (cardId, columnIndex) a node id belongs to. */
-function locateNode(nodeId: number): { cardId: number; index: number; resultMatrixId: number } | null {
+/** Find the card a node id belongs to (one node per card in v2). */
+function locateCardByNode(nodeId: number): number | null {
   for (const card of useWorkspace.getState().cards) {
-    if (!isFormulaCard(card)) continue;
-    for (let i = 0; i < card.nodes.length; ++i) {
-      const n = card.nodes[i];
-      if (n && n.nodeId === nodeId) {
-        return { cardId: card.id, index: i, resultMatrixId: n.resultMatrixId };
-      }
-    }
+    if (isFormulaCard(card) && card.node && card.node.nodeId === nodeId) return card.id;
   }
   return null;
 }
 
-/** Pull a done node's result window and write it into the card's display cache. */
-async function pullResultIntoCache(nodeId: number, resultMatrixId: number): Promise<void> {
-  if (resultMatrixId < 0) return;
-  const frame = await backendClient.nodeResult(resultMatrixId);
+/**
+ * Pull a done node's result window into the card's display cache.
+ *
+ * One fetch: the backend returns the whole wide table (one column per expression) with
+ * the expression names already attached as annotations, so the browser-side per-column
+ * merge and its cache slots are gone.
+ */
+async function pullResultIntoCache(cardId: number): Promise<void> {
+  const card = useWorkspace.getState().cards.find((c) => c.id === cardId);
+  if (!card || !isFormulaCard(card)) return;
+  const output = card.outputs[0];
+  if (!output || output.resultMatrixId < 0) return;
+
+  const frame = await backendClient.nodeResult(output.resultMatrixId);
   if (!frame.ok) {
     if (frame.code === 'backendUnavailable') {
       useWorkspace.setState({ backend: { state: 'offline', error: frame.code } });
@@ -567,32 +536,85 @@ async function pullResultIntoCache(nodeId: number, resultMatrixId: number): Prom
     return;
   }
   const matrix = frameToMatrixData(frame);
-  const located = locateNode(nodeId);
-  if (!located) return;
-  // Store this column's freshly pulled values in its own cache slot first, then rebuild the
-  // merged card table from every column's current slot — order preserved, no clobbering.
   useWorkspace.setState((state) => {
+    const current = state.cards.find((c) => c.id === cardId);
+    if (!current || !isFormulaCard(current)) return {};
     const matrices = new Map(state.matrices);
-    matrices.set(localColumnId(located.cardId, located.index), matrix);
-    const card = state.cards.find((c) => c.id === located.cardId);
-    if (!card || !isFormulaCard(card)) return { matrices };
-    const merged = new MatrixData();
-    for (let i = 0; i < card.formulas.length; ++i) {
-      const cached = matrices.get(localColumnId(card.id, i));
-      const name = card.formulas[i].name;
-      if (cached && cached.columnCount() > 0) {
-        const col = cached.column(0);
-        merged.appendColumn(name, col.data.slice());
-        merged.setColumnAnnotation(merged.columnCount() - 1, col.annotation);
-      } else {
-        merged.appendColumn(name, []);
-      }
-    }
-    matrices.set(card.resultMatrixId, merged);
+    matrices.set(current.displayMatrixId, matrix);
     return { matrices };
   });
 }
 
+/**
+ * Rebuild a chart card's `inputs[]` from its display config.
+ *
+ * Charts are the one kind whose dependency *edges* are per-column, and the column dock can
+ * change them at any moment. Deriving the port list from `config.sources` keeps the two
+ * representations in step with a single rule; the graph and the close-protection logic only
+ * ever read `inputs`, so a config edit can never leave an edge behind.
+ */
+function chartInputsFromConfig(card: ChartCardModel, cards: CardModel[]): PortConnection[] {
+  const inputs: PortConnection[] = [];
+  const owners = new Map<number, number>();
+  for (const other of cards) {
+    if (!isMatrixCard(other)) continue;
+    for (const source of other.sources) owners.set(source.matrixId, other.id);
+  }
+  for (const source of card.config.sources) {
+    const cardId = owners.get(source.matrixId);
+    if (cardId === undefined) continue;
+    inputs.push({
+      portId: chartPortId(source.matrixId, source.columnIndex),
+      target: {
+        type: 'cell',
+        cardId,
+        matrixId: source.matrixId,
+        column: source.columnIndex,
+      },
+    });
+  }
+  const x = card.config.xAxisSource;
+  if (x) {
+    const cardId = owners.get(x.matrixId);
+    if (cardId !== undefined) {
+      inputs.push({
+        portId: CHART_PORT_X,
+        target: { type: 'cell', cardId, matrixId: x.matrixId, column: x.columnIndex },
+      });
+    }
+  }
+  return inputs;
+}
+
+/**
+ * Replace the store's dependency graph with one derived purely from `inputs[]`.
+ *
+ * This is the whole point of the v2 schema: rebuilding dependencies is one pass with zero
+ * per-kind knowledge, so a card kind that forgets to register its edges is impossible
+ * rather than merely unlikely (the v1 code rebuilt from chart cards only, which is how
+ * formula dependencies used to vanish on reload).
+ */
+function rebuildDependencies(cards: CardModel[]): {
+  dependencies: DependencyGraph;
+  droppedEdges: number;
+} {
+  const dependencies = new DependencyGraph();
+  const known = new Set(cards.map((card) => card.id));
+  let droppedEdges = 0;
+  for (const card of cards) {
+    for (const input of card.inputs) {
+      const target = input.target.cardId;
+      // Skip dangling references and self-loops: a hand-edited file must not corrupt the
+      // close-protection invariant.
+      if (target === card.id || !known.has(target)) {
+        droppedEdges += 1;
+        continue;
+      }
+      if (dependencies.addDependency(card.id, target)) droppedEdges += 1;
+    }
+  }
+  return { dependencies, droppedEdges };
+}
 
 export const useWorkspace = create<WorkspaceState>((set, get) => {
   /** Highest z currently in use, so new cards land on top. */
@@ -682,28 +704,70 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
                 : rePoint(xAxisSource);
           }
 
-          return changed
-            ? { ...card, config: { ...card.config, sources, xAxisSource } }
-            : card;
+          if (!changed) return card;
+          const next: ChartCardModel = {
+            ...card,
+            config: { ...card.config, sources, xAxisSource },
+          };
+          // Charts follow the new file by design (a chart is a *view*), so their
+          // authoritative edges are re-derived from the re-pointed config in the same
+          // pass — an edge can never describe a matrix the chart no longer shows.
+          next.inputs = chartInputsFromConfig(next, state.cards);
+          return next;
         }
 
-        // A formula card used to be recomputed here in the browser. Under the B-plan it is
-        // now a pure view: switching the source file re-points its compute nodes at the new
-        // backend matrix (see `recomputeFormula`), and the fresh numbers arrive through the
-        // event stream + window fetch — never through local evaluation.
+        // A function card does NOT follow: v2 freezes its input to one explicit matrix, so
+        // switching a table's active file leaves its numbers alone until the user
+        // explicitly re-points it (docs/decisions/2026-10-26-card-schema-v2.md §迁移).
         return card;
       });
 
       return { cards };
     });
+  };
 
-    // Formula dependents follow the newly active file by re-binding their nodes server-side.
-    for (const dependentId of dependentIds) {
-      const card = get().cards.find((c) => c.id === dependentId);
-      if (card && isFormulaCard(card) && card.sourceCardId === matrixCardId) {
-        get().recomputeFormula(dependentId);
+  /**
+   * Commit a chart config change and keep `inputs[]` (the authoritative edges) in step.
+   *
+   * Every chart mutation funnels through here, so there is exactly one rule for "which
+   * cards does this chart read?" and it is applied atomically: new owner edges are
+   * validated for cycles BEFORE anything is written (a refused edit leaves the chart and
+   * the graph untouched), stale edges are dropped afterwards.
+   */
+  const commitChartConfig = (
+    cardId: number,
+    mutate: (config: ChartConfig) => ChartConfig,
+  ): boolean => {
+    const state = get();
+    const card = state.cards.find((c) => c.id === cardId);
+    if (!card || !isChartCard(card)) return false;
+    const nextConfig = mutate(card.config);
+    if (nextConfig === card.config) return true;
+
+    const cards = state.cards.map((entry) =>
+      entry.id === cardId && isChartCard(entry) ? { ...entry, config: nextConfig } : entry,
+    );
+    const nextCard = cards.find((c) => c.id === cardId) as ChartCardModel;
+    const nextInputs = chartInputsFromConfig(nextCard, cards);
+
+    const beforeOwners = new Set(card.inputs.map((input) => input.target.cardId));
+    const afterOwners = new Set(nextInputs.map((input) => input.target.cardId));
+    for (const ownerId of afterOwners) {
+      if (beforeOwners.has(ownerId)) continue;
+      const cycle = state.dependencies.addDependency(cardId, ownerId);
+      if (cycle) {
+        get().showToast(
+          'error',
+          translatorFor(get().locale)('status.cycle', { path: cycle.join(' → ') }),
+        );
+        return false;
       }
     }
+    for (const ownerId of beforeOwners) {
+      if (!afterOwners.has(ownerId)) state.dependencies.removeDependency(cardId, ownerId);
+    }
+    set({ cards: cards.map((entry) => (entry.id === cardId ? { ...nextCard, inputs: nextInputs } : entry)) });
+    return true;
   };
 
   return {
@@ -783,6 +847,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         height: matrixSize.height,
         z,
         createdAt: Date.now(),
+        // A table is a data source: `sources[]` is content, never a dependency.
+        inputs: [],
         sources,
         activeSource: 0,
         readOnly: true,
@@ -839,6 +905,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         chartSize,
         state.cards,
       );
+      const config = defaultChartConfig(type, sources);
       const card: ChartCardModel = {
         kind: 'chart',
         id: cardId,
@@ -850,24 +917,31 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         height: chartSize.height,
         z: topZ() + 1,
         createdAt: Date.now(),
-        config: defaultChartConfig(type, sources),
+        inputs: [],
+        config,
         smoothing: { ...DEFAULT_SMOOTHING },
         // The column dock starts closed; the user's toggle is persisted via
         // setChartColumnPanel.
         columnPanelOpen: false,
       };
+      // Edges are derived from the display config (one rule for every config edit).
+      card.inputs = chartInputsFromConfig(card, state.cards);
+      const cardIds = card.inputs.map((input) => input.target.cardId);
+      if (cardIds.length === 0) return null;
 
       // The chart depends on the matrix *card*: this is what makes "switch file in the
       // table, chart follows" work even though each file is a separate matrix.
       // Guarded against loops — once FunctionCard chains cards together, a chart could
       // otherwise end up depending on itself through a longer path.
-      const cycle = state.dependencies.addDependency(cardId, matrixCardId);
-      if (cycle) {
-        get().showToast(
-          'error',
-          translatorFor(get().locale)('status.cycle', { path: cycle.join(' → ') }),
-        );
-        return null;
+      for (const ownerId of new Set(cardIds)) {
+        const cycle = state.dependencies.addDependency(cardId, ownerId);
+        if (cycle) {
+          get().showToast(
+            'error',
+            translatorFor(get().locale)('status.cycle', { path: cycle.join(' → ') }),
+          );
+          return null;
+        }
       }
 
       set({
@@ -924,17 +998,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           }
         }
       } else if (isFormulaCard(card)) {
-        // A formula card owns its derived matrix outright; no other card can reference it,
-        // so it must not be left behind in the map. Neither may its per-column cache slots.
-        matrices.delete(card.resultMatrixId);
-        for (let i = 0; i < card.formulas.length; ++i) matrices.delete(localColumnId(card.id, i));
-        // Delete every backing node server-side. `DELETE /api/nodes/{id}` also drops the
-        // node's result matrix, so this is what releases the compute graph on close — and
-        // keeps the local→server id maps from handing out ids the server no longer has.
-        for (const status of card.nodes) {
-          if (!status || status.nodeId < 0) continue;
-          backendResultLocalIds.delete(status.resultMatrixId);
-          void backendClient.deleteNode(status.nodeId).then((result) => {
+        // A function card owns its display cache outright; no other card references it, so
+        // it must not be left behind in the map.
+        matrices.delete(card.displayMatrixId);
+        // Delete the one backing node server-side. `DELETE /api/nodes/{id}` also drops its
+        // result matrices, which is what releases the compute graph on close.
+        const nodeId = card.node?.nodeId ?? -1;
+        if (nodeId > 0) {
+          void backendClient.deleteNode(nodeId).then((result) => {
             if (!result.ok && result.code === 'backendUnavailable') {
               set({ backend: { state: 'offline', error: result.code } });
             }
@@ -1120,23 +1191,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         }
       }
 
-      set((current) => ({
-        cards: current.cards.map((entry) =>
-          entry.id === cardId && isChartCard(entry)
-            ? { ...entry, config: { ...entry.config, type, sources } }
-            : entry,
-        ),
-      }));
+      commitChartConfig(cardId, (config) => ({ ...config, type, sources }));
     },
 
     setChartConfig(cardId, patch) {
-      set((state) => ({
-        cards: state.cards.map((card) =>
-          card.id === cardId && isChartCard(card)
-            ? { ...card, config: { ...card.config, ...patch } }
-            : card,
-        ),
-      }));
+      commitChartConfig(cardId, (config) => ({ ...config, ...patch }));
     },
 
     addChartSource(cardId, matrixId, columnIndex) {
@@ -1154,24 +1213,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const matrix = state.matrices.get(matrixId);
       if (!matrix || columnIndex < 0 || columnIndex >= matrix.columnCount()) return;
 
-      // The line is registered against the matrix *card* that owns this matrix — the same
-      // rule as `addChartCard`, so one card-level line covers every attached column.
-      const owner = state.cards.find(
-        (c) => isMatrixCard(c) && c.sources.some((s) => s.matrixId === matrixId),
-      );
-      if (!owner || !isMatrixCard(owner)) return;
-
-      // Guarded against loops, mirroring `addChartCard`: the source is only attached when
-      // the edge was accepted, so a refused cycle leaves the chart untouched.
-      const cycle = state.dependencies.addDependency(cardId, owner.id);
-      if (cycle) {
-        get().showToast(
-          'error',
-          translatorFor(get().locale)('status.cycle', { path: cycle.join(' → ') }),
-        );
-        return;
-      }
-
+      // The owner edge (chart → matrix card) is derived by commitChartConfig from the new
+      // source list, so a cycle is refused there and nothing is attached.
       const column = matrix.column(columnIndex);
       const source: ChartSource = {
         matrixId,
@@ -1179,12 +1222,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         label: columnLabel(column),
         raw: column.data.slice(),
       };
-      set((current) => ({
-        cards: current.cards.map((entry) =>
-          entry.id === cardId && isChartCard(entry)
-            ? { ...entry, config: { ...entry.config, sources: [...entry.config.sources, source] } }
-            : entry,
-        ),
+      commitChartConfig(cardId, (config) => ({
+        ...config,
+        sources: [...config.sources, source],
       }));
     },
 
@@ -1209,27 +1249,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           ? null
           : card.config.xAxisSource;
 
-      // The line is registered against the matrix card that owns the detached matrix.
-      // Once neither a remaining source nor the surviving X axis points at one of that
-      // card's matrices, the chart no longer reads it: drop the card-level edge.
-      const owner = state.cards.find(
-        (c) => isMatrixCard(c) && c.sources.some((s) => s.matrixId === matrixId),
-      );
-      if (owner && isMatrixCard(owner)) {
-        const ownedMatrixIds = new Set(owner.sources.map((s) => s.matrixId));
-        const stillReadsOwned =
-          sources.some((source) => ownedMatrixIds.has(source.matrixId)) ||
-          (xAxisSource !== null && ownedMatrixIds.has(xAxisSource.matrixId));
-        if (!stillReadsOwned) state.dependencies.removeDependency(cardId, owner.id);
-      }
-
-      set((current) => ({
-        cards: current.cards.map((entry) =>
-          entry.id === cardId && isChartCard(entry)
-            ? { ...entry, config: { ...entry.config, sources, xAxisSource } }
-            : entry,
-        ),
-      }));
+      // The card-level edge disappears on its own when the recomputed inputs no longer
+      // mention that owner — commitChartConfig diffs the owner set.
+      commitChartConfig(cardId, (config) => ({ ...config, sources, xAxisSource }));
     },
 
     setChartColumnPanel(cardId, open) {
@@ -1240,31 +1262,35 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       }));
     },
 
-    // ── formula card behaviour ────────────────────────────────────────
+    // ── function card behaviour ───────────────────────────────────────
 
-    addFormulaCard(sourceCardId) {
+    addFormulaCard(sourceCardId, matrixId) {
       const state = get();
       const sourceCard = state.cards.find((c) => c.id === sourceCardId);
       if (!sourceCard || !isMatrixCard(sourceCard)) return null;
-      const source = sourceCard.sources[sourceCard.activeSource];
-      if (!source) return null;
-      const sourceMatrix = state.matrices.get(source.matrixId);
+      // v2: the reference is ONE explicit matrix. Without an explicit id the card captures
+      // the file showing right now — and keeps reading it whatever the table does later.
+      const targetMatrixId = matrixId ?? sourceCard.sources[sourceCard.activeSource]?.matrixId;
+      if (targetMatrixId === undefined) return null;
+      if (!sourceCard.sources.some((entry) => entry.matrixId === targetMatrixId)) return null;
+      const sourceMatrix = state.matrices.get(targetMatrixId);
       if (!sourceMatrix) return null;
 
       const cardId = state.nextCardId;
-      const resultMatrixId = state.nextMatrixId;
+      const displayMatrixId = state.nextMatrixId;
 
-      // Start with one empty formula referencing the first column. The identifier must be
+      // Start with one expression referencing the first column. The identifier must be
       // the label the backend resolves against — annotation when present, else Pos.N — not
       // the raw posName: `Pos.1 * 2` fails on a table whose first column is annotated `A`.
-      const firstColLabel = sourceMatrix.columnCount() > 0 ? sourceColumnLabel(sourceMatrix.column(0)) : 'A';
+      const firstColLabel =
+        sourceMatrix.columnCount() > 0 ? sourceColumnLabel(sourceMatrix.column(0)) : 'A';
       const formulas = [{ name: `${firstColLabel} × 2`, expression: `${firstColLabel} * 2` }];
 
-      // The result matrix starts as an EMPTY display cache. It is filled only once the
-      // backend reports a node `done` and we pull its result window — the browser computes
-      // nothing (docs/decisions/2026-10-17-backend-owns-compute.md).
+      // The display cache starts EMPTY. It is filled only once the backend reports the node
+      // `done` and we pull its result window — the browser computes nothing
+      // (docs/decisions/2026-10-17-backend-owns-compute.md).
       const matrices = new Map(state.matrices);
-      matrices.set(resultMatrixId, new MatrixData());
+      matrices.set(displayMatrixId, new MatrixData());
 
       const formulaSize = { width: 520, height: 380 };
       const formulaSpot = placeOnPlane(
@@ -1272,7 +1298,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         formulaSize,
         state.cards,
       );
-      const card: FormulaCardModel = {
+      const inputs: PortConnection[] = [
+        {
+          portId: INPUT_PORT_SOURCE,
+          target: { type: 'matrix', cardId: sourceCardId, matrixId: targetMatrixId },
+        },
+      ];
+      const card: FunctionCardModel = {
         kind: 'formula',
         id: cardId,
         title: '',
@@ -1281,24 +1313,33 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         height: formulaSize.height,
         z: topZ() + 1,
         createdAt: Date.now(),
-        sourceCardId,
-        formulas,
-        resultMatrixId,
-        nodes: [null],
+        inputs,
+        signatureId: EXPRESSION_COLUMNS_SIGNATURE,
+        params: { formulas },
+        outputs: [{ outputId: 'result', resultMatrixId: -1 }],
+        node: null,
+        displayMatrixId,
       };
 
-      state.dependencies.addDependency(cardId, sourceCardId);
+      const cycle = state.dependencies.addDependency(cardId, sourceCardId);
+      if (cycle) {
+        get().showToast(
+          'error',
+          translatorFor(get().locale)('status.cycle', { path: cycle.join(' → ') }),
+        );
+        return null;
+      }
 
       set({
         cards: [...state.cards, card],
         matrices,
         nextCardId: cardId + 1,
-        nextMatrixId: resultMatrixId + 1,
+        nextMatrixId: displayMatrixId + 1,
         selectedId: cardId,
       });
       revealCard({ ...formulaSpot, ...formulaSize });
 
-      void syncFormulaNodes(cardId);
+      void syncFunctionCard(cardId);
       return cardId;
     },
 
@@ -1307,7 +1348,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const card = state.cards.find((c) => c.id === cardId);
       if (!card || !isFormulaCard(card)) return;
 
-      const formulas = card.formulas.slice();
+      const formulas = card.params.formulas.slice();
       if (index >= 0 && index < formulas.length) {
         formulas[index] = { name, expression };
       } else {
@@ -1317,48 +1358,41 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       set({
         cards: state.cards.map((c) =>
           c.id === cardId && isFormulaCard(c)
-            ? { ...c, formulas, nodes: resizeNodeStatuses(c.nodes, formulas.length) }
+            ? { ...c, params: { ...c.params, formulas } }
             : c,
         ),
       });
 
-      // Push the change to the backend: existing columns PATCH their node, a new column
-      // registers one. Results arrive asynchronously through the event stream.
-      void syncFormulaNodes(cardId);
+      // One card = one node, so an edit is ONE PATCH (v1 needed one per column, and each
+      // of those re-evaluated the same input). Results arrive on the event stream.
+      void syncFunctionCard(cardId);
     },
 
     removeFormula(cardId, index) {
       const state = get();
       const card = state.cards.find((c) => c.id === cardId);
       if (!card || !isFormulaCard(card)) return;
-      if (card.formulas.length <= 1) return; // keep at least one
+      if (card.params.formulas.length <= 1) return; // keep at least one
 
-      const removed = card.nodes[index];
-      const formulas = card.formulas.filter((_, i) => i !== index);
+      const formulas = card.params.formulas.filter((_, i) => i !== index);
 
       set({
         cards: state.cards.map((c) =>
           c.id === cardId && isFormulaCard(c)
-            ? { ...c, formulas, nodes: resizeNodeStatuses(c.nodes, formulas.length) }
+            ? { ...c, params: { ...c.params, formulas } }
             : c,
         ),
       });
 
-      // Release the deleted column's node; removing it drops its result matrix server-side.
-      if (removed) {
-        void backendClient.deleteNode(removed.nodeId).then((result) => {
-          if (!result.ok && result.code === 'backendUnavailable') {
-            set({ backend: { state: 'offline', error: result.code } });
-          }
-        });
-      }
+      // No node to release: the node stays, it simply computes fewer columns next time.
+      void syncFunctionCard(cardId);
     },
 
     recomputeFormula(cardId) {
-      // "Recompute" means "re-send the definitions to the backend"; the browser never
-      // evaluates. Each node's inputs are re-bound to the source card's *active* matrix so
-      // a file switch cascades through the server, then results flow back via events.
-      void syncFormulaNodes(cardId);
+      // "Recompute" means "re-send the parameters + binding to the backend"; the browser
+      // never evaluates. The binding is the card's explicit matrix — it does not drift with
+      // the table's active file (that is now an explicit re-point).
+      void syncFunctionCard(cardId);
     },
 
     // ── view helpers ──────────────────────────────────────────────────
@@ -1518,19 +1552,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // Matrix-level events (no nodeId) carry no per-node state to mirror here.
       if (event.nodeId === undefined || !event.state) return;
       if (event.seq > lastEventSeq) lastEventSeq = event.seq;
-      const located = locateNode(event.nodeId);
-      if (!located) return;
-      const { cardId, index, resultMatrixId } = located;
-      applyNodeSnapshot(cardId, index, {
+      const cardId = locateCardByNode(event.nodeId);
+      if (cardId === null) return;
+      applyNodeSnapshot(cardId, {
         nodeId: event.nodeId,
-        resultMatrixId,
         state: event.state,
-        code: event.code,
-        params: event.params,
+        ...(event.code !== undefined ? { code: event.code } : {}),
+        ...(event.params !== undefined ? { params: event.params } : {}),
       });
       // A finished computation is the trigger to pull the numbers — the display cache is
       // refreshed from the window endpoint, never from a local evaluation.
-      if (event.state === 'done') void pullResultIntoCache(event.nodeId, resultMatrixId);
+      if (event.state === 'done') void pullResultIntoCache(cardId);
     },
 
     startBackendEventLoop() {
@@ -1584,7 +1616,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         });
       }
       return {
-        version: 1,
+        version: 2,
         savedAt: new Date().toISOString(),
         cards: state.cards,
         matrices,
@@ -1608,28 +1640,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // longer on disk, so re-dropping the same file must produce a fresh parse rather
       // than silently aliasing to restored data.
 
-      // Rebuild the graph from the restored chart lines. A line references a parsed
-      // matrix, so resolve it back to the matrix card that owns it. Refused edges
-      // (loops) are skipped — a hand-edited save file must not corrupt close-protection.
-      const dependencies = new DependencyGraph();
-      let droppedEdges = 0;
-      for (const card of snapshot.cards) {
-        if (!isChartCard(card)) continue;
-        const ownerIds = new Set<number>();
-        for (const source of card.config.sources) {
-          const owner = snapshot.cards.find(
-            (other) =>
-              isMatrixCard(other) && other.sources.some((s) => s.matrixId === source.matrixId),
-          );
-          if (owner) ownerIds.add(owner.id);
-        }
-        for (const ownerId of ownerIds) {
-          if (dependencies.addDependency(card.id, ownerId)) droppedEdges += 1;
-        }
-      }
+      // Rebuild the graph from `inputs[]` — the ONE place dependencies live, so this pass
+      // needs no per-kind knowledge (the v1 code rebuilt from chart cards only, which is
+      // exactly how restored formula dependencies used to vanish). Refused edges are
+      // skipped: a hand-edited save file must not corrupt close-protection.
+      const restored = normalizeRestoredCards(snapshot.cards);
+      const { dependencies, droppedEdges } = rebuildDependencies(restored);
 
       set({
-        cards: normalizeRestoredCards(snapshot.cards),
+        cards: restored,
         matrices,
         matrixIdByIdentity: new Map(),
         dependencies,
@@ -1654,13 +1673,34 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           translatorFor(get().locale)('status.cycleDropped', { n: droppedEdges }),
         );
       }
+
+      // Bring the restored state back to the server: the backend's matrix and node ids do
+      // not survive a restart, so a restore has to re-register the matrices first and can
+      // only then bind function-card nodes to them. Martices are registered in id order so
+      // the local→server mapping is deterministic; function cards that cannot register
+      // (offline backend) simply stay grey and the banner carries the failure (contract 1).
+      void (async () => {
+        const ordered = [...matrices.entries()].sort((a, b) => a[0] - b[0]);
+        for (const [localId, matrix] of ordered) {
+          if (backendMatrixIds.has(localId)) continue;
+          const columns = matrix.columns().map((col) => ({
+            posName: col.posName,
+            annotation: col.annotation,
+            data: col.data,
+          }));
+          const serverId = await get().registerMatrixWithBackend(`#${localId}`, columns);
+          if (serverId !== null) backendMatrixIds.set(localId, serverId);
+        }
+        for (const card of restored) {
+          if (isFormulaCard(card)) void syncFunctionCard(card.id);
+        }
+      })();
     },
 
     reset() {
       // Matrix ids restart at 1, so cached server ids from the previous workspace would
       // point at the wrong rows after a reset. Drop them together with the matrices.
       backendMatrixIds.clear();
-      backendResultLocalIds.clear();
       lastEventSeq = 0;
       stopEventLoop();
       set({
