@@ -147,9 +147,24 @@ export interface FormulaColumn {
   expression: string;
 }
 
+/**
+ * A promised column count for one output table.
+ *
+ * Created when the user first names an output column: from then on the width is a
+ * contract, and a drift stops the data flow here with a structured error instead of
+ * silently re-labelling columns. It is deliberately explicit — a heuristic "did the shape
+ * change?" check would fire on every legitimate re-point.
+ */
+export interface ColumnContract {
+  outputId: string;
+  columns: number;
+}
+
 /** Parameters of `builtin:expression-columns` (one expression per output column). */
 export interface ExpressionColumnsParams {
   formulas: FormulaColumn[];
+  /** Present once the user has named the output's columns. */
+  columnContract?: ColumnContract;
 }
 
 /**

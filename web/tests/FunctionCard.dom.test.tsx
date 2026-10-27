@@ -44,6 +44,8 @@ interface CardOptions {
   repointBatch?: number;
   onApplyRepoint?: () => void;
   onDismissRepoint?: () => void;
+  onRenameOutputColumn?: (index: number, name: string) => void;
+  onSetColumnContract?: (columns: number | null) => void;
 }
 
 async function mount(card: FunctionCardModel, options: CardOptions = {}): Promise<HTMLElement> {
@@ -64,6 +66,8 @@ async function mount(card: FunctionCardModel, options: CardOptions = {}): Promis
           onApplyRepoint={options.onApplyRepoint ?? (() => {})}
           onDismissRepoint={options.onDismissRepoint ?? (() => {})}
           onApplyAllRepoints={() => {}}
+          onRenameOutputColumn={options.onRenameOutputColumn ?? (() => {})}
+          onSetColumnContract={options.onSetColumnContract ?? (() => {})}
           active
           closeBlocked={false}
           onClose={() => {}}
@@ -281,5 +285,102 @@ describe('re-point banner', () => {
     });
     expect(applied).toBe(1);
     expect(dismissed).toBe(1);
+  });
+});
+
+describe('output rename + column contract', () => {
+  it('opens the rename editor from the output header and shows the lock hint bar', async () => {
+    const host = await mount(makeCard());
+    const toggle = host.querySelector<HTMLButtonElement>('.formula-card__rename')!;
+    expect(toggle.textContent).toBe('重命名列');
+    await act(async () => {
+      toggle.click();
+    });
+    const inputs = host.querySelectorAll('.formula-card__rename-input');
+    expect(inputs).toHaveLength(1);
+    // The bottom bar states that naming locks the width — the promise is visible.
+    const bar = host.querySelector('.formula-card__hintbar')!;
+    expect(bar).not.toBeNull();
+    expect(bar.textContent).toContain('命名输出列后即锁定');
+  });
+
+  it('commits a rename on blur (the first commit creates the contract)', async () => {
+    let renamed: { index: number; name: string } | null = null;
+    const card = makeCard();
+    const host = await mount(card, {
+      onRenameOutputColumn: (index, name) => {
+        renamed = { index, name };
+      },
+    });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.formula-card__rename')!.click();
+    });
+    const input = host.querySelector<HTMLInputElement>('.formula-card__rename-input')!;
+    await act(async () => {
+      input.focus();
+      // React's onChange listens for `input`; the commit happens on blur (focusout).
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      setter?.call(input, 'temperature');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      input.blur();
+    });
+    expect(renamed).toEqual({ index: 0, name: 'temperature' });
+  });
+
+  it('states the locked width once a contract exists', async () => {
+    const host = await mount(
+      makeCard({
+        params: {
+          formulas: [{ name: 'a', expression: 'A * 2' }],
+          columnContract: { outputId: 'result', columns: 1 },
+        },
+      }),
+    );
+    const bar = host.querySelector('.formula-card__hintbar')!;
+    expect(bar.textContent).toContain('已锁定 1 列');
+    expect(bar.textContent).toContain('中断数据流');
+  });
+
+  it('turns the hint bar into a stop notice on a contract violation, with both ways out', async () => {
+    const c = makeCard({
+      params: {
+        formulas: [
+          { name: 'a', expression: 'A * 2' },
+          { name: 'b', expression: 'A + 1' },
+        ],
+        columnContract: { outputId: 'result', columns: 1 },
+      },
+      node: {
+        nodeId: 9,
+        state: 'error',
+        code: 'columnContractViolation',
+        params: { expected: 1, actual: 2 },
+      },
+    });
+    let extended: number | null | undefined;
+    const host = await mount(c, {
+      onSetColumnContract: (columns) => {
+        extended = columns;
+      },
+    });
+    const bar = host.querySelector('.formula-card__hintbar')!;
+    expect(bar.className).toContain('hintbar--violation');
+    expect(bar.textContent).toContain('列数契约被破坏');
+    expect(bar.textContent).toContain('锁定 1 列');
+    expect(bar.textContent).toContain('实际 2 列');
+    const buttons = [...bar.querySelectorAll<HTMLButtonElement>('button')];
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      '扩展契约到 2 列',
+      '解除锁定',
+    ]);
+    await act(async () => {
+      buttons[0].click();
+    });
+    expect(extended).toBe(2);
   });
 });

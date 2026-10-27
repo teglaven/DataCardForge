@@ -308,6 +308,13 @@ interface WorkspaceState {
   applyRepointsForOwner: (ownerCardId: number) => void;
   /** Keep the current input; the offer disappears until the next file switch. */
   dismissRepoint: (cardId: number) => void;
+  /**
+   * Name one output column. The first rename also creates the column contract: from then
+   * on the output's width is promised, and a drift stops the flow (structured error).
+   */
+  renameOutputColumn: (cardId: number, index: number, name: string) => void;
+  /** Extend/shrink the contract (the explicit way out of a self-edit violation). */
+  setColumnContract: (cardId: number, columns: number | null) => void;
 
   // ── view helpers ────────────────────────────────────────────────────
   tileCards: (viewportWidth: number, viewportHeight: number) => void;
@@ -444,7 +451,9 @@ function normalizeRestoredCards(cards: CardModel[]): CardModel[] {
         ...card,
         node: null,
         outputs: card.outputs.map((output) => ({ ...output, resultMatrixId: -1 })),
-        params: { formulas: card.params.formulas ?? [] },
+        // Preserve every other parameter: the column contract is a promise the user made,
+        // and silently dropping it on restore would un-lock the widths behind their back.
+        params: { ...card.params, formulas: card.params.formulas ?? [] },
       };
     }
     if (isChartCard(card)) {
@@ -1563,6 +1572,53 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       set((state) => ({
         repointOffers: state.repointOffers.filter((offer) => offer.cardId !== cardId),
       }));
+    },
+
+    renameOutputColumn(cardId, index, name) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isFormulaCard(card)) return;
+      const formulas = card.params.formulas.slice();
+      if (index < 0 || index >= formulas.length) return;
+      const current = formulas[index];
+      if (current.name === name) return;
+      formulas[index] = { ...current, name };
+      // Naming a column IS the moment the output's width becomes a promise: the mapping is
+      // position-based, so a width drift would silently move a user-given label onto a
+      // different column. From here on the node refuses to publish a different width.
+      const columnContract = card.params.columnContract ?? {
+        outputId: card.outputs[0]?.outputId ?? 'result',
+        columns: formulas.length,
+      };
+      set({
+        cards: state.cards.map((entry) =>
+          entry.id === cardId && isFormulaCard(entry)
+            ? { ...entry, params: { ...entry.params, formulas, columnContract } }
+            : entry,
+        ),
+      });
+      void syncFunctionCard(cardId);
+    },
+
+    setColumnContract(cardId, columns) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isFormulaCard(card)) return;
+      const params: FunctionCardModel['params'] = { ...card.params };
+      if (columns === null) {
+        delete params.columnContract;
+      } else {
+        params.columnContract = {
+          outputId: card.outputs[0]?.outputId ?? 'result',
+          columns,
+        };
+      }
+      set({
+        cards: state.cards.map((entry) =>
+          entry.id === cardId && isFormulaCard(entry) ? { ...entry, params } : entry,
+        ),
+      });
+      void syncFunctionCard(cardId);
     },
 
     // ── view helpers ──────────────────────────────────────────────────

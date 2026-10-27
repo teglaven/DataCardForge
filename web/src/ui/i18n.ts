@@ -193,6 +193,18 @@ const dictionaries = {
     'formula.repoint.applyAnyway': '仍然应用（列不匹配）',
     'formula.repoint.dismiss': '暂不',
     'formula.repoint.applyAll': '应用到全部 {n} 张',
+
+    // 输出列重命名 + 列数契约
+    'formula.rename': '重命名列',
+    'formula.renameDone': '完成',
+    'formula.renamePlaceholder': '第 {n} 列',
+    'formula.contractLocked': '已锁定 {n} 列 — 上游列数变化将在此中断数据流',
+    'formula.contractNone': '未锁定列数 — 命名输出列后即锁定',
+    'formula.contractViolation':
+      '列数契约被破坏：锁定 {expected} 列，实际 {actual} 列 — 数据流已在此中断',
+    'formula.contractExtend': '扩展契约到 {n} 列',
+    'formula.contractClear': '解除锁定',
+    'formula.error.columnContractViolation': '列数契约被破坏（锁定 {expected} 列，实际 {actual} 列）',
     'menu.newFormula': '新建公式卡…',
   },
 
@@ -379,6 +391,20 @@ const dictionaries = {
     'formula.repoint.applyAnyway': 'Apply anyway (columns differ)',
     'formula.repoint.dismiss': 'Not now',
     'formula.repoint.applyAll': 'Apply to all {n} cards',
+
+    // Output column rename + column-count contract
+    'formula.rename': 'Rename columns',
+    'formula.renameDone': 'Done',
+    'formula.renamePlaceholder': 'Column {n}',
+    'formula.contractLocked':
+      '{n} columns locked — a width change upstream stops the data flow here',
+    'formula.contractNone': 'No column count locked — naming an output column locks it',
+    'formula.contractViolation':
+      'Column contract broken: {expected} locked, {actual} produced — the data flow stopped here',
+    'formula.contractExtend': 'Extend contract to {n} columns',
+    'formula.contractClear': 'Remove the lock',
+    'formula.error.columnContractViolation':
+      'Column contract broken ({expected} locked, {actual} produced)',
     'menu.newFormula': 'New Formula Card…',
   },
 } as const;

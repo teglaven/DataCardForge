@@ -1338,6 +1338,112 @@ body {
   padding: 5px 6px 0;
 }
 
+.formula-card__zone-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.formula-card__rename {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.formula-card__rename:hover,
+.formula-card__rename.is-open {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.formula-card__rename-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.formula-card__rename-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.formula-card__rename-index {
+  flex: 0 0 auto;
+  width: 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.formula-card__rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  padding: 1px 5px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.formula-card__rename-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Bottom hint bar: states the column contract; a violation turns it into a stop notice. */
+.formula-card__hintbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  background: var(--surface-alt);
+  border-top: 1px solid var(--border);
+}
+
+.formula-card__hintbar--violation {
+  color: var(--danger);
+  background: rgba(200, 50, 50, 0.08);
+  border-top-color: var(--danger);
+}
+
+.formula-card__hintbar-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.formula-card__hintbar button {
+  font-size: 10px;
+  padding: 1px 6px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.formula-card__hintbar button:hover {
+  border-color: var(--accent);
+}
+
 .formula-card__output-shape {
   font-family: var(--mono);
   font-size: 10px;

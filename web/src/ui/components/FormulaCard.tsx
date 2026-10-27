@@ -57,6 +57,8 @@ interface FormulaCardProps {
   onApplyRepoint: () => void;
   onDismissRepoint: () => void;
   onApplyAllRepoints: () => void;
+  onRenameOutputColumn: (index: number, name: string) => void;
+  onSetColumnContract: (columns: number | null) => void;
   active: boolean;
   closeBlocked: boolean;
   onClose: () => void;
@@ -74,6 +76,8 @@ export function FormulaCard({
   onApplyRepoint,
   onDismissRepoint,
   onApplyAllRepoints,
+  onRenameOutputColumn,
+  onSetColumnContract,
   active,
   closeBlocked,
   onClose,
@@ -95,6 +99,25 @@ export function FormulaCard({
   const [draft, setDraft] = useState(() =>
     card.params.formulas.map((formula) => ({ ...formula })),
   );
+  /**
+   * Rename mode: the output list turns into one name input per column.
+   *
+   * Committing happens on blur/Enter rather than per keystroke: the FIRST commit also
+   * creates the column contract, and a contract should be a deliberate act.
+   */
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState<string[]>(() =>
+    card.params.formulas.map((formula) => formula.name),
+  );
+  useEffect(() => {
+    setNameDraft(card.params.formulas.map((formula) => formula.name));
+  }, [card.params.formulas]);
+
+  const commitName = (index: number): void => {
+    const next = nameDraft[index] ?? '';
+    if (next === card.params.formulas[index]?.name) return;
+    onRenameOutputColumn(index, next);
+  };
   const identityRef = useRef({ id: card.id, count: card.params.formulas.length });
 
   // Re-sync only when the card itself or the number of formulas changes; re-syncing on
@@ -138,6 +161,10 @@ export function FormulaCard({
 
   /** `upstreamError` means "this card is fine, its input died" ⇒ invalidated, not red. */
   const invalidated = error?.code === 'upstreamError';
+  const contract = card.params.columnContract;
+  const violation = error?.code === 'columnContractViolation' ? error : null;
+  const violationExpected = Number(card.node?.params?.expected ?? NaN);
+  const violationActual = Number(card.node?.params?.actual ?? NaN);
 
   const rows = resultMatrix?.rowCount() ?? 0;
   const cols = resultMatrix?.columnCount() ?? 0;
@@ -283,13 +310,50 @@ export function FormulaCard({
 
             <section className="formula-card__outputs" aria-label={t('formula.zoneOutputs')}>
               <div className="formula-card__zone-title">
-                {t('formula.zoneOutputs')}
-                {cols > 0 ? (
-                  <span className="formula-card__output-shape">
-                    {t('formula.outputColumns', { n: cols, rows })}
-                  </span>
-                ) : null}
+                <span>{t('formula.zoneOutputs')}</span>
+                <span className="formula-card__zone-tools">
+                  {cols > 0 ? (
+                    <span className="formula-card__output-shape">
+                      {t('formula.outputColumns', { n: cols, rows })}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={`card__control formula-card__rename${renaming ? ' is-open' : ''}`}
+                    aria-pressed={renaming}
+                    onClick={() => setRenaming((open) => !open)}
+                  >
+                    {renaming ? t('formula.renameDone') : t('formula.rename')}
+                  </button>
+                </span>
               </div>
+              {renaming ? (
+                <ul className="formula-card__rename-list">
+                  {card.params.formulas.map((_formula, index) => (
+                    <li key={index} className="formula-card__rename-item">
+                      <span className="formula-card__rename-index">{index + 1}</span>
+                      <input
+                        type="text"
+                        className="formula-card__rename-input card__control"
+                        value={nameDraft[index] ?? ''}
+                        placeholder={t('formula.renamePlaceholder', { n: index + 1 })}
+                        aria-label={t('formula.renamePlaceholder', { n: index + 1 })}
+                        onChange={(e) =>
+                          setNameDraft((names) =>
+                            names.map((name, i) => (i === index ? e.target.value : name)),
+                          )
+                        }
+                        onBlur={() => commitName(index)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.currentTarget.blur();
+                          }
+                        }}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               {repoint ? (
                 <div className="formula-card__repoint" role="status">
                   <p className="formula-card__repoint-title">
@@ -370,6 +434,46 @@ export function FormulaCard({
             </section>
           </div>
         </div>
+
+        {/* Bottom hint bar: the column contract in words, plus the way out of a violation.
+            It is always present while a contract exists, so the promise is never invisible. */}
+        {(contract || violation || renaming) ? (
+          <div className={`formula-card__hintbar${violation ? ' formula-card__hintbar--violation' : ''}`}>
+            {violation ? (
+              <>
+                <span className="formula-card__hintbar-text">
+                  {t('formula.contractViolation', {
+                    expected: violationExpected,
+                    actual: violationActual,
+                  })}
+                </span>
+                {Number.isFinite(violationActual) ? (
+                  <button
+                    type="button"
+                    className="card__control"
+                    onClick={() => onSetColumnContract(violationActual)}
+                  >
+                    {t('formula.contractExtend', { n: violationActual })}
+                  </button>
+                ) : null}
+                <button type="button" className="card__control" onClick={() => onSetColumnContract(null)}>
+                  {t('formula.contractClear')}
+                </button>
+              </>
+            ) : contract ? (
+              <>
+                <span className="formula-card__hintbar-text">
+                  {t('formula.contractLocked', { n: contract.columns })}
+                </span>
+                <button type="button" className="card__control" onClick={() => onSetColumnContract(null)}>
+                  {t('formula.contractClear')}
+                </button>
+              </>
+            ) : (
+              <span className="formula-card__hintbar-text">{t('formula.contractNone')}</span>
+            )}
+          </div>
+        ) : null}
       </div>
     </CardShell>
   );

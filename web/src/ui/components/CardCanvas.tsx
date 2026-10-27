@@ -70,6 +70,8 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
   const applyRepoint = useWorkspace((s) => s.applyRepoint);
   const dismissRepoint = useWorkspace((s) => s.dismissRepoint);
   const applyRepointsForOwner = useWorkspace((s) => s.applyRepointsForOwner);
+  const renameOutputColumn = useWorkspace((s) => s.renameOutputColumn);
+  const setColumnContract = useWorkspace((s) => s.setColumnContract);
   const view = useWorkspace((s) => s.view);
   const setView = useWorkspace((s) => s.setView);
 
@@ -499,6 +501,8 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
               onApplyAllRepoints={() => {
                 if (offer) applyRepointsForOwner(offer.ownerCardId);
               }}
+              onRenameOutputColumn={(index, name) => renameOutputColumn(card.id, index, name)}
+              onSetColumnContract={(columns) => setColumnContract(card.id, columns)}
               active={active}
               closeBlocked={closeBlocked}
               onActivate={() => bringToFront(card.id)}
@@ -528,6 +532,8 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
       applyRepoint,
       dismissRepoint,
       applyRepointsForOwner,
+      renameOutputColumn,
+      setColumnContract,
       dependencies,
       bringToFront,
       handleClose,

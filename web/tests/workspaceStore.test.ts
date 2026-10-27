@@ -1092,3 +1092,57 @@ describe('re-point offers', () => {
     expect(store().repointOffers).toHaveLength(0);
   });
 });
+
+// ── output column rename + the column-count contract ───────────────────────────
+describe('column rename contract', () => {
+  async function card() {
+    const srcId = store().addMatrixCard([{ name: 's.txt', matrix: matrix([[1], [2]], ['A']) }]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const id = store().addFormulaCard(srcId)!;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    return store().cards.find((c) => c.id === id) as FunctionCardModel;
+  }
+
+  it('creates the contract on the first rename (naming promises the width)', async () => {
+    const before = await card();
+    expect(before.params.columnContract).toBeUndefined();
+    store().renameOutputColumn(before.id, 0, 'temperature');
+    const after = store().cards.find((c) => c.id === before.id) as FunctionCardModel;
+    expect(after.params.formulas[0].name).toBe('temperature');
+    expect(after.params.columnContract).toEqual({ outputId: 'result', columns: 1 });
+  });
+
+  it('extends the contract explicitly (the way out of a self-edit violation)', async () => {
+    const c = await card();
+    store().renameOutputColumn(c.id, 0, 'a');
+    store().setFormula(c.id, 1, 'b', 'A * 2');
+    expect(
+      (store().cards.find((e) => e.id === c.id) as FunctionCardModel).params.columnContract,
+    ).toEqual({ outputId: 'result', columns: 1 });
+    store().setColumnContract(c.id, 2);
+    expect(
+      (store().cards.find((e) => e.id === c.id) as FunctionCardModel).params.columnContract,
+    ).toEqual({ outputId: 'result', columns: 2 });
+  });
+
+  it('clears the contract, so the width is free again', async () => {
+    const c = await card();
+    store().renameOutputColumn(c.id, 0, 'a');
+    store().setColumnContract(c.id, null);
+    expect(
+      (store().cards.find((e) => e.id === c.id) as FunctionCardModel).params.columnContract,
+    ).toBeUndefined();
+  });
+
+  it('survives a snapshot round-trip (a contract the user cannot see is useless)', async () => {
+    const c = await card();
+    store().renameOutputColumn(c.id, 0, 'kept');
+    store().setColumnContract(c.id, 1);
+    const snapshot = store().toSnapshot();
+    store().reset();
+    store().loadSnapshot(snapshot);
+    const restored = store().cards.find((e) => e.id === c.id) as FunctionCardModel;
+    expect(restored.params.columnContract).toEqual({ outputId: 'result', columns: 1 });
+    expect(restored.params.formulas[0].name).toBe('kept');
+  });
+});
