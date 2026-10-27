@@ -510,10 +510,12 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
     std::vector<PortBinding> inputs;
     for (const auto& ij : parsed["inputs"].items()) {
       PortBinding b;
+      b.portId = ij["portId"].isString() ? ij["portId"].asString() : "";
       b.varName = ij["varName"].isString() ? ij["varName"].asString() : "";
       b.mode = ij["mode"].isString() ? ij["mode"].asString() : "cell";
       if (ij["sourceNodeId"].isNumber()) b.sourceNodeId = static_cast<int64_t>(ij["sourceNodeId"].asNumber());
       if (ij["sourceMatrixId"].isNumber()) b.sourceMatrixId = static_cast<int64_t>(ij["sourceMatrixId"].asNumber());
+      if (ij["sourceOutputIndex"].isNumber()) b.sourceOutputIndex = static_cast<int32_t>(ij["sourceOutputIndex"].asNumber());
       inputs.push_back(std::move(b));
     }
     std::string formula = parsed["formula"].isString() ? parsed["formula"].asString() : "";
@@ -526,9 +528,15 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
     if (result.nodeId < 0) return jsonError(400, "unexpectedToken");
     nodes_->recomputeSubtree(result.nodeId);
     const auto node = nodes_->get(result.nodeId);
-    return jsonOk(Json::object({{"nodeId", Json(result.nodeId)},
-                                {"resultMatrixId", Json(node ? node->resultMatrixId : -1)},
-                                {"state", Json(std::string(node ? nodeName(node->state) : "dirty"))}}));
+    Json out = Json::object({{"nodeId", Json(result.nodeId)},
+                             {"resultMatrixId", Json(node ? node->resultMatrixId() : int64_t{-1})},
+                             {"state", Json(std::string(node ? nodeName(node->state) : "dirty"))}});
+    if (node) {
+      Json ids = Json::array();
+      for (int64_t id : node->resultMatrixIds) ids.push(Json(id));
+      out.set("resultMatrixIds", std::move(ids));
+    }
+    return jsonOk(std::move(out));
   }
 
   if (req.path.rfind("/api/nodes/", 0) == 0) {
@@ -546,7 +554,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
     if (suffix.empty() && req.method == "GET") {
       Json out = Json::object({{"nodeId", Json(existing->id)},
                                {"state", Json(std::string(nodeName(existing->state)))},
-                               {"resultMatrixId", Json(existing->resultMatrixId)}});
+                               {"resultMatrixId", Json(existing->resultMatrixId())}});
       if (existing->state == NodeState::Error) {
         out.set("code", Json(existing->errorCode));
         out.set("params", existing->errorParams);
@@ -563,10 +571,12 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       if (haveInputs) {
         for (const auto& ij : parsed["inputs"].items()) {
           PortBinding b;
+          b.portId = ij["portId"].isString() ? ij["portId"].asString() : "";
           b.varName = ij["varName"].isString() ? ij["varName"].asString() : "";
           b.mode = ij["mode"].isString() ? ij["mode"].asString() : "cell";
           if (ij["sourceNodeId"].isNumber()) b.sourceNodeId = static_cast<int64_t>(ij["sourceNodeId"].asNumber());
           if (ij["sourceMatrixId"].isNumber()) b.sourceMatrixId = static_cast<int64_t>(ij["sourceMatrixId"].asNumber());
+          if (ij["sourceOutputIndex"].isNumber()) b.sourceOutputIndex = static_cast<int32_t>(ij["sourceOutputIndex"].asNumber());
           inputs.push_back(std::move(b));
         }
       }
@@ -604,12 +614,12 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       const auto node = nodes_->get(id);
       if (!node) return jsonError(404, "unknownNode", Json::object({{"nodeId", Json(id)}}));
       std::vector<std::string> names;
-      if (!store_->labels(node->resultMatrixId, &names)) return jsonError(404, "unknownMatrix");
+      if (!store_->labels(node->resultMatrixId(), &names)) return jsonError(404, "unknownMatrix");
       const long start = qint("start", 0);
       long count = qint("count", 500);
       count = std::min<long>(std::max(0L, count), 5000);
       std::vector<std::vector<double>> window;
-      const size_t rows = store_->window(node->resultMatrixId, static_cast<size_t>(std::max(0L, start)),
+      const size_t rows = store_->window(node->resultMatrixId(), static_cast<size_t>(std::max(0L, start)),
                                          static_cast<size_t>(count), &window);
       HttpResponse res;
       res.status = 200;

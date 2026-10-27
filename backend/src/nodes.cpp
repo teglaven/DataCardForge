@@ -58,8 +58,8 @@ bool NodeRegistry::wouldCycle(int64_t dependentId, int64_t dependsOnId,
     if (dit != dependencies_.end()) ups.assign(dit->second.begin(), dit->second.end());
     auto ownerIt = resultOwner_.find(current);
     if (ownerIt != resultOwner_.end() &&
-        std::find(ups.begin(), ups.end(), ownerIt->second) == ups.end())
-      ups.push_back(ownerIt->second);
+        std::find(ups.begin(), ups.end(), ownerIt->second.first) == ups.end())
+      ups.push_back(ownerIt->second.first);
     for (int64_t up : ups) {
       if (seen.count(up)) continue;
       seen.insert(up);
@@ -102,11 +102,17 @@ NodeRegistry::CreateResult NodeRegistry::create(const std::vector<PortBinding>& 
 
   ComputeNode node;
   node.id = nextNodeId_++;
-  node.inputs = inputs;
+  // v2: `portId` is the identity. A v1 client that only sends `varName` keeps working —
+  // the identity then falls back to the declared variable name.
+  for (PortBinding b : inputs) {
+    if (b.portId.empty()) b.portId = b.varName;
+    node.inputs.push_back(std::move(b));
+  }
   node.formula = formula;
-  node.resultMatrixId = store_->insert(Matrix{});
+  // v1 nodes have exactly one output; K is a signature property, never data-dependent.
+  node.resultMatrixIds.push_back(store_->insert(Matrix{}));
   int64_t nodeId = node.id;
-  resultOwner_[matrixKey(node.resultMatrixId)] = nodeId;
+  resultOwner_[matrixKey(node.resultMatrixIds[0])] = {nodeId, 0};
   for (const auto& b : node.inputs) {
     if (b.sourceNodeId < 0 && b.sourceMatrixId < 0) continue;
     int64_t key = sourceKey(b);
@@ -143,7 +149,11 @@ bool NodeRegistry::update(int64_t nodeId, const std::string* formula,
     // Commit only after the whole batch is known to be acceptable.
     for (auto& d : dependencies_[nodeId]) dependents_[d].erase(nodeId);
     dependencies_[nodeId].clear();
-    it->second.inputs = *inputs;
+    it->second.inputs.clear();
+    for (PortBinding b : *inputs) {
+      if (b.portId.empty()) b.portId = b.varName;
+      it->second.inputs.push_back(std::move(b));
+    }
     for (const auto& b : it->second.inputs) {
       if (b.sourceNodeId < 0 && b.sourceMatrixId < 0) continue;
       int64_t key = sourceKey(b);
@@ -169,10 +179,11 @@ bool NodeRegistry::remove(int64_t nodeId, bool* hadDependents) {
   for (auto& d : dependencies_[nodeId]) dependents_[d].erase(nodeId);
   dependencies_.erase(nodeId);
   dependents_.erase(nodeId);
-  int64_t resultId = it->second.resultMatrixId;
-  resultOwner_.erase(matrixKey(resultId));
+  // K outputs: release every result matrix this node owns.
+  std::vector<int64_t> results = it->second.resultMatrixIds;
+  for (int64_t resultId : results) resultOwner_.erase(matrixKey(resultId));
   nodes_.erase(it);
-  store_->remove(resultId);
+  for (int64_t resultId : results) store_->remove(resultId);
   return true;
 }
 
@@ -215,9 +226,10 @@ std::vector<int64_t> NodeRegistry::allNodeIds() const {
   return ids;
 }
 
-bool NodeRegistry::gatherInputs(const ComputeNode& node, std::vector<std::string>* names,
+bool NodeRegistry::gatherInputs(const std::vector<PortBinding>& bindings,
+                                std::vector<std::string>* names,
                                 std::vector<std::vector<double>>* data, size_t* length,
-                                ExpressionError* err) {
+                                std::string* errorCode, std::string* errorName) {
   names->clear();
   data->clear();
   *length = 0;
@@ -225,45 +237,61 @@ bool NodeRegistry::gatherInputs(const ComputeNode& node, std::vector<std::string
   // Every column stays addressable under its natural label; a single-column table is
   // additionally aliased to the declared varName so `a + 1` reads naturally. Multi-
   // column tables get per-column slicing from the deferred conditional-filter card.
-  for (const auto& b : node.inputs) {
+  //
+  // The registry lock is taken per binding and released before touching the matrix store:
+  // copying a huge table must not block unrelated node writers (max-headroom). Lock order
+  // is always registry → store, never the reverse.
+  for (const auto& b : bindings) {
     int64_t matrixId = -1;
-    if (b.sourceNodeId >= 0) {
-      auto nit = nodes_.find(b.sourceNodeId);
-      if (nit == nodes_.end()) {
-        if (err) *err = ExpressionError("unbound input '" + b.varName + "'", -1, "unknownColumn");
-        return false;
-      }
-      if (nit->second.state == NodeState::Error) {
-        // Never compute on a dead upstream: its stored result is cleared, and reporting
-        // the cause is more useful than the generic "unbound input".
-        if (err)
-          *err = ExpressionError("upstream node " + std::to_string(b.sourceNodeId) +
-                                     " failed (" + nit->second.errorCode + ")",
-                                 -1, "upstreamError");
-        return false;
-      }
-      matrixId = nit->second.resultMatrixId;
-    } else if (b.sourceMatrixId >= 0) {
-      // A node result can be bound as a plain matrix; when its producer failed, this
-      // port must inherit the error instead of reading the (now cleared) result.
-      auto ownerIt = resultOwner_.find(matrixKey(b.sourceMatrixId));
-      if (ownerIt != resultOwner_.end()) {
-        auto nit = nodes_.find(ownerIt->second);
-        if (nit != nodes_.end() && nit->second.state == NodeState::Error) {
-          if (err)
-            *err = ExpressionError("upstream node " + std::to_string(ownerIt->second) +
-                                       " failed (" + nit->second.errorCode + ")",
-                                   -1, "upstreamError");
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      if (b.sourceNodeId >= 0) {
+        auto nit = nodes_.find(b.sourceNodeId);
+        if (nit == nodes_.end()) {
+          *errorCode = "unknownColumn";
+          *errorName = b.varName;
           return false;
         }
+        if (nit->second.state == NodeState::Error) {
+          // Never compute on a dead upstream: its stored result is cleared, and reporting
+          // the cause is more useful than the generic "unbound input".
+          *errorCode = "upstreamError";
+          *errorName = "upstream node " + std::to_string(b.sourceNodeId) + " failed (" +
+                       nit->second.errorCode + ")";
+          return false;
+        }
+        // v2: pick the declared output of a K-output upstream.
+        const auto& outs = nit->second.resultMatrixIds;
+        if (b.sourceOutputIndex < 0 ||
+            static_cast<size_t>(b.sourceOutputIndex) >= outs.size()) {
+          *errorCode = "unknownColumn";
+          *errorName = b.varName + " (missing output " + std::to_string(b.sourceOutputIndex) + ")";
+          return false;
+        }
+        matrixId = outs[static_cast<size_t>(b.sourceOutputIndex)];
+      } else if (b.sourceMatrixId >= 0) {
+        // A node result can be bound as a plain matrix; when its producer failed, this
+        // port must inherit the error instead of reading the (now cleared) result.
+        auto ownerIt = resultOwner_.find(matrixKey(b.sourceMatrixId));
+        if (ownerIt != resultOwner_.end()) {
+          auto nit = nodes_.find(ownerIt->second.first);
+          if (nit != nodes_.end() && nit->second.state == NodeState::Error) {
+            *errorCode = "upstreamError";
+            *errorName = "upstream node " + std::to_string(ownerIt->second.first) +
+                         " failed (" + nit->second.errorCode + ")";
+            return false;
+          }
+        }
+        matrixId = b.sourceMatrixId;
+      } else {
+        *errorCode = "unknownColumn";
+        *errorName = b.varName;
+        return false;
       }
-      matrixId = b.sourceMatrixId;
-    } else {
-      if (err) *err = ExpressionError("unbound input '" + b.varName + "'", -1, "unknownColumn");
-      return false;
     }
 
     size_t columnCount = 0;
+    const std::string alias = b.varName;
     const bool found = store_->withMatrix(matrixId, [&](const Matrix& m) {
       for (const auto& col : m.columns()) {
         names->push_back(Matrix::label(col));
@@ -271,63 +299,98 @@ bool NodeRegistry::gatherInputs(const ComputeNode& node, std::vector<std::string
       }
       // The alias must keep names.size() == data.size(): the engine indexes data by the
       // resolved name index (a mismatched pair reads out of bounds — found by smoke test).
-      if (m.columnCount() == 1) {
-        names->push_back(b.varName);
+      if (m.columnCount() == 1 && !alias.empty()) {
+        names->push_back(alias);
         data->push_back(m.column(0).data);
       }
       columnCount = m.columnCount();
       *length = std::max(*length, m.rowCount());
     });
     if (!found || columnCount == 0) {
-      if (err) *err = ExpressionError("unbound input '" + b.varName + "'", -1, "unknownColumn");
+      *errorCode = "unknownColumn";
+      *errorName = b.varName;
       return false;
     }
   }
   return true;
 }
 
-void NodeRegistry::failNode(ComputeNode* node, const std::string& code, Json params) {
-  node->state = NodeState::Error;
-  node->errorCode = code;
-  node->errorParams = std::move(params);
-  // Drop the previous result: an erroring node must not keep serving the numbers from
+void NodeRegistry::failNodeLocked(int64_t nodeId, const std::string& code, Json params) {
+  auto it = nodes_.find(nodeId);
+  if (it == nodes_.end()) return;
+  ComputeNode& node = it->second;
+  node.state = NodeState::Error;
+  node.errorCode = code;
+  node.errorParams = std::move(params);
+  // Drop the previous results: an erroring node must not keep serving the numbers from
   // its last successful run (audit finding: downstream cards read stale values and
   // still displayed state "done").
-  store_->replace(node->resultMatrixId, {});
-  bus_->publish(Json::object({{"nodeId", Json(static_cast<int64_t>(node->id))},
+  for (int64_t resultId : node.resultMatrixIds) store_->replace(resultId, {});
+  bus_->publish(Json::object({{"nodeId", Json(static_cast<int64_t>(node.id))},
                               {"state", Json(std::string("error"))},
-                              {"code", Json(node->errorCode)},
-                              {"params", node->errorParams}}));
+                              {"code", Json(node.errorCode)},
+                              {"params", node.errorParams}}));
 }
 
-void NodeRegistry::evaluateNode(ComputeNode* node) {
-  node->state = NodeState::Computing;
-  bus_->publish(Json::object({{"nodeId", Json(static_cast<int64_t>(node->id))},
-                              {"state", Json(std::string(nodeName(node->state)))}}));
+void NodeRegistry::evaluateNode(int64_t nodeId) {
+  // ── phase 1 (locked, short): publish `computing` and copy the evaluation request ──
+  std::vector<PortBinding> bindings;
+  std::string formula;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = nodes_.find(nodeId);
+    if (it == nodes_.end()) return;
+    it->second.state = NodeState::Computing;
+    bus_->publish(Json::object({{"nodeId", Json(nodeId)},
+                                {"state", Json(std::string("computing"))}}));
+    bindings = it->second.inputs;
+    formula = it->second.formula;
+  }
+
+  // ── phase 2 (unlocked): resolve inputs; the store has its own mutex ──
   std::vector<std::string> names;
   std::vector<std::vector<double>> data;
   size_t length = 0;
-  ExpressionError gatherErr("", -1, "");
-  if (!gatherInputs(*node, &names, &data, &length, &gatherErr)) {
-    failNode(node, gatherErr.code, Json::object({{"name", Json(gatherErr.what())}}));
+  std::string gatherCode;
+  std::string gatherName;
+  if (!gatherInputs(bindings, &names, &data, &length, &gatherCode, &gatherName)) {
+    std::lock_guard<std::mutex> lock(mu_);
+    failNodeLocked(nodeId, gatherCode, Json::object({{"name", Json(gatherName)}}));
     return;
   }
+
+  // ── phase 3 (unlocked): evaluate. NOTHING here holds mu_. ──
+  std::vector<double> values;
+  std::string errorCode;
+  int64_t errorPosition = -1;
   try {
-    std::vector<double> values = ExprEngine::evaluate(node->formula, names, data,
-                                                      length == 0 ? 1 : length);
-    Column out;
-    out.posName = "Pos.1";
-    out.annotation = "";
-    out.data = std::move(values);
-    store_->replace(node->resultMatrixId, {out});
-    node->state = NodeState::Done;
-    node->errorCode.clear();
-    bus_->publish(Json::object({{"nodeId", Json(static_cast<int64_t>(node->id))},
-                                {"state", Json(std::string("done"))},
-                                {"matrixId", Json(node->resultMatrixId)}}));
+    values = ExprEngine::evaluate(formula, names, data, length == 0 ? 1 : length);
   } catch (const ExpressionError& e) {
-    failNode(node, e.code, Json::object({{"position", Json(e.position)}}));
+    errorCode = e.code;
+    errorPosition = e.position;
+  } catch (const std::exception&) {
+    errorCode = "internalError";
   }
+
+  // ── phase 4 (locked, short): commit ──
+  std::lock_guard<std::mutex> lock(mu_);
+  auto it = nodes_.find(nodeId);
+  if (it == nodes_.end()) return;  // deleted while computing
+  ComputeNode& node = it->second;
+  if (!errorCode.empty()) {
+    failNodeLocked(nodeId, errorCode, Json::object({{"position", Json(errorPosition)}}));
+    return;
+  }
+  Column out;
+  out.posName = "Pos.1";
+  out.annotation = "";
+  out.data = std::move(values);
+  store_->replace(node.resultMatrixIds[0], {out});
+  node.state = NodeState::Done;
+  node.errorCode.clear();
+  bus_->publish(Json::object({{"nodeId", Json(nodeId)},
+                              {"state", Json(std::string("done"))},
+                              {"matrixId", Json(node.resultMatrixIds[0])}}));
 }
 
 void NodeRegistry::recomputeSubtree(int64_t nodeId) {
@@ -347,23 +410,23 @@ void NodeRegistry::recomputeSubtree(int64_t nodeId) {
       auto it = dependents_.find(cur);
       if (it != dependents_.end())
         for (int64_t d : it->second) q.push(d);
-      // The node's result matrix is a mid-edge: whoever binds it depends on this node.
+      // The node's result matrices are mid-edges: whoever binds any of them depends on
+      // this node. K outputs ⇒ K keys.
       auto nit = nodes_.find(cur);
       if (nit != nodes_.end()) {
-        auto rit = dependents_.find(matrixKey(nit->second.resultMatrixId));
-        if (rit != dependents_.end())
-          for (int64_t d : rit->second) q.push(d);
+        for (int64_t resultId : nit->second.resultMatrixIds) {
+          auto rit = dependents_.find(matrixKey(resultId));
+          if (rit != dependents_.end())
+            for (int64_t d : rit->second) q.push(d);
+        }
       }
     }
   }
   // Topo order via BFS above is already dependency-first because edges point
-  // source->dependent; evaluate each node in turn.
-  for (int64_t id : order) {
-    std::lock_guard<std::mutex> lock(mu_);
-    auto it = nodes_.find(id);
-    if (it == nodes_.end()) continue;
-    evaluateNode(&it->second);
-  }
+  // source->dependent; evaluate each node in turn. evaluateNode() takes the lock in short
+  // bursts itself, so this loop holds no lock at all — a slow node cannot freeze the
+  // registry (docs/decisions/2026-10-15-max-headroom-principle.md).
+  for (int64_t id : order) evaluateNode(id);
 }
 
 void NodeRegistry::onMatrixChanged(int64_t matrixId) {

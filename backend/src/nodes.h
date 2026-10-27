@@ -24,19 +24,31 @@ enum class NodeState { Dirty, Computing, Done, Error };
 
 const char* nodeName(NodeState s);
 
+// v2 port binding (docs/decisions/2026-10-26-card-schema-v2.md, port-semantics-v1.md).
+//
+// `portId` is the identity: connections are recognised by it, never by position. It is
+// additive so v1 clients that only send `varName` keep working — `varName` stays as the
+// declared variable the expression engine resolves against, and `portId` falls back to it.
 struct PortBinding {
+  std::string portId;               // stable identity; v1 clients may omit it (→ varName)
   std::string varName;              // declared variable name ("a", "A", …)
   std::string mode = "cell";        // "cell" | "matrix" — explicit field, never inferred by callers
   int64_t sourceMatrixId = -1;      // when bound to a stored matrix
   int64_t sourceNodeId = -1;        // when bound to another node's result
+  int32_t sourceOutputIndex = 0;    // which output of a K-output node (v1 data is always 0)
 };
 
 struct ComputeNode {
   int64_t id = 0;
   std::string kind = "function";    // v1 only function cards live here
-  std::vector<PortBinding> inputs;  // ordered; index == port index
-  std::string formula;
-  int64_t resultMatrixId = -1;
+  std::string signatureId;          // v2: registry entry; empty ⇒ the v1 `formula` path
+  std::vector<PortBinding> inputs;  // ordered; identity is `portId`, this order is display only
+  std::string formula;              // v1 single-expression formula
+  // Outputs indexed by the signature's output ordinal. Always ≥ 1 element once created
+  // (v1 nodes have exactly one). K is fixed by the signature, never by the data.
+  std::vector<int64_t> resultMatrixIds;
+  // Output 0, which is also what the legacy protocol field `resultMatrixId` reports.
+  int64_t resultMatrixId() const { return resultMatrixIds.empty() ? -1 : resultMatrixIds[0]; }
   NodeState state = NodeState::Dirty;
   std::string errorCode;            // structured code when state == Error
   Json errorParams = Json::object();
@@ -105,14 +117,21 @@ class NodeRegistry {
   }
 
  private:
-  void evaluateNode(ComputeNode* node);
-  // Transition to Error, clear the stale result matrix, publish the error event.
-  void failNode(ComputeNode* node, const std::string& code, Json params);
-  // Resolve one binding to its current columns. Throws ExpressionError-compatible
-  // failures via std::runtime_error subclasses handled locally.
-  bool gatherInputs(const ComputeNode& node, std::vector<std::string>* names,
+  // Evaluate one node OUTSIDE the registry lock (max-headroom: a slow formula must never
+  // freeze every other request — see docs/decisions/2026-10-15-max-headroom-principle.md).
+  // The lock is taken in short bursts: publish `computing`, resolve inputs, eval unlocked,
+  // then commit the result. Looking the node up by id in each phase also removes the old
+  // dangling-pointer window (the node may be deleted between phases).
+  void evaluateNode(int64_t nodeId);
+  // Transition to Error, clear the stale result, publish the error event.
+  // REQUIRES mu_ to be held by the caller.
+  void failNodeLocked(int64_t nodeId, const std::string& code, Json params);
+  // Resolve every binding to its current columns. The registry lock is taken per binding
+  // (to check the upstream state) and released before touching the matrix store, so a
+  // large table copy never blocks the writer of an unrelated node.
+  bool gatherInputs(const std::vector<PortBinding>& inputs, std::vector<std::string>* names,
                     std::vector<std::vector<double>>* data, size_t* length,
-                    ExpressionError* err);
+                    std::string* errorCode, std::string* errorName);
 
   mutable std::mutex mu_;
   MatrixStore* store_;
@@ -125,7 +144,8 @@ class NodeRegistry {
   // A node's result matrix is NOT an ordinary sink: it sits ON TOP of the node that
   // produced it. Without this map, chains through results (node1 -> res1 -> node2)
   // are invisible to both cascade BFS and cycle detection (found by unit test).
-  std::map<int64_t, int64_t> resultOwner_;            // matrixKey(result) -> nodeId
+  // v2: K outputs per node, so the owner is (nodeId, outputIndex).
+  std::map<int64_t, std::pair<int64_t, int32_t>> resultOwner_;  // matrixKey(result) -> owner
 
   // Cycle check over the *dependency* direction, mirroring findDownstreamPath().
   bool wouldCycle(int64_t dependentId, int64_t dependsOnId, std::vector<int64_t>* pathOut) const;

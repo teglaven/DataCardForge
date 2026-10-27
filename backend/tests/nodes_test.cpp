@@ -47,25 +47,25 @@ int main() {
   nodes.recomputeSubtree(r1.nodeId);
   auto n1 = nodes.get(r1.nodeId);
   CHECK(n1 && n1->state == NodeState::Done);
-  CHECK(columnOf(store, n1 ? n1->resultMatrixId : -1) == std::vector<double>({2, 4, 6, 8}));
+  CHECK(columnOf(store, n1 ? n1->resultMatrixId() : -1) == std::vector<double>({2, 4, 6, 8}));
 
   // Chain: node2 = node1.result + 10 → [12,14,16,18]
   PortBinding b2;
   b2.varName = "x";
   b2.mode = "cell";
-  b2.sourceMatrixId = n1->resultMatrixId;  // results are matrices too
+  b2.sourceMatrixId = n1->resultMatrixId();  // results are matrices too
   auto r2 = nodes.create({b2}, "x + 10");
   CHECK(r2.nodeId == 2 && r2.cyclePath.empty());
   nodes.recomputeSubtree(r2.nodeId);
   auto n2 = nodes.get(r2.nodeId);
   CHECK(n2 && n2->state == NodeState::Done);
-  CHECK(columnOf(store, n2 ? n2->resultMatrixId : -1) == std::vector<double>({12, 14, 16, 18}));
+  CHECK(columnOf(store, n2 ? n2->resultMatrixId() : -1) == std::vector<double>({12, 14, 16, 18}));
 
   // Upstream content change must cascade through BOTH dependents in topo order.
   store.replace(m1, [] { Column d; d.posName = "Pos.1"; d.data = {5, 5, 5, 5}; return std::vector<Column>{d}; }());
   nodes.onMatrixChanged(m1);
-  CHECK(columnOf(store, n1->resultMatrixId) == std::vector<double>({10, 10, 10, 10}));
-  CHECK(columnOf(store, n2->resultMatrixId) == std::vector<double>({20, 20, 20, 20}));
+  CHECK(columnOf(store, n1->resultMatrixId()) == std::vector<double>({10, 10, 10, 10}));
+  CHECK(columnOf(store, n2->resultMatrixId()) == std::vector<double>({20, 20, 20, 20}));
 
   // Cycle refusal is ATOMIC: binding node2 as a source of node1 must register nothing
   // AND must leave node1's previous input binding intact (a rejected PATCH may not
@@ -85,7 +85,7 @@ int main() {
   CHECK(kept && kept->inputs[0].sourceMatrixId == m1);
   // ...and it still evaluates with the preserved binding.
   nodes.recomputeSubtree(r1.nodeId);
-  CHECK(columnOf(store, n1->resultMatrixId) == std::vector<double>({10, 10, 10, 10}));
+  CHECK(columnOf(store, n1->resultMatrixId()) == std::vector<double>({10, 10, 10, 10}));
 
   // A node that errors must not keep serving its previous numbers, and its dependents
   // must inherit the error instead of recomputing on stale data.
@@ -95,7 +95,7 @@ int main() {
   nodes.recomputeSubtree(r1.nodeId);
   auto errored = nodes.get(r1.nodeId);
   CHECK(errored && errored->state == NodeState::Error && errored->errorCode == "unknownFunction");
-  CHECK(columnOf(store, n1->resultMatrixId).empty());
+  CHECK(columnOf(store, n1->resultMatrixId()).empty());
   auto downstream = nodes.get(r2.nodeId);
   CHECK(downstream && downstream->state == NodeState::Error &&
         downstream->errorCode == "upstreamError");
@@ -115,7 +115,7 @@ int main() {
   // Deleting a stored matrix a node reads must be refused.
   CHECK(!nodes.removeMatrix(m1, &hadDeps) && hadDeps);
   // Deleting a node result matrix directly must be refused too (the node owns it).
-  CHECK(!nodes.removeMatrix(n1->resultMatrixId, &hadDeps) && hadDeps);
+  CHECK(!nodes.removeMatrix(n1->resultMatrixId(), &hadDeps) && hadDeps);
   // A matrix nothing reads can be deleted.
   int64_t orphan = store.insert(Matrix({c}));
   CHECK(nodes.removeMatrix(orphan, &hadDeps) && !hadDeps);
