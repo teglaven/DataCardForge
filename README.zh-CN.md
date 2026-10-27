@@ -1,5 +1,10 @@
 # Data Workbench — 数据矩阵工作台
 
+[![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
+[![Pages 演示](https://img.shields.io/badge/%E6%BC%94%E7%A4%BA-%E5%89%8D%E7%AB%AF%E5%9C%A8%E7%BA%BF-2ea44f)](https://teglaven.github.io/DataCardForge/)
+[![许可证](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![测试](https://img.shields.io/badge/tests-394%20unit%20%C2%B7%2065%20e2e-brightgreen)](web/tests)
+
 **[English](README.md) | [中文](README.zh-CN.md)**
 
 一个面向工业/科研场景的轻量级**数据矩阵批处理工作台**。
@@ -7,12 +12,26 @@
 > ⚠️ **早期试验项目**：截至 2026 年 10 月，本项目仍处于**早期试验阶段**，可用来体验功能、测试使用流程，但**强烈不建议**用于生产环境或正式的科研用途。
 
 <p align="center">
-  <img src="web/docs/screenshots/violin.png" width="49%" alt="小提琴图卡片">
-  <img src="web/docs/screenshots/correlation-heatmap.png" width="49%" alt="相关性热力图卡片">
+  <img src="web/docs/screenshots/hero.png" width="92%" alt="Data Workbench：10000×10 测量文件作为数据卡，下游接一张相关性热力图卡">
 </p>
 
 **作者与权属**：`teglaven` · GPL-3.0 · 身份、时间线与提交锚点见 [`PROVENANCE.md`](PROVENANCE.md)。
 **当前实测状态**（2026-10-27 实测）：前端 394 个单元测试 · 后端 7 个 ctest（3 个 opt-in）· 端到端 65 项检查，全绿。
+
+## 试一下
+
+**浏览器里直接玩（无需安装）**——<https://teglaven.github.io/DataCardForge/> 是前端的静态部署。把
+[`docs/sampleData/1.txt`](docs/sampleData/1.txt) 拖进画布，右键列头 →「画图」即可。文件加载与 9 种图表
+在那里都能用；C++ 计算服务不在静态托管上，函数卡会显示「后端不可达」横幅——这是设计里的可见降级，不是故障。
+
+**本地跑完整版（含计算后端）**——一条命令编译后端并起两个服务：
+
+```bash
+./scripts/dev.sh          # 后端 :37811，Vite :5173
+```
+
+前置：Node 22+、CMake 3.24+、C++17 编译器、Eigen 3.4 头文件
+（`sudo apt install build-essential cmake ninja-build libeigen3-dev`）。
 
 ## 设计理念
 
@@ -126,6 +145,18 @@
   「新建回归卡…」即可。参数区按签名渲染：有 `formulas` 才是编辑器，没有就直说
 - **跨层裁判**：`web/tests/fixtures/cards/*.json` 同一份 JSON 由 TS 与 C++ 双边跑；
   `DC_RUN_INTEGRATION=1` 时还有一条真后端集成门禁
+
+## 截图
+
+下面每张图都是生产构建在 headless Chromium 里的真实输出，不是示意图（更多见
+[`web/docs/screenshots/`](web/docs/screenshots/)，由 `web/scripts/smoke.mjs` 可复现生成）。
+
+| | |
+|---|---|
+| ![小提琴图](web/docs/screenshots/violin.png) | ![回归图](web/docs/screenshots/regression.png) |
+| **小提琴图**——KDE 轮廓 + 四分位线，双峰列一眼可见 | **回归图**——散点 + OLS 拟合，图例含斜率与 R² |
+| ![箱线图](web/docs/screenshots/boxplot.png) | ![相关性热力图](web/docs/screenshots/correlation-heatmap.png) |
+| **箱线图**——中位数/四分位/须线/Tukey 离群点 | **相关性热力图**——两两 Pearson 矩阵 |
 
 ## 适用范围与限制
 
