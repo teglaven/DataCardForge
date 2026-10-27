@@ -153,12 +153,14 @@
 下面每张图都是生产构建在 headless Chromium 里的真实输出，不是示意图（更多见
 [`web/docs/screenshots/`](web/docs/screenshots/)，由 `web/scripts/smoke.mjs` 可复现生成）。
 
-| | |
-|---|---|
-| ![小提琴图](web/docs/screenshots/violin.png) | ![回归图](web/docs/screenshots/regression.png) |
-| **小提琴图**——KDE 轮廓 + 四分位线，双峰列一眼可见 | **回归图**——散点 + OLS 拟合，图例含斜率与 R² |
-| ![箱线图](web/docs/screenshots/boxplot.png) | ![相关性热力图](web/docs/screenshots/correlation-heatmap.png) |
-| **箱线图**——中位数/四分位/须线/Tukey 离群点 | **相关性热力图**——两两 Pearson 矩阵 |
+| | | |
+|---|---|---|
+| ![折线图](web/docs/screenshots/line.png) | ![散点图](web/docs/screenshots/scatter.png) | ![回归图](web/docs/screenshots/regression.png) |
+| **折线图**——一列或多列按行号展开，可缩放/对数轴/平滑 | **散点图**——两列配对 (X, Y)，可叠加最小二乘线 | **回归图**——散点 + OLS 拟合，标注斜率与 R² |
+| ![直方图](web/docs/screenshots/histogram.png) | ![箱线图](web/docs/screenshots/boxplot.png) | ![小提琴图](web/docs/screenshots/violin.png) |
+| **直方图**——Sturges 自动分箱或显式指定箱数 | **箱线图**——中位数/四分位/须线/Tukey 离群点 | **小提琴图**——KDE 轮廓 + 四分位线，双峰一眼可见 |
+| ![柱状图](web/docs/screenshots/bar.png) | ![均值±误差](web/docs/screenshots/errorbar.png) | ![相关性热力图](web/docs/screenshots/correlation-heatmap.png) |
+| **柱状图**——分组/堆叠，按行号展开 | **均值±误差**——每列均值 + SD/SE/95% CI | **相关性热力图**——两两 Pearson 矩阵 |
 
 ## 适用范围与限制
 
