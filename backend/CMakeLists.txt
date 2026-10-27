@@ -83,6 +83,14 @@ endif()
 # the script exits 101 and ctest records "Not Run" instead of a silent pass. It always
 # binds a throwaway port — never 37811, where the systemd service lives.
 if(Python3_Interpreter_FOUND)
+  # Node-registry concurrency (2026-10-27): evaluation no longer holds the registry lock,
+  # so concurrent create / params-rewrite / window-read / delete must not deadlock, crash,
+  # or publish a result whose definition was replaced mid-computation. Same opt-in gate.
+  add_test(NAME nodes_stress
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/stress/nodes_stress.py
+            --binary $<TARGET_FILE:dc_backend> --threads 8 --rounds 25)
+  set_tests_properties(nodes_stress PROPERTIES SKIP_RETURN_CODE 101)
+
   add_test(NAME http_stress
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/stress/stress_test.py
             --binary $<TARGET_FILE:dc_backend> --port 37911
