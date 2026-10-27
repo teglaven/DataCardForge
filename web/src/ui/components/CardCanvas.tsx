@@ -454,20 +454,18 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
           // source table happens to show". Resolve every port for the left zone.
           const resolveInput = (entry: (typeof card.inputs)[number]): ResolvedInput => {
             const matrix = matrices.get(entry.target.matrixId);
-            const owner = cards.find(
-              (other) =>
-                other.id === entry.target.cardId &&
-                isMatrixCard(other) &&
-                other.sources.some((source) => source.matrixId === entry.target.matrixId),
-            );
-            const fileName =
+            const owner = cards.find((other) => other.id === entry.target.cardId);
+            // A data card names the file; a function card's output has no file name, so it
+            // says which card it came from (the same rule the store uses to resolve owners).
+            const sourceName =
               owner && isMatrixCard(owner)
-                ? (owner.sources.find((source) => source.matrixId === entry.target.matrixId)?.name ??
-                  undefined)
-                : undefined;
+                ? owner.sources.find((source) => source.matrixId === entry.target.matrixId)?.name
+                : owner && isFormulaCard(owner)
+                  ? t('formula.outputLabel', { n: owner.id })
+                  : undefined;
             const column = entry.target.type === 'cell' ? entry.target.column : undefined;
             const label = [
-              fileName ?? `#${entry.target.matrixId}`,
+              sourceName ?? `#${entry.target.matrixId}`,
               column !== undefined ? `col ${column + 1}` : '',
             ]
               .filter(Boolean)
