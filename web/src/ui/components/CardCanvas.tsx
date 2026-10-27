@@ -66,6 +66,10 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
   const addChartCard = useWorkspace((s) => s.addChartCard);
   const addFormulaCard = useWorkspace((s) => s.addFormulaCard);
   const showToast = useWorkspace((s) => s.showToast);
+  const repointOffers = useWorkspace((s) => s.repointOffers);
+  const applyRepoint = useWorkspace((s) => s.applyRepoint);
+  const dismissRepoint = useWorkspace((s) => s.dismissRepoint);
+  const applyRepointsForOwner = useWorkspace((s) => s.applyRepointsForOwner);
   const view = useWorkspace((s) => s.view);
   const setView = useWorkspace((s) => s.setView);
 
@@ -477,6 +481,10 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
           const sourceColumnNames = sourceMatrix
             ? sourceMatrix.columns().map((c) => c.annotation || c.posName)
             : [];
+          const offer = repointOffers.find((entry) => entry.cardId === card.id) ?? null;
+          const batch = offer
+            ? repointOffers.filter((entry) => entry.ownerCardId === offer.ownerCardId).length
+            : 0;
           return (
             <FormulaCard
               key={card.id}
@@ -484,6 +492,13 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
               resultMatrix={matrices.get(card.displayMatrixId)}
               sourceColumnNames={sourceColumnNames}
               inputs={resolvedInputs}
+              repoint={offer}
+              repointBatch={batch}
+              onApplyRepoint={() => applyRepoint(card.id)}
+              onDismissRepoint={() => dismissRepoint(card.id)}
+              onApplyAllRepoints={() => {
+                if (offer) applyRepointsForOwner(offer.ownerCardId);
+              }}
               active={active}
               closeBlocked={closeBlocked}
               onActivate={() => bringToFront(card.id)}
@@ -509,6 +524,10 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
       cards,
       selectedId,
       matrices,
+      repointOffers,
+      applyRepoint,
+      dismissRepoint,
+      applyRepointsForOwner,
       dependencies,
       bringToFront,
       handleClose,

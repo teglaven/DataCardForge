@@ -1003,3 +1003,92 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
     expect(frame.names).toEqual(['Pos.1 x', 'Pos.2']);
   });
 });
+
+// ── re-point confirmation (v2: switching a file is an explicit graph edit) ──────
+describe('re-point offers', () => {
+  /** Two files in one data card: identical headers, and a third file with different ones. */
+  function setup() {
+    const srcId = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1, 2], [3, 4]], ['A', 'B']) },
+      { name: 'b.txt', matrix: matrix([[5, 6], [7, 8]], ['A', 'B']) },
+      { name: 'c.txt', matrix: matrix([[9], [10]], ['Z']) },
+    ]);
+    const card = store().cards.find((c) => c.id === srcId) as MatrixCardModel;
+    return { srcId, matrices: card.sources.map((source) => source.matrixId) };
+  }
+
+  it('offers the switch for a function card instead of re-pointing it', () => {
+    const { srcId, matrices } = setup();
+    const fId = store().addFormulaCard(srcId, matrices[0])!;
+    store().setActiveSource(srcId, 1);
+    const offers = store().repointOffers;
+    expect(offers).toHaveLength(1);
+    expect(offers[0]).toMatchObject({
+      cardId: fId,
+      ownerCardId: srcId,
+      fromMatrixId: matrices[0],
+      toMatrixId: matrices[1],
+      sameColumns: true,
+      addedLabels: [],
+      removedLabels: [],
+      toName: 'b.txt',
+    });
+    // Nothing changed yet — the card still reads its frozen matrix.
+    const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+    expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[0] });
+  });
+
+  it('applies the offer as one explicit edit (input + node)', () => {
+    const { srcId, matrices } = setup();
+    const fId = store().addFormulaCard(srcId, matrices[0])!;
+    store().setActiveSource(srcId, 1);
+    store().applyRepoint(fId);
+    const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+    expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[1] });
+    expect(store().repointOffers).toHaveLength(0);
+    // The dependency edge is unchanged (same data card), so close protection still holds.
+    expect(store().dependencies.getDependents(srcId)).toContain(fId);
+  });
+
+  it('flags a column change so the confirm cannot be a blind one', () => {
+    const { srcId, matrices } = setup();
+    store().addFormulaCard(srcId, matrices[0]);
+    store().setActiveSource(srcId, 2);
+    const offer = store().repointOffers[0];
+    expect(offer.sameColumns).toBe(false);
+    expect(offer.addedLabels).toEqual(['Z']);
+    expect(offer.removedLabels).toEqual(['A', 'B']);
+    expect(offer.toCols).toBe(1);
+  });
+
+  it('dismissing keeps the current input and clears the offer', () => {
+    const { srcId, matrices } = setup();
+    const fId = store().addFormulaCard(srcId, matrices[0])!;
+    store().setActiveSource(srcId, 1);
+    store().dismissRepoint(fId);
+    expect(store().repointOffers).toHaveLength(0);
+    const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+    expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[0] });
+  });
+
+  it('applies to every card reading the same data card in one go', () => {
+    const { srcId, matrices } = setup();
+    const a = store().addFormulaCard(srcId, matrices[0])!;
+    const b = store().addFormulaCard(srcId, matrices[0])!;
+    store().setActiveSource(srcId, 1);
+    expect(store().repointOffers).toHaveLength(2);
+    store().applyRepointsForOwner(srcId);
+    expect(store().repointOffers).toHaveLength(0);
+    for (const id of [a, b]) {
+      const fn = store().cards.find((c) => c.id === id) as FunctionCardModel;
+      expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[1] });
+    }
+  });
+
+  it('offers nothing when the new file is already the card input', () => {
+    const { srcId, matrices } = setup();
+    store().addFormulaCard(srcId, matrices[1]);
+    store().setActiveSource(srcId, 1);
+    expect(store().repointOffers).toHaveLength(0);
+  });
+});

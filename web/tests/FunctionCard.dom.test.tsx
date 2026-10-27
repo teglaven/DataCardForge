@@ -20,6 +20,7 @@ import { MatrixData } from '../src/core/MatrixData.ts';
 import { useWorkspace } from '../src/ui/workspaceStore.ts';
 import type { FunctionCardModel } from '../src/ui/types.ts';
 import { FormulaCard, type ResolvedInput } from '../src/ui/components/FormulaCard.tsx';
+import type { RepointOffer } from '../src/ui/workspaceStore.ts';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -39,6 +40,10 @@ interface CardOptions {
   inputs?: ResolvedInput[];
   resultMatrix?: MatrixData;
   sourceColumnNames?: string[];
+  repoint?: RepointOffer | null;
+  repointBatch?: number;
+  onApplyRepoint?: () => void;
+  onDismissRepoint?: () => void;
 }
 
 async function mount(card: FunctionCardModel, options: CardOptions = {}): Promise<HTMLElement> {
@@ -54,6 +59,11 @@ async function mount(card: FunctionCardModel, options: CardOptions = {}): Promis
           resultMatrix={options.resultMatrix}
           sourceColumnNames={options.sourceColumnNames ?? []}
           inputs={options.inputs ?? []}
+          repoint={options.repoint ?? null}
+          repointBatch={options.repointBatch ?? 0}
+          onApplyRepoint={options.onApplyRepoint ?? (() => {})}
+          onDismissRepoint={options.onDismissRepoint ?? (() => {})}
+          onApplyAllRepoints={() => {}}
           active
           closeBlocked={false}
           onClose={() => {}}
@@ -202,5 +212,74 @@ describe('function card zones', () => {
     const alert = host.querySelector('.formula-card__error')!;
     expect(alert.textContent).toContain('公式无法计算');
     expect(alert.textContent).toContain('someBrandNewCode');
+  });
+});
+
+describe('re-point banner', () => {
+  const offer = (over: Partial<RepointOffer> = {}): RepointOffer => ({
+    cardId: 1,
+    ownerCardId: 2,
+    fromMatrixId: 10,
+    toMatrixId: 11,
+    sameColumns: true,
+    addedLabels: [],
+    removedLabels: [],
+    fromRows: 4,
+    toRows: 6,
+    rowDelta: 2,
+    toCols: 3,
+    toName: 'b.csv',
+    ...over,
+  });
+
+  it('offers the switch in the output zone with a plain confirm when columns match', async () => {
+    const host = await mount(makeCard(), { repoint: offer() });
+    const banner = host.querySelector('.formula-card__repoint')!;
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('b.csv');
+    expect(banner.textContent).toContain('列一致');
+    const primary = banner.querySelector('.formula-card__repoint-primary')!;
+    expect(primary.textContent).toBe('应用');
+  });
+
+  it('requires the "apply anyway" wording when the columns changed', async () => {
+    const host = await mount(makeCard(), {
+      repoint: offer({ sameColumns: false, addedLabels: ['Z'], removedLabels: ['A'] }),
+    });
+    const banner = host.querySelector('.formula-card__repoint')!;
+    expect(banner.textContent).toContain('列已变化');
+    expect(banner.textContent).toContain('+Z');
+    expect(banner.textContent).toContain('−A');
+    expect(banner.querySelector('.formula-card__repoint-primary')!.textContent).toContain(
+      '仍然应用',
+    );
+  });
+
+  it('shows the batch action only when more than one card would change', async () => {
+    const single = await mount(makeCard(), { repoint: offer(), repointBatch: 1 });
+    expect(single.textContent).not.toContain('应用到全部');
+    const many = await mount(makeCard(), { repoint: offer(), repointBatch: 3 });
+    expect(many.textContent).toContain('应用到全部 3 张');
+  });
+
+  it('wires apply / dismiss to the callbacks', async () => {
+    let applied = 0;
+    let dismissed = 0;
+    const host = await mount(makeCard(), {
+      repoint: offer(),
+      onApplyRepoint: () => {
+        applied += 1;
+      },
+      onDismissRepoint: () => {
+        dismissed += 1;
+      },
+    });
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('.formula-card__repoint-actions button')];
+    await act(async () => {
+      buttons[0].click();
+      buttons[1].click();
+    });
+    expect(applied).toBe(1);
+    expect(dismissed).toBe(1);
   });
 });
