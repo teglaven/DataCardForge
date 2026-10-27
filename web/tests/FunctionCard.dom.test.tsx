@@ -46,6 +46,7 @@ interface CardOptions {
   onDismissRepoint?: () => void;
   onRenameOutputColumn?: (index: number, name: string) => void;
   onSetColumnContract?: (columns: number | null) => void;
+  onOpenChart?: (columnIndex: number, type: string) => number | null;
 }
 
 async function mount(card: FunctionCardModel, options: CardOptions = {}): Promise<HTMLElement> {
@@ -68,6 +69,7 @@ async function mount(card: FunctionCardModel, options: CardOptions = {}): Promis
           onApplyAllRepoints={() => {}}
           onRenameOutputColumn={options.onRenameOutputColumn ?? (() => {})}
           onSetColumnContract={options.onSetColumnContract ?? (() => {})}
+          onOpenChart={options.onOpenChart ?? (() => null)}
           active
           closeBlocked={false}
           onClose={() => {}}
@@ -382,5 +384,45 @@ describe('output rename + column contract', () => {
       buttons[0].click();
     });
     expect(extended).toBe(2);
+  });
+});
+
+describe('charting from the output table', () => {
+  it('offers the chart picker on a result column header', async () => {
+    const host = await mount(makeCard(), { resultMatrix: matrix(2, 4) });
+    const header = host.querySelector<HTMLElement>('.card--formula .vtable__colhead');
+    expect(header).not.toBeNull();
+    await act(async () => {
+      header!.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, clientX: 200, clientY: 160 }),
+      );
+    });
+    const menu = document.querySelector('.context-menu--list');
+    expect(menu).not.toBeNull();
+    // Every declared chart type is offered, exactly like a data card's column header.
+    expect(menu!.textContent).toContain('折线图');
+    expect(menu!.textContent).toContain('相关性热力图');
+  });
+
+  it('creates the chart through onOpenChart with the clicked column', async () => {
+    const calls: Array<{ column: number; type: string }> = [];
+    const host = await mount(makeCard(), {
+      resultMatrix: matrix(2, 4),
+      onOpenChart: (column, type) => {
+        calls.push({ column, type });
+        return 42;
+      },
+    });
+    const header = host.querySelector<HTMLElement>('.card--formula .vtable__colhead');
+    await act(async () => {
+      header!.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, clientX: 200, clientY: 160 }),
+      );
+    });
+    const items = [...document.querySelectorAll<HTMLButtonElement>('.context-menu__item')];
+    await act(async () => {
+      items[0].click();
+    });
+    expect(calls).toEqual([{ column: 0, type: 'line' }]);
   });
 });

@@ -299,6 +299,13 @@ interface WorkspaceState {
   /** Re-send a function card's parameters + bindings to the backend. */
   recomputeFormula: (cardId: number) => void;
   /**
+   * Push a card's current matrices into every chart that reads them.
+   *
+   * Called when a data card switches files (charts re-point at the new file) and when a
+   * function card's output arrives (charts re-read the new numbers).
+   */
+  refreshDependentsOf: (cardId: number) => void;
+  /**
    * Pending offers to re-point a function card at the newly active file of its data card.
    * Rebuilt whenever a table switches files; empty once the user applies or dismisses.
    */
@@ -612,6 +619,9 @@ async function pullResultIntoCache(cardId: number): Promise<void> {
     matrices.set(current.displayMatrixId, result.matrix);
     return { matrices };
   });
+  // A chart drawn from this output must show the numbers that just arrived — the same
+  // "dependents follow their source" rule a data card's file switch follows.
+  useWorkspace.getState().refreshDependentsOf(cardId);
   if (result.truncated) {
     useWorkspace
       .getState()
@@ -625,6 +635,25 @@ async function pullResultIntoCache(cardId: number): Promise<void> {
 }
 
 /**
+ * The card that owns a local matrix id.
+ *
+ * Two kinds can own one: a data card (one per loaded file) and a function card (its
+ * output's display cache). Charts, close protection and the edge derivation all need the
+ * same answer, so the rule lives in one place — which is also what lets a chart be drawn
+ * from a function card's output exactly like from a table (the audit's "公式列无法绘图" gap).
+ */
+function ownerCardOfMatrix(cards: CardModel[], matrixId: number): CardModel | null {
+  for (const card of cards) {
+    if (isMatrixCard(card)) {
+      if (card.sources.some((source) => source.matrixId === matrixId)) return card;
+    } else if (isFormulaCard(card)) {
+      if (card.displayMatrixId === matrixId) return card;
+    }
+  }
+  return null;
+}
+
+/**
  * Rebuild a chart card's `inputs[]` from its display config.
  *
  * Charts are the one kind whose dependency *edges* are per-column, and the column dock can
@@ -634,13 +663,10 @@ async function pullResultIntoCache(cardId: number): Promise<void> {
  */
 function chartInputsFromConfig(card: ChartCardModel, cards: CardModel[]): PortConnection[] {
   const inputs: PortConnection[] = [];
-  const owners = new Map<number, number>();
-  for (const other of cards) {
-    if (!isMatrixCard(other)) continue;
-    for (const source of other.sources) owners.set(source.matrixId, other.id);
-  }
+  const ownerIdOf = (matrixId: number): number | undefined =>
+    ownerCardOfMatrix(cards, matrixId)?.id;
   for (const source of card.config.sources) {
-    const cardId = owners.get(source.matrixId);
+    const cardId = ownerIdOf(source.matrixId);
     if (cardId === undefined) continue;
     inputs.push({
       portId: chartPortId(source.matrixId, source.columnIndex),
@@ -654,7 +680,7 @@ function chartInputsFromConfig(card: ChartCardModel, cards: CardModel[]): PortCo
   }
   const x = card.config.xAxisSource;
   if (x) {
-    const cardId = owners.get(x.matrixId);
+    const cardId = ownerIdOf(x.matrixId);
     if (cardId !== undefined) {
       inputs.push({
         portId: CHART_PORT_X,
@@ -723,18 +749,29 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
    *
    * A line keeps its previous data when the new file no longer has that column.
    */
-  const refreshDependentCharts = (matrixCardId: number): void => {
+  const refreshDependentsOf = (ownerCardId: number): void => {
     const state = get();
-    const matrixCard = state.cards.find((c) => c.id === matrixCardId);
-    if (!matrixCard || !isMatrixCard(matrixCard)) return;
+    const owner = state.cards.find((c) => c.id === ownerCardId);
+    if (!owner) return;
 
-    const active = matrixCard.sources[matrixCard.activeSource];
-    if (!active) return;
-    const activeMatrix = state.matrices.get(active.matrixId);
+    // A data card re-points dependents at its newly active file; a function card has one
+    // output table, so dependents simply re-read it.
+    let activeMatrixId: number | undefined;
+    let matrixIds: Set<number>;
+    if (isMatrixCard(owner)) {
+      activeMatrixId = owner.sources[owner.activeSource]?.matrixId;
+      matrixIds = new Set(owner.sources.map((source) => source.matrixId));
+    } else if (isFormulaCard(owner)) {
+      activeMatrixId = owner.displayMatrixId;
+      matrixIds = new Set([owner.displayMatrixId]);
+    } else {
+      return;
+    }
+    if (activeMatrixId === undefined) return;
+    const activeMatrix = state.matrices.get(activeMatrixId);
     if (!activeMatrix) return;
 
-    const matrixIds = new Set(matrixCard.sources.map((source) => source.matrixId));
-    const dependentIds = new Set(state.dependencies.getDependents(matrixCardId));
+    const dependentIds = new Set(state.dependencies.getDependents(ownerCardId));
     if (dependentIds.size === 0) return;
 
     /**
@@ -745,12 +782,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
      */
     const rePoint = (source: ChartSource): ChartSource => {
       if (source.columnIndex >= activeMatrix.columnCount()) {
-        return { ...source, matrixId: active.matrixId };
+        return { ...source, matrixId: activeMatrixId };
       }
       const column = activeMatrix.column(source.columnIndex);
       return {
         ...source,
-        matrixId: active.matrixId,
+        matrixId: activeMatrixId,
         raw: column.data.slice(),
         label: columnLabel(column),
       };
@@ -803,6 +840,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       return { cards };
     });
+  };
+
+  /**
+   * The matrix a chart should read from `card`: a data card's active file, or a function
+   * card's output table. `null` when the owner has nothing to show yet.
+   */
+  const chartSourceMatrixId = (card: CardModel): number | null => {
+    if (isMatrixCard(card)) {
+      return card.sources[card.activeSource]?.matrixId ?? null;
+    }
+    if (isFormulaCard(card)) {
+      const matrix = get().matrices.get(card.displayMatrixId);
+      return matrix ? card.displayMatrixId : null;
+    }
+    return null;
   };
 
   /**
@@ -1011,14 +1063,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       return cardId;
     },
 
-    addChartCard(matrixCardId, columnIndex, chartType) {
+    addChartCard(ownerCardId, columnIndex, chartType) {
       const state = get();
-      const matrixCard = state.cards.find((c) => c.id === matrixCardId);
-      if (!matrixCard || !isMatrixCard(matrixCard)) return null;
+      const ownerCard = state.cards.find((c) => c.id === ownerCardId);
+      if (!ownerCard || isChartCard(ownerCard)) return null;
 
-      const source = matrixCard.sources[matrixCard.activeSource];
-      if (!source) return null;
-      const matrix = state.matrices.get(source.matrixId);
+      // A table's active file, or a function card's output table — both are matrices the
+      // chart can read, which is what makes a dataflow edge out of a function card.
+      const sourceMatrixId = chartSourceMatrixId(ownerCard);
+      if (sourceMatrixId === null) return null;
+      const matrix = state.matrices.get(sourceMatrixId);
       if (!matrix) return null;
       if (columnIndex < 0 || columnIndex >= matrix.columnCount()) return null;
 
@@ -1034,7 +1088,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         if (index >= matrix.columnCount()) break;
         const column = matrix.column(index);
         sources.push({
-          matrixId: source.matrixId,
+          matrixId: sourceMatrixId,
           columnIndex: index,
           label: columnLabel(column),
           raw: column.data.slice(),
@@ -1044,9 +1098,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       const cardId = state.nextCardId;
       const chartSize = { width: 560, height: 400 };
-      // Beside the table it was opened from, so the connection line stays short.
+      // Beside the card it was opened from, so the connection line stays short.
       const chartSpot = placeOnPlane(
-        { x: matrixCard.x + matrixCard.width + 32, y: matrixCard.y + 24 },
+        { x: ownerCard.x + ownerCard.width + 32, y: ownerCard.y + 24 },
         chartSize,
         state.cards,
       );
@@ -1103,16 +1157,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const card = state.cards.find((c) => c.id === id);
       if (!card) return true;
 
-      // A matrix card that still feeds a chart must not disappear under it.
-      if (isMatrixCard(card)) {
-        if (state.dependencies.hasDependents(id)) {
-          set({
-            blockedCardId: id,
-            blockNonce: state.blockNonce + 1,
-            selectedId: id,
-          });
-          return false;
-        }
+      // A card that still feeds another card must not disappear under it. That used to be
+      // a matrix-card-only rule; a function card's output can feed charts too, so the rule
+      // is now stated once, for every card that can be a source.
+      if (!isChartCard(card) && state.dependencies.hasDependents(id)) {
+        set({
+          blockedCardId: id,
+          blockNonce: state.blockNonce + 1,
+          selectedId: id,
+        });
+        return false;
       }
 
       const cards = state.cards.filter((c) => c.id !== id);
@@ -1235,7 +1289,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       });
 
       // Charts that read this card must pick up the new file's data.
-      refreshDependentCharts(cardId);
+      refreshDependentsOf(cardId);
 
       // Function cards do NOT follow automatically (v2). Offer the switch instead: the
       // card shows a pending banner and nothing changes until the user confirms.
@@ -1267,7 +1321,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           c.id === cardId ? { ...c } : c,
         ),
       });
-      refreshDependentCharts(cardId);
+      refreshDependentsOf(cardId);
 
       // B-plan: the backend holds the authoritative copy, so an edit must reach it.
       // Fire-and-forget like registration — editing never blocks on the network; only a
@@ -1369,8 +1423,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const matrix = state.matrices.get(matrixId);
       if (!matrix || columnIndex < 0 || columnIndex >= matrix.columnCount()) return;
 
-      // The owner edge (chart → matrix card) is derived by commitChartConfig from the new
-      // source list, so a cycle is refused there and nothing is attached.
+      // The owner edge (chart → data or function card) is derived by commitChartConfig
+      // from the new source list, so a cycle is refused there and nothing is attached.
       const column = matrix.column(columnIndex);
       const source: ChartSource = {
         matrixId,
@@ -1542,6 +1596,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       // No node to release: the node stays, it simply computes fewer columns next time.
       void syncFunctionCard(cardId);
+    },
+
+    refreshDependentsOf(cardId) {
+      refreshDependentsOf(cardId);
     },
 
     recomputeFormula(cardId) {

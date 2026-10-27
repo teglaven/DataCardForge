@@ -18,6 +18,7 @@
  * Everything here is total for a well-formed v1 file and throws `WorkspaceFormatError`
  * with a human-readable reason otherwise; `readWorkspace` surfaces that as a load failure.
  */
+import { SOURCE_PORT } from './bindings.ts';
 import type {
   CardModel,
   ChartCardModel,
@@ -39,8 +40,14 @@ export class WorkspaceFormatError extends Error {
 /** The signature every migrated formula card lands on. */
 export const EXPRESSION_COLUMNS_SIGNATURE = 'builtin:expression-columns';
 
-/** Port id a function card uses for its single matrix input. */
-export const INPUT_PORT_SOURCE = 'src';
+/**
+ * Port id a function card uses for its single matrix input.
+ *
+ * Re-exported from `bindings.ts` so there is exactly one definition of the identity the
+ * port-semantics spec locks in (a second spelling of "src" is how the v1 positional
+ * convention would sneak back in).
+ */
+export { SOURCE_PORT as INPUT_PORT_SOURCE } from './bindings.ts';
 
 /**
  * Stable port id for one attached chart column.
@@ -175,7 +182,7 @@ function migrateFormula(card: V1FormulaCard, cards: V1Card[]): CardModel {
     if (active) {
       // Freeze the matrix that was feeding this card at migration time.
       inputs.push({
-        portId: INPUT_PORT_SOURCE,
+        portId: SOURCE_PORT,
         target: { type: 'matrix', cardId: sourceCard.id, matrixId: active.matrixId },
       });
     }

@@ -1241,3 +1241,77 @@ describe('backend capability gate', () => {
     }
   });
 });
+
+// ── the output side: a function card's result is chartable ──────────────────────
+describe('charts from a function card', () => {
+  it('creates a chart whose source is the function card output table', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4], [11, 22]], nodeNames: ['Pos.1 double', 'Pos.2 sum'] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      const chartId = store().addChartCard(fId, 0)!;
+      expect(chartId).not.toBeNull();
+      const chart = store().cards.find((c) => c.id === chartId) as ChartCardModel;
+      // The chart reads the function card's output cache, not a data table.
+      expect(chart.config.sources[0].matrixId).toBe(fn.displayMatrixId);
+      expect(chart.config.sources[0].label).toContain('double');
+      // …and the edge is the function card → chart, which is what close protection reads.
+      expect(store().dependencies.getDependents(fId)).toContain(chartId);
+      expect(chart.inputs[0].target).toMatchObject({
+        type: 'cell',
+        cardId: fId,
+        matrixId: fn.displayMatrixId,
+      });
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('refuses to close a function card that still feeds a chart', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], nodeNames: ['Pos.1 double'] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const chartId = store().addChartCard(fId, 0)!;
+      expect(store().removeCard(fId)).toBe(false);
+      expect(store().blockedCardId).toBe(fId);
+      // Closing the chart first releases it (the normal close-protection flow).
+      expect(store().removeCard(chartId)).toBe(true);
+      expect(store().removeCard(fId)).toBe(true);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('pushes fresh numbers into a chart when the function card recomputes', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], nodeNames: ['Pos.1 double'] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      store().addChartCard(fId, 0)!;
+      // The next pull returns different numbers (the expression changed upstream).
+      const stub2 = stubBackend({ nodeResult: [[10, 20]], nodeNames: ['Pos.1 double'] });
+      try {
+        store().applyNodeEvent({
+          seq: 5000,
+          nodeId: (store().cards.find((c) => c.id === fId) as FunctionCardModel).node!.nodeId,
+          state: 'done',
+        });
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      } finally {
+        stub2.restore();
+      }
+      const chart = store().cards.find((c) => isChartCard(c)) as ChartCardModel;
+      expect(chart.config.sources[0].raw).toEqual([10, 20]);
+    } finally {
+      stub.restore();
+    }
+  });
+});

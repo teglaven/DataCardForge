@@ -503,6 +503,13 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
               }}
               onRenameOutputColumn={(index, name) => renameOutputColumn(card.id, index, name)}
               onSetColumnContract={(columns) => setColumnContract(card.id, columns)}
+              onOpenChart={(columnIndex, type) => {
+                // The output side of the dataflow: a chart drawn from a function card's
+                // result is an ordinary chart whose source is that card's output table.
+                const id = addChartCard(card.id, columnIndex, type);
+                if (id !== null) select(id);
+                return id;
+              }}
               active={active}
               closeBlocked={closeBlocked}
               onActivate={() => bringToFront(card.id)}

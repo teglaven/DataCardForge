@@ -64,7 +64,7 @@ function cardFromFixture(c: FixtureCase): FunctionCardModel {
     createdAt: 0,
     inputs: c.card.inputs,
     signatureId: c.card.signatureId,
-    params: c.card.params as FunctionCardModel['params'],
+    params: c.card.params as unknown as FunctionCardModel['params'],
     outputs: [{ outputId: 'result', resultMatrixId: 200 }],
     node: null,
     displayMatrixId: 300,

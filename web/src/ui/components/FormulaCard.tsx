@@ -26,7 +26,9 @@ import { MatrixData } from '../../core/MatrixData.ts';
 import { useTranslator, useWorkspace, type RepointOffer } from '../workspaceStore.ts';
 import type { FunctionCardModel, NodeStatus } from '../types.ts';
 import type { MessageKey } from '../i18n.ts';
+import { CHART_TYPE_ORDER, chartTypeDef, minimumColumns, type ChartTypeId } from '../../charts/chartTypes.ts';
 import { CardShell } from './CardShell.tsx';
+import { Popup } from './Popup.tsx';
 import { VirtualTable } from './VirtualTable.tsx';
 
 /** How long to wait after the last keystroke before re-sending each formula to the backend. */
@@ -59,6 +61,11 @@ interface FormulaCardProps {
   onApplyAllRepoints: () => void;
   onRenameOutputColumn: (index: number, name: string) => void;
   onSetColumnContract: (columns: number | null) => void;
+  /**
+   * Create a chart from one output column. `null` means the type needs more trailing
+   * columns than the table has — the caller surfaces that, exactly like a data card does.
+   */
+  onOpenChart: (columnIndex: number, type: ChartTypeId) => number | null;
   active: boolean;
   closeBlocked: boolean;
   onClose: () => void;
@@ -78,6 +85,7 @@ export function FormulaCard({
   onApplyAllRepoints,
   onRenameOutputColumn,
   onSetColumnContract,
+  onOpenChart,
   active,
   closeBlocked,
   onClose,
@@ -88,6 +96,9 @@ export function FormulaCard({
   const setBounds = useWorkspace((s) => s.setBounds);
   const setFormula = useWorkspace((s) => s.setFormula);
   const removeFormula = useWorkspace((s) => s.removeFormula);
+  const showToast = useWorkspace((s) => s.showToast);
+  /** Column header menu: pick a chart type for one output column. */
+  const [chartMenu, setChartMenu] = useState<{ x: number; y: number; column: number } | null>(null);
 
   /**
    * The editor keeps its own draft and only commits after a pause.
@@ -422,6 +433,10 @@ export function FormulaCard({
                     matrix={resultMatrix}
                     readOnly
                     rowLabel={(n) => t('table.rowHeader', { n })}
+                    onHeaderContextMenu={(event, column) => {
+                      event.preventDefault();
+                      setChartMenu({ x: event.clientX, y: event.clientY, column });
+                    }}
                   />
                 </div>
               ) : (
@@ -475,6 +490,65 @@ export function FormulaCard({
           </div>
         ) : null}
       </div>
+
+      {chartMenu && resultMatrix ? (
+        <Popup
+          x={chartMenu.x}
+          y={chartMenu.y}
+          className="context-menu context-menu--list"
+          onDismiss={() => setChartMenu(null)}
+        >
+          <div className="context-menu__title">
+            {t('table.contextChartMenu')} ·{' '}
+            {resultMatrix.columnLabel(chartMenu.column) ||
+              resultMatrix.column(chartMenu.column).posName}
+          </div>
+          {CHART_TYPE_ORDER.map((id) => {
+            const def = chartTypeDef(id);
+            // A chart is built from this column *and the ones after it*, so the test is
+            // against the remaining columns — not the table's total.
+            const remaining = cols - chartMenu.column;
+            const enough = minimumColumns(id) <= remaining;
+            return (
+              <button
+                key={id}
+                type="button"
+                className="context-menu__item"
+                title={
+                  enough
+                    ? t(def.hintKey)
+                    : t('status.needTrailingColumns', {
+                        type: t(def.labelKey),
+                        n: minimumColumns(id),
+                        have: remaining,
+                      })
+                }
+                disabled={!enough}
+                onClick={() => {
+                  const created = onOpenChart(chartMenu.column, id);
+                  if (created === null) {
+                    showToast(
+                      'error',
+                      t('status.needTrailingColumns', {
+                        type: t(def.labelKey),
+                        n: minimumColumns(id),
+                        have: remaining,
+                      }),
+                    );
+                  } else {
+                    showToast('info', t('status.chartCreated', {
+                      name: resultMatrix.columnLabel(chartMenu.column),
+                    }));
+                  }
+                  setChartMenu(null);
+                }}
+              >
+                {t(def.labelKey)}
+              </button>
+            );
+          })}
+        </Popup>
+      ) : null}
     </CardShell>
   );
 }
@@ -490,19 +564,4 @@ function normaliseErrorParams(params?: Record<string, unknown>): Record<string, 
     out.expected = String(out.min);
   }
   return out;
-}
-
-/** Worst-case state across a card's nodes, for a header light (red > yellow > green > grey). */
-export function aggregateNodeState(nodes: Array<NodeStatus | null>): NodeStatus['state'] | 'idle' {
-  let sawDone = false;
-  let sawComputing = false;
-  for (const n of nodes) {
-    if (!n) continue;
-    if (n.state === 'error') return 'error';
-    if (n.state === 'computing') sawComputing = true;
-    if (n.state === 'done') sawDone = true;
-  }
-  if (sawComputing) return 'computing';
-  if (sawDone) return 'done';
-  return 'idle';
 }
