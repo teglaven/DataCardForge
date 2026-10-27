@@ -17,7 +17,7 @@ npm install
 npm run dev        # 开发服务器（默认 http://localhost:5173）
 npm run build      # 类型检查 + 生产构建 → dist/
 npm run preview    # 预览生产构建
-npm test           # 303 个单元测试（vitest）
+npm test           # 394 个单元测试（vitest）
 npm run typecheck  # 仅类型检查
 ```
 
@@ -170,7 +170,7 @@ src/
 │   ├── fileActions.ts       #   文件选择 / 下载 / 工作区读写
 │   └── components/          #   CardCanvas / CardShell / MatrixCard / ChartCard / ColumnDock …
 scripts/smoke.mjs            # headless Chromium 端到端冒烟（65 项检查）
-tests/                       # vitest：303 个用例（*.dom.test.tsx 走 jsdom）
+tests/                       # vitest：394 个用例（*.dom.test.tsx 走 jsdom）
 docs/screenshots/            # 文档配图
 ```
 

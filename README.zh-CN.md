@@ -6,12 +6,20 @@
 
 > ⚠️ **早期试验项目**：截至 2026 年 10 月，本项目仍处于**早期试验阶段**，可用来体验功能、测试使用流程，但**强烈不建议**用于生产环境或正式的科研用途。
 
+<p align="center">
+  <img src="web/docs/screenshots/violin.png" width="49%" alt="小提琴图卡片">
+  <img src="web/docs/screenshots/correlation-heatmap.png" width="49%" alt="相关性热力图卡片">
+</p>
+
+**作者与权属**：`teglaven` · GPL-3.0 · 身份、时间线与提交锚点见 [`PROVENANCE.md`](PROVENANCE.md)。
+**当前实测状态**：63 次提交 · 前端 394 个单元测试 · 后端 7 个 ctest（3 个 opt-in）· 端到端 65 项检查，全绿。
+
 ## 设计理念
 
 - **卡片模型**：所有东西都是卡片 —— 数据卡(文件) → 函数卡(变换) → 输出卡(绘图/导出)
 - **严格分离**：数据与行为分离，表永不改写，一切处理产出新卡片
 - **连线从属**：连线仅为数据依赖的可视化，常态低调（背景层），不干扰卡片布局与交互；卡片为主角，连线为配角
-- **后端持有计算（B 方案）**：所有数值/统计/矩阵计算在 **C++/Eigen 后端**执行；浏览器是**纯交互界面**（渲染、输入、布局）。后端不可达是**带重试按钮的可见状态**，绝不静默。这取代了早期的 T1 浏览器基线分层表，同时保留[兜底原则](docs/decisions/2026-10-15-max-headroom-principle.md)三条契约：可见降级、跨层语义一致（差分夹具）、最坏情况有界。完整论证见 [决策记录](docs/decisions/2026-10-17-backend-owns-compute.md)
+- **后端持有计算（B 方案）**：所有数值/统计/矩阵计算在 **C++/Eigen 后端**执行；浏览器是**纯交互界面**（渲染、输入、布局）。后端不可达是**带重试按钮的可见状态**，绝不静默。这取代了早期的 T1 浏览器基线分层表，同时保留[兜底原则](docs/docs/decisions/2026-10-15-max-headroom-principle.md)三条契约：可见降级、跨层语义一致（差分夹具）、最坏情况有界。完整论证见 [决策记录](docs/docs/decisions/2026-10-17-backend-owns-compute.md)
 - **列式矩阵**：行=样本(No.N)，列=变量(Pos.N)，连续内存存储，高性能
 - **可扩展**：算子系统 + 适配器接口，社区可贡献长尾功能
 
@@ -34,7 +42,7 @@
 └─────────────────────────────────────────────────────┘
 ```
 
-前端使用[协议 v1](docs/architecture/backend-protocol-v1.md)：HTTP 上的 JSON 控制消息 + DCM1 二进制矩阵帧。长轮询事件流推送节点状态变更（dirty → computing → done | error），驱动四态指示灯。
+前端使用[协议 v1](docs/docs/architecture/backend-protocol-v1.md)：HTTP 上的 JSON 控制消息 + DCM1 二进制矩阵帧。长轮询事件流推送节点状态变更（dirty → computing → done | error），驱动四态指示灯。
 
 ## 已实现功能
 
@@ -95,7 +103,7 @@
     指针在卡片上时滚轮仍归卡片（表格滚动、图表缩放），**按住 Ctrl/⌘ 同样可缩放**，触控板捏合亦可
   - **平移**：中键拖动、**空格+左键拖动**、空白处左键拖动
   - 菜单 **视图 → 回到卡片** 一键适应内容（自动缩放并居中）；**平铺 / 层叠** 在可见区域内排布
-  - 详见[决策](docs/decisions/2026-10-21-infinite-canvas.md)
+  - 详见[决策](docs/docs/decisions/2026-10-21-infinite-canvas.md)
 - 卡片自由拖拽、缩放、层叠，另有**平铺 / 层叠 / 关闭全部**
 - 有图表依赖的表格**拒绝关闭**，并闪烁对应连线提示
 - 运行时**中英切换**；**工作区持久化**（保存/恢复布局 + 依赖 + 数据）；表格导出 CSV
@@ -184,10 +192,10 @@ npm test                  # 单元测试（vitest，含跨层夹具）
 ### 测试
 
 ```bash
-# 前端：typecheck + 269 个单元测试（含 46 个跨层差分夹具）
+# 前端：typecheck + 394 个单元测试（含 46 个跨层差分夹具）
 cd web && npm run typecheck && npm test
 
-# 后端：5 个 ctest 用例（46 表达式 + 14 矩阵 + 节点注册表；另有两个按需门控，默认 Skipped）
+# 后端：7 个 ctest 用例（跨层夹具、矩阵算子、节点注册表、卡片夹具；另有 3 个按需门控，默认 Skipped）
 cd backend && ctest --test-dir build --output-on-failure
 
 # 按需门控：差分 fuzz（随机表达式 TS↔C++ 对拍）与 HTTP 畸形报文压测
@@ -258,7 +266,7 @@ GitHub Actions 在每次 push/PR 时运行三个 job：
 
 ## 致谢
 
-本项目由 **AI 编程助手**辅助开发（DeepSeek Harness / Claude 等 agent 工具，以及早期的 GitHub Copilot）。所有生成代码均经过**人工审查和测试**。
+本项目由 **AI 编程助手**辅助开发（DeepSeek Harness / Claude 等 agent 工具，以及早期的 GitHub Copilot）。由作者完成的部分：需求定义、架构决策（见 [`docs/docs/decisions/`](docs/docs/decisions/)）、验收标准与测试门禁。本仓库不对「谁敲的字」作保证，只对**可复现性**负责——上面每一条功能声明都有对应的单元测试 / ctest / 端到端检查背书（见「测试」一节）。权属与时间线见 [`PROVENANCE.md`](PROVENANCE.md)。
 
 ## 许可证
 

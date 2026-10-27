@@ -48,7 +48,7 @@
 
 ## 落地与验证
 
-`web/` 目录（见 [web/README.md](../../web/README.md)）：
+`web/` 目录（见 [web/README.md](../../../web/README.md)）：
 
 - `src/core/` ← 对齐 `MatrixData`、`Smoothing`、`DependencyGraph`（Qt-free，逐算法对照移植）
 - `src/loaders/` ← TxtLoader / CsvLoader / XlsxLoader + 工厂

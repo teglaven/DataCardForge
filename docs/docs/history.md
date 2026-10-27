@@ -249,12 +249,12 @@ C++/Qt 树曾作"行为参照"保留 → 发现它**成本 215 MB、还让主实
 
 | # | 问题 | 位置 | 建议 | 状态（2026-10-21 复核） |
 |---|---|---|---|---|
-| 1 | **死链**：导航指向 `log/2026-10-17`，但该日志文件**不存在** | [docs/README](README.md#L23) | 补写该日志，或删掉导航项 | ✅ 已修（日志文件已存在） |
-| 2 | **主 README 未跟上 10-17 决策**：仍写"分层（TS → WASM → 后端）是自动升级路径"、"计算兜底层……必建" | [README.zh-CN L14](../README.zh-CN.md#L14) · [L133](../README.zh-CN.md#L133) · [L141](../README.zh-CN.md#L141) | 按 10-17 决策改写为"后端 = 基线" | ✅ 基本已修（设计理念一节已改为 B 方案表述；残留风险转为"文档超前于代码"，见上方新发现） |
-| 3 | **README 的"当前优先级"已过期**：写"逐元素公式计算 + 兜底原则落地"，实际优先级已是"后端持有计算 + 阶段 0 夹具" | [README.zh-CN L131](../README.zh-CN.md#L131) | 同步 10-17 决策 | ✅ 已修（现为"短期目标"清单，随提交打勾更新） |
-| 4 | **图表库决策缺导航项** | [docs/README](README.md) | 导航未登记 `2026-10-14-chart-library-audit` | ✅ 已修（导航已登记） |
-| 5 | **architecture/ 的定位描述过时**：写"尚未拍板、需要继续论证的对比"，但 `backend-protocol-v1` 已是 v1 草案规范 | [docs/README L16](README.md#L16) | 拆为"规范"与"权衡"两类 | ✅ 已修（2026-10-21：导航拆为 📐 规范 / ⚖️ 权衡两类；协议文档状态行由"草案"改为"v1 规范"） |
-| 6 | **致谢署名待复核**：README 称本项目由 **GitHub Copilot** 辅助开发，但仓库 9 个提交**无任何 agent 署名 trailer**，作者串含 `DataCardForge Dev <dev@datacardforge.local>` / `DataCardForge audit <agent@local>` | [README.zh-CN L164](../README.zh-CN.md#L164) · [README L167](../README.md#L167) | 按实际使用的工具更新署名 | ✅ 已修（2026-10-21：中英 README 改为"AI 编程助手（DeepSeek Harness / Claude 等 agent 工具，以及早期的 GitHub Copilot）"） |
+| 1 | **死链**：导航指向 `log/2026-10-17`，但该日志文件**不存在** | [docs/README](../../README.md#L23) | 补写该日志，或删掉导航项 | ✅ 已修（日志文件已存在） |
+| 2 | **主 README 未跟上 10-17 决策**：仍写"分层（TS → WASM → 后端）是自动升级路径"、"计算兜底层……必建" | [README.zh-CN L14](../../README.zh-CN.md#L14) · [L133](../../README.zh-CN.md#L133) · [L141](../../README.zh-CN.md#L141) | 按 10-17 决策改写为"后端 = 基线" | ✅ 基本已修（设计理念一节已改为 B 方案表述；残留风险转为"文档超前于代码"，见上方新发现） |
+| 3 | **README 的"当前优先级"已过期**：写"逐元素公式计算 + 兜底原则落地"，实际优先级已是"后端持有计算 + 阶段 0 夹具" | [README.zh-CN L131](../../README.zh-CN.md#L131) | 同步 10-17 决策 | ✅ 已修（现为"短期目标"清单，随提交打勾更新） |
+| 4 | **图表库决策缺导航项** | [docs/README](../../README.md) | 导航未登记 `2026-10-14-chart-library-audit` | ✅ 已修（导航已登记） |
+| 5 | **architecture/ 的定位描述过时**：写"尚未拍板、需要继续论证的对比"，但 `backend-protocol-v1` 已是 v1 草案规范 | [docs/README L16](../../README.md#L16) | 拆为"规范"与"权衡"两类 | ✅ 已修（2026-10-21：导航拆为 📐 规范 / ⚖️ 权衡两类；协议文档状态行由"草案"改为"v1 规范"） |
+| 6 | **致谢署名待复核**：README 称本项目由 **GitHub Copilot** 辅助开发，但仓库 9 个提交**无任何 agent 署名 trailer**，作者串含 `DataCardForge Dev <dev@datacardforge.local>` / `DataCardForge audit <agent@local>` | [README.zh-CN L164](../../README.zh-CN.md#L164) · [README L167](../../README.md#L167) | 按实际使用的工具更新署名 | ✅ 已修（2026-10-21：中英 README 改为"AI 编程助手（DeepSeek Harness / Claude 等 agent 工具，以及早期的 GitHub Copilot）"） |
 
 ---
 

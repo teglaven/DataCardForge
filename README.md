@@ -6,12 +6,22 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 
 > ⚠️ **Early Experimental Project**: As of October 2026, this project is still in its **early experimental stage**. You can use it to try out features and test workflows, but it is **strongly not recommended** for production use or formal scientific research.
 
+<p align="center">
+  <img src="web/docs/screenshots/violin.png" width="49%" alt="Violin plot card">
+  <img src="web/docs/screenshots/correlation-heatmap.png" width="49%" alt="Correlation heatmap card">
+</p>
+
+**Author & provenance**: `teglaven` · GPL-3.0 · see [`PROVENANCE.md`](PROVENANCE.md) for the
+verifiable author identity, timeline and commit anchors.
+**Verified state**: 63 commits · 394 frontend unit tests · 7 backend ctest cases (3 opt-in) ·
+65 end-to-end smoke checks — all green.
+
 ## Design Philosophy
 
 - **Card model**: everything is a card — data card (file) → function card (transform) → output card (plot / export)
 - **Strict separation**: data and behavior are separated; tables are never mutated; every transformation produces a new card
 - **Connection subordination**: connections are only the visualization of data dependencies, normally kept low-key (background layer), and never interfere with card layout or interaction — cards are the protagonists, connections the supporting cast
-- **Backend-owns-compute (B-plan)**: all numeric / statistical / matrix computation runs in the **C++/Eigen backend**; the browser is a **pure interaction surface** (rendering, input, layout). The backend being unreachable is a **visible state with a retry button**, never silent. This supersedes the earlier T1-browser-baseline tier table while preserving the three contracts of the [maximum-headroom principle](docs/decisions/2026-10-15-max-headroom-principle.md): visible degradation, cross-tier semantic consistency (differential fixtures), bounded worst-case. Full reasoning: [decision record](docs/decisions/2026-10-17-backend-owns-compute.md)
+- **Backend-owns-compute (B-plan)**: all numeric / statistical / matrix computation runs in the **C++/Eigen backend**; the browser is a **pure interaction surface** (rendering, input, layout). The backend being unreachable is a **visible state with a retry button**, never silent. This supersedes the earlier T1-browser-baseline tier table while preserving the three contracts of the [maximum-headroom principle](docs/docs/decisions/2026-10-15-max-headroom-principle.md): visible degradation, cross-tier semantic consistency (differential fixtures), bounded worst-case. Full reasoning: [decision record](docs/docs/decisions/2026-10-17-backend-owns-compute.md)
 - **Column-oriented matrix**: rows = samples (`No.N`), columns = variables (`Pos.N`), contiguous storage, high performance
 - **Extensible**: computation system + adapter interfaces — the community can contribute long-tail features
 
@@ -34,7 +44,7 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 └─────────────────────────────────────────────────────┘
 ```
 
-The frontend speaks [protocol v1](docs/architecture/backend-protocol-v1.md): JSON control messages over HTTP plus DCM1 binary frames for matrix windows. Long-poll event stream pushes node state changes (dirty → computing → done | error) to drive the four-state status lamps.
+The frontend speaks [protocol v1](docs/docs/architecture/backend-protocol-v1.md): JSON control messages over HTTP plus DCM1 binary frames for matrix windows. Long-poll event stream pushes node state changes (dirty → computing → done | error) to drive the four-state status lamps.
 
 ## Implemented Features
 
@@ -98,7 +108,7 @@ The backend holds **authoritative copies** of all data, dependency graphs, and c
     zoom), while **Ctrl/Cmd+wheel zooms there too** — and so does a trackpad pinch
   - **Pan**: middle-drag, **space+left drag**, or a left drag on the bare canvas
   - **View → Reset View** fits the whole workflow (auto zoom + centre); **Tile/Cascade** lay out
-    inside the visible area — see the [decision](docs/decisions/2026-10-21-infinite-canvas.md)
+    inside the visible area — see the [decision](docs/docs/decisions/2026-10-21-infinite-canvas.md)
 - Cards drag, resize and stack freely, plus **Tile / Cascade / Close All**
 - A table that still feeds a chart **refuses to close**, and its connections blink to explain why
 - Runtime **Chinese/English switching**, **workspace persistence** (layout + dependencies + data), and CSV export of the current table
@@ -169,10 +179,10 @@ npm test                  # unit tests (vitest, includes cross-tier fixtures)
 ### Tests
 
 ```bash
-# Frontend: typecheck + 269 unit tests (including 46 cross-tier differential fixtures)
+# Frontend: typecheck + 394 unit tests (including 46 cross-tier differential fixtures)
 cd web && npm run typecheck && npm test
 
-# Backend: 5 ctest cases (46 expression + 14 matrix + node registry; two more are opt-in gates, Skipped by default)
+# Backend: 7 ctest cases (cross-tier fixtures, matrix operators, node registry, card fixtures; 3 further gates are opt-in and Skipped by default)
 cd backend && ctest --test-dir build --output-on-failure
 
 # Opt-in gates: differential fuzz (random TS↔C++ cross-check) and HTTP malformed-request stress
@@ -215,13 +225,13 @@ GitHub Actions runs three jobs on every push/PR:
 - [x] **Frontend transport client** → backend handshake, matrix registration, event polling, visible offline banner (2026-10-17)
 - [x] **One-command dev + CI gate** → `scripts/dev.sh`, vite proxy, GitHub Actions backend-test job (2026-10-17)
 - [x] **Eigen matrix operators** → matmul, transpose, det, inv, solve + matrix-mode expression evaluator + 14 matrix fixtures (2026-10-17)
-- [ ] **Function card UI**: three-pane layout (left: variable blocks + input ports + mode badges; top-right: formula editor; bottom-right: result grid + output port)
+- [x] **Function card UI**: three-pane layout (left: variable blocks + input ports + mode badges; top-right: formula editor; bottom-right: result grid + output port)
 - [x] **Unbounded canvas (pan)** → plane grows with the cards, four pan gestures, View → Reset View (2026-10-21)
 - [x] **Whole-workbench zoom** → wheel zoom anchored on the cursor, 10%–300%, cards/fonts/charts/connections scale together (2026-10-21)
 - [ ] **Canvas minimap / zoom shortcuts**: overview and keyboard zoom (the entry point is clear: reuse resetView's fit maths)
 - [ ] **VirtualTable windowed data source**: large matrices fetched by visible-row window, not loaded whole
 - [ ] **Port anchors**: per-port connection endpoints in `cardMetrics` + `ConnectionLayer`
-- [ ] **Four-state status lamps**: driven by node state events (gray/yellow/green/red)
+- [x] **Four-state status lamps** (2026-10-27): driven by node state events (gray/yellow/green/red)
 - [ ] Data **editing** capability (non-file-backed cards, double-click edit + formula evaluation)
 - [ ] Connection arrows / red-blue bidirectional highlight
 - [ ] **Card beautification**: unify card styling, spacing, colors, and layout
@@ -241,7 +251,7 @@ GitHub Actions runs three jobs on every push/PR:
 
 ## Acknowledgements
 
-This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class agent tooling, and earlier GitHub Copilot). All generated code has been **manually reviewed and tested**.
+This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class tooling, and earlier GitHub Copilot). Authored by the maintainer: the requirements, the architecture decisions in [`docs/docs/decisions/`](docs/docs/decisions/), the acceptance criteria and the test gates. The repository does not claim "it was all typed by hand" — it claims that **every feature statement above is reproduced by the suites listed under Tests** (394 unit / 7 ctest / 65 end-to-end checks). Ownership and timeline: [`PROVENANCE.md`](PROVENANCE.md).
 
 ## License
 
