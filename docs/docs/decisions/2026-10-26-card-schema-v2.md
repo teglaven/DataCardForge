@@ -1,7 +1,8 @@
 # 决策：卡片数据结构 v2 —— 依赖升为信封一等公民，函数卡 = 单节点 K 输出
 
 - **日期**：2026-10-26
-- **状态**：🔒 规格已锁定（方向已定；**代码迁移未开始**，是后续独立任务）
+- **状态**：✅ **已实施**（2026-10-27：后端节点 v2、签名注册表、前端 v2 迁移、三区 UI、
+  重指向确认、列数契约全部落地，卡片层夹具双边裁判已接进 ctest 与 vitest）
 - **标签**：`#架构 #卡片模型 #持久化 #函数卡`
 - **基线**：本决策实施前的回滚点为 `0d839c9`。
 - **配套文档**：[端口语义规格 v1](../architecture/port-semantics-v1.md)。本决策定义“卡片长什么样”，
@@ -151,6 +152,41 @@ C++ 解析成 `ComputeNode` + 边集，输出**规范化图**逐字段对拍。�
 
 十轮 ABI 推演没有白做：它产出的全部约束（K 输出、端口身份、缺失语义、数据面分离、单一入口）
 的正确归宿是这份卡片模板和端口语义规格，而不是那个 `.h`。
+
+## 实施结果（2026-10-27）
+
+### 落地清单
+
+| 层 | 提交 | 内容 |
+|---|---|---|
+| 后端 | `feat(backend): 节点 v2` | `PortBinding.portId` / `sourceOutputIndex`、`ComputeNode.resultMatrixIds[]`、`resultOwner_` 改为 (nodeId, outputIndex)；**求值不再持锁**（evaluateNode 分四段：发布 computing / 解析输入 / 无锁求值 / 加锁提交，gatherInputs 逐端口短锁） |
+| 后端 | `feat(backend): 函数签名注册表` | `signature.h/.cpp`（`FunctionSignature` 的 C++ 投影）、`createV2`、`updateParams`、`builtin:expression-columns`（一节点一宽表，取代 v1 每列一节点） |
+| 后端 | `feat(backend): 列数契约` | `params.columnContract` 在提交前校验，违约 ⇒ `columnContractViolation{expected,actual}` 且清空旧结果（下游继承 upstreamError ⇒ 断流） |
+| 后端 | `fix(backend): 单元格编辑级联` | `PATCH /api/matrices/{id}` 此前不发 `onMatrixChanged`，改单元格后函数卡仍显示旧数字 |
+| 前端 | `feat(web): 卡片 schema v2` | `CardBase.inputs[]`、`FunctionCardModel`（signatureId/params/outputs/node/displayMatrixId）、`WorkspaceSnapshot.version = 2`、`migrate.ts`（纯函数、确定性 v1→v2）、图表侧统一 `commitChartConfig`（先验环后改边） |
+| 前端 | `feat(web): 函数卡三区布局` | 输入 / 计算公式 / 输出三区；单节点四态灯；`upstreamError` 呈现为灰色「失效」而非红色 |
+| 前端 | `feat(web): 重指向确认流` | 切文件 ⇒ `RepointOffer`（列差异预览、行数变化陈述、「仍然应用（列不匹配）」、批量确认），确认 = 一次显式图编辑 |
+| 前端 | `feat(web): 输出列重命名 + 列数契约` | 输出区顶端重命名入口、底部提示条常驻陈述契约、违约时给出「扩展契约 / 解除锁定」两条出路 |
+| 前端 | `fix(web): 结果按窗口翻页` | v1 只取一个 5000 行窗口，1 万行源表在卡里只显示一半（数字对、图在撒谎）；现翻页取全，上限 20 万行并显式告知 |
+| 测试 | `test: 卡片层差分夹具` | 同一份 JSON（6 例）由 `cardFixtures.test.ts`（18 例）与 `card_fixture_run.cpp`（ctest `card_fixtures`）双边裁判 |
+| 测试 | `test(web): 真实后端集成门禁` | opt-in `DC_RUN_INTEGRATION=1`：真 client 打真后端，覆盖 DCM1 帧、签名 K 输出、契约违约、未知签名 |
+
+### 实施中修正的两处设计
+
+1. **列头指纹 → 列数契约**。讨论中先想的「记录上游列头快照、出现差异就警告」被否决：
+   线性代数链路列数/列宽本来就常变，指纹的误报率与其实现复杂度不成比例。落地的是
+   **显式契约**：用户第一次给输出列命名时锁住当时的列数（`params.columnContract`），
+   之后宽度漂移由后端结构化断流；自编辑（加/删表达式）走「扩展契约 / 解除锁定」的
+   一步确认，而不是静默改数。契约是参数（数据），不是形状猜测。
+2. **输出列名归属**。曾计划在 `outputs[].columnNames` 存一份重命名映射，与表达式名
+   并存——那是「同一个能力两个入口」。最终：**列名属于签名参数**（`params.formulas[].name`），
+   输出区顶端的重命名只是它的另一个编辑面，单一事实源不变。
+
+### 待办（不在本条内）
+
+- 端口锚点（per-port 连线端点）：连线仍是卡片级，`portId` 已经就位，缺的是几何与交互。
+- 条件筛选卡、扩展卡、多函数卡并行执行：仍按原路线图。
+- `include/dc_plugin.h`：重访触发条件一条未满足（无外部贡献者、无因需重编译而被跳过的函数）。
 
 ## 明确不做（本轮范围外）
 
