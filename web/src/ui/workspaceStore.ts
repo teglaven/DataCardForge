@@ -1482,12 +1482,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     addFormulaCard(sourceCardId, matrixId) {
       const state = get();
       const sourceCard = state.cards.find((c) => c.id === sourceCardId);
-      if (!sourceCard || !isMatrixCard(sourceCard)) return null;
+      // A table or a function card's output can both feed a function card: the result of
+      // one card is an ordinary matrix, which is what makes chains (A → B → C) a graph
+      // rather than a fan-out from the tables. The backend already treats result matrices
+      // as mid-edges, so a chain recomputes in one pass.
+      if (!sourceCard || isChartCard(sourceCard)) return null;
       // v2: the reference is ONE explicit matrix. Without an explicit id the card captures
-      // the file showing right now — and keeps reading it whatever the table does later.
-      const targetMatrixId = matrixId ?? sourceCard.sources[sourceCard.activeSource]?.matrixId;
+      // what the source shows right now — and keeps reading it afterwards.
+      const targetMatrixId =
+        matrixId ?? (isMatrixCard(sourceCard) ? sourceCard.sources[sourceCard.activeSource]?.matrixId : undefined) ??
+        (isFormulaCard(sourceCard) ? sourceCard.displayMatrixId : undefined);
       if (targetMatrixId === undefined) return null;
-      if (!sourceCard.sources.some((entry) => entry.matrixId === targetMatrixId)) return null;
+      const ownedMatrixIds = isMatrixCard(sourceCard)
+        ? sourceCard.sources.map((entry) => entry.matrixId)
+        : [sourceCard.displayMatrixId];
+      if (!ownedMatrixIds.includes(targetMatrixId)) return null;
       const sourceMatrix = state.matrices.get(targetMatrixId);
       if (!sourceMatrix) return null;
 

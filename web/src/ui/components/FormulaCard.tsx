@@ -66,6 +66,8 @@ interface FormulaCardProps {
    * columns than the table has — the caller surfaces that, exactly like a data card does.
    */
   onOpenChart: (columnIndex: number, type: ChartTypeId) => number | null;
+  /** Feed this card's output into a NEW function card (a chain: A → B). */
+  onOpenFunction: () => void;
   active: boolean;
   closeBlocked: boolean;
   onClose: () => void;
@@ -86,6 +88,7 @@ export function FormulaCard({
   onRenameOutputColumn,
   onSetColumnContract,
   onOpenChart,
+  onOpenFunction,
   active,
   closeBlocked,
   onClose,
@@ -547,6 +550,17 @@ export function FormulaCard({
               </button>
             );
           })}
+          <div className="context-menu__separator" />
+          <button
+            type="button"
+            className="context-menu__item"
+            onClick={() => {
+              onOpenFunction();
+              setChartMenu(null);
+            }}
+          >
+            {t('menu.newFormula')}
+          </button>
         </Popup>
       ) : null}
     </CardShell>

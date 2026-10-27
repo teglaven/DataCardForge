@@ -1343,3 +1343,51 @@ describe('offer hygiene', () => {
     expect(store().repointOffers).toHaveLength(0);
   });
 });
+
+// ── chaining: a function card's output feeds another function card ──────────────
+describe('function card chains', () => {
+  it('binds the downstream card to the upstream output matrix', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], nodeNames: ['Pos.1 double'] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const a = store().addFormulaCard(srcId)!;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const upstream = store().cards.find((c) => c.id === a) as FunctionCardModel;
+
+      const b = store().addFormulaCard(a)!;
+      expect(b).not.toBeNull();
+      const downstream = store().cards.find((c) => c.id === b) as FunctionCardModel;
+      expect(downstream.inputs).toEqual([
+        {
+          portId: 'src',
+          target: { type: 'matrix', cardId: a, matrixId: upstream.displayMatrixId },
+        },
+      ]);
+      // The graph is A → B, so close protection keeps A alive while B reads it.
+      expect(store().dependencies.getDependents(a)).toContain(b);
+      expect(store().removeCard(a)).toBe(false);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('lets a chart and another function card share the same output (fan-out)', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], nodeNames: ['Pos.1 double'] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const a = store().addFormulaCard(srcId)!;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const b = store().addFormulaCard(a)!;
+      const chartId = store().addChartCard(a, 0)!;
+      // Two edges out of A, both naming the same output matrix.
+      expect(store().dependencies.getDependents(a).sort()).toEqual([b, chartId].sort());
+      // Closing A is blocked by either of them; closing both releases it.
+      expect(store().removeCard(a)).toBe(false);
+      expect(store().removeCard(b)).toBe(true);
+      expect(store().removeCard(chartId)).toBe(true);
+      expect(store().removeCard(a)).toBe(true);
+    } finally {
+      stub.restore();
+    }
+  });
+});

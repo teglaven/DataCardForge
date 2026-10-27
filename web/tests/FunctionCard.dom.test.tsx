@@ -47,6 +47,7 @@ interface CardOptions {
   onRenameOutputColumn?: (index: number, name: string) => void;
   onSetColumnContract?: (columns: number | null) => void;
   onOpenChart?: (columnIndex: number, type: string) => number | null;
+  onOpenFunction?: () => void;
 }
 
 async function mount(card: FunctionCardModel, options: CardOptions = {}): Promise<HTMLElement> {
@@ -70,6 +71,7 @@ async function mount(card: FunctionCardModel, options: CardOptions = {}): Promis
           onRenameOutputColumn={options.onRenameOutputColumn ?? (() => {})}
           onSetColumnContract={options.onSetColumnContract ?? (() => {})}
           onOpenChart={options.onOpenChart ?? (() => null)}
+          onOpenFunction={options.onOpenFunction ?? (() => {})}
           active
           closeBlocked={false}
           onClose={() => {}}
@@ -424,5 +426,29 @@ describe('charting from the output table', () => {
       items[0].click();
     });
     expect(calls).toEqual([{ column: 0, type: 'line' }]);
+  });
+});
+
+describe('chaining from the output menu', () => {
+  it('offers "new function card" in the result header menu', async () => {
+    let chained = 0;
+    const host = await mount(makeCard(), {
+      resultMatrix: matrix(1, 4),
+      onOpenFunction: () => {
+        chained += 1;
+      },
+    });
+    await act(async () => {
+      host
+        .querySelector('.card--formula .vtable__colhead')!
+        .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 120 }));
+    });
+    const items = [...document.querySelectorAll<HTMLButtonElement>('.context-menu__item')];
+    const chainedItem = items.find((item) => item.textContent?.includes('新建公式卡'));
+    expect(chainedItem).toBeDefined();
+    await act(async () => {
+      chainedItem!.click();
+    });
+    expect(chained).toBe(1);
   });
 });
