@@ -23,6 +23,7 @@
 - ⚖️ **架构权衡** (`architecture/`) — 历史对比文档，结论多数已被决策追记取代；仅当想理解"为什么不选另一头"时阅读
   - [[frontend-imgui-vs-web|前端选型：ImGui vs Web]]（✅ 已收敛 → 选 Web，见 10-14 决策；对比表仍可复用）
 - 🕳️ **踩坑记录** (`lessons/`) — 实测中遇到的坑与规避方法
+  - [[2026-10-27-long-turn-budget|长回合烧额度：提前发现与结构防治]] ← **成本治理规则 + 三条被否掉的方案**
   - [[implot-v1.1-api|ImPlot v1.1 API 大改]]
   - [[imgui-docking-pushstylecolor|ImGui Docking 下 PushStyleColor 的坑]]
 - 📅 **开发日志** (`log/`) — 按日期记录进展
