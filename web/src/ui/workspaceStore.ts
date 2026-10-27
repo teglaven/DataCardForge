@@ -410,32 +410,6 @@ function buildTableBinding(
 }
 
 /**
- * Materialise a decoded DCM1 frame into a read-only display matrix.
- *
- * This is a pure shape conversion — no arithmetic. Non-finite values arrive unchanged
- * (IEEE 754 over the wire) and keep rendering as `—`.
- */
-function frameToMatrixData(window: {
-  rows?: number;
-  data?: Float64Array[];
-  names?: string[];
-}): MatrixData {
-  const matrix = new MatrixData();
-  const columns = window.data ?? [];
-  const names = window.names ?? [];
-  for (let c = 0; c < columns.length; ++c) {
-    const col = columns[c];
-    const label = names[c] ?? `Pos.${c + 1}`;
-    const space = label.startsWith('Pos.') ? label.indexOf(' ') : -1;
-    const posName = space > 0 ? label.slice(0, space) : label;
-    const annotation = space > 0 ? label.slice(space + 1) : '';
-    matrix.appendColumn(posName, Array.from(col));
-    matrix.setColumnAnnotation(matrix.columnCount() - 1, annotation);
-  }
-  return matrix;
-}
-
-/**
  * Make restored cards safe for the B-plan model.
  *
  * A restored function card has no live node (the backend was restarted, or the file
@@ -567,12 +541,76 @@ function locateCardByNode(nodeId: number): number | null {
   return null;
 }
 
+/** The server clamps one window request to this many rows (`maxWindowRows`). */
+const WINDOW_ROWS = 5000;
 /**
- * Pull a done node's result window into the card's display cache.
+ * Upper bound on how many result rows are cached in the browser.
  *
- * One fetch: the backend returns the whole wide table (one column per expression) with
- * the expression names already attached as annotations, so the browser-side per-column
- * merge and its cache slots are gone.
+ * A result table is a *display cache*; the authoritative copy stays server-side. 200 000
+ * rows covers the 10⁵-row measurements this tool targets with room to spare (≈1.6 MB per
+ * column) while keeping a pathological result from exhausting the tab. Above it the read
+ * stops and says so — truncation is never silent.
+ */
+const MAX_CACHE_ROWS = 200_000;
+
+/**
+ * Page through a result matrix' windows and assemble the whole table.
+ *
+ * v1 pulled ONE window (`count=5000`), so a 10 000-row formula silently showed the first
+ * half — the numbers were right, the picture lied. Paging is server-side cheap (the frames
+ * are binary) and the stop at `MAX_CACHE_ROWS` is reported to the user.
+ */
+async function fetchFullResult(
+  resultMatrixId: number,
+): Promise<{ matrix: MatrixData; truncated: boolean } | null> {
+  const columns: number[][] = [];
+  let names: string[] = [];
+  let fetched = 0;
+  let truncated = false;
+
+  for (;;) {
+    const limit = Math.min(WINDOW_ROWS, MAX_CACHE_ROWS - fetched);
+    if (limit <= 0) {
+      truncated = true;
+      break;
+    }
+    const frame = await backendClient.window(resultMatrixId, fetched, limit);
+    if (!frame.ok) {
+      if (frame.code === 'backendUnavailable') {
+        useWorkspace.setState({ backend: { state: 'offline', error: frame.code } });
+      }
+      return null;
+    }
+    const rows = frame.rows ?? 0;
+    if (fetched === 0) names = frame.names ?? [];
+    const data = frame.data ?? [];
+    for (let c = 0; c < data.length; ++c) {
+      const chunk = Array.from(data[c]);
+      if (columns[c]) columns[c].push(...chunk);
+      else columns[c] = chunk;
+    }
+    fetched += rows;
+    if (rows < limit) break;
+  }
+
+  const matrix = new MatrixData();
+  for (let c = 0; c < columns.length; ++c) {
+    const label = names[c] ?? `Pos.${c + 1}`;
+    const space = label.startsWith('Pos.') ? label.indexOf(' ') : -1;
+    const posName = space > 0 ? label.slice(0, space) : label;
+    const annotation = space > 0 ? label.slice(space + 1) : '';
+    matrix.appendColumn(posName, columns[c]);
+    matrix.setColumnAnnotation(matrix.columnCount() - 1, annotation);
+  }
+  return { matrix, truncated };
+}
+
+/**
+ * Pull a done node's result into the card's display cache.
+ *
+ * The backend returns the whole wide table (one column per expression) with the expression
+ * names attached as annotations, so the browser-side per-column merge and its cache slots
+ * are gone. I/O is paged (see `fetchFullResult`); this function only decides where it goes.
  */
 async function pullResultIntoCache(cardId: number): Promise<void> {
   const card = useWorkspace.getState().cards.find((c) => c.id === cardId);
@@ -580,21 +618,25 @@ async function pullResultIntoCache(cardId: number): Promise<void> {
   const output = card.outputs[0];
   if (!output || output.resultMatrixId < 0) return;
 
-  const frame = await backendClient.nodeResult(output.resultMatrixId);
-  if (!frame.ok) {
-    if (frame.code === 'backendUnavailable') {
-      useWorkspace.setState({ backend: { state: 'offline', error: frame.code } });
-    }
-    return;
-  }
-  const matrix = frameToMatrixData(frame);
+  const result = await fetchFullResult(output.resultMatrixId);
+  if (!result) return;
   useWorkspace.setState((state) => {
     const current = state.cards.find((c) => c.id === cardId);
     if (!current || !isFormulaCard(current)) return {};
     const matrices = new Map(state.matrices);
-    matrices.set(current.displayMatrixId, matrix);
+    matrices.set(current.displayMatrixId, result.matrix);
     return { matrices };
   });
+  if (result.truncated) {
+    useWorkspace
+      .getState()
+      .showToast(
+        'error',
+        translatorFor(useWorkspace.getState().locale)('status.resultTruncated', {
+          n: MAX_CACHE_ROWS,
+        }),
+      );
+  }
 }
 
 /**

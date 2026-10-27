@@ -649,6 +649,8 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
   function stubBackend(opts: {
     nodeResult?: number[][];
     nodeNames?: string[];
+    /** Serve this many rows through real start/count paging (exercises the window loop). */
+    resultRows?: number;
     createState?: 'done' | 'error';
     error?: { code: string; params?: Record<string, unknown> };
     failAll?: boolean;
@@ -693,6 +695,20 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
         return json({ deleted: Number(url.split('/').pop()) });
       }
       if (url.includes('/window')) {
+        if (opts.resultRows !== undefined) {
+          const query = new URL(url, 'http://x').searchParams;
+          const start = Number(query.get('start') ?? 0);
+          const count = Number(query.get('count') ?? 500);
+          const end = Math.min(opts.resultRows, start + count);
+          const column = Array.from({ length: Math.max(0, end - start) }, (_, i) => start + i);
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => encodeFrame([column], ['Pos.1 big']),
+            json: async () => ({}),
+            text: async () => '',
+          } as unknown as Response;
+        }
         const bytes = encodeFrame(opts.nodeResult ?? [[2, 4]], opts.nodeNames ?? ['Pos.1']);
         return {
           ok: true,
@@ -1002,147 +1018,170 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
     expect(Array.from(frame.data![1])).toEqual([3, 4]);
     expect(frame.names).toEqual(['Pos.1 x', 'Pos.2']);
   });
-});
 
-// ── re-point confirmation (v2: switching a file is an explicit graph edit) ──────
-describe('re-point offers', () => {
-  /** Two files in one data card: identical headers, and a third file with different ones. */
-  function setup() {
-    const srcId = store().addMatrixCard([
-      { name: 'a.txt', matrix: matrix([[1, 2], [3, 4]], ['A', 'B']) },
-      { name: 'b.txt', matrix: matrix([[5, 6], [7, 8]], ['A', 'B']) },
-      { name: 'c.txt', matrix: matrix([[9], [10]], ['Z']) },
-    ]);
-    const card = store().cards.find((c) => c.id === srcId) as MatrixCardModel;
-    return { srcId, matrices: card.sources.map((source) => source.matrixId) };
-  }
-
-  it('offers the switch for a function card instead of re-pointing it', () => {
-    const { srcId, matrices } = setup();
-    const fId = store().addFormulaCard(srcId, matrices[0])!;
-    store().setActiveSource(srcId, 1);
-    const offers = store().repointOffers;
-    expect(offers).toHaveLength(1);
-    expect(offers[0]).toMatchObject({
-      cardId: fId,
-      ownerCardId: srcId,
-      fromMatrixId: matrices[0],
-      toMatrixId: matrices[1],
-      sameColumns: true,
-      addedLabels: [],
-      removedLabels: [],
-      toName: 'b.txt',
+  describe('result paging', () => {
+    it('assembles a result larger than one window instead of truncating it', async () => {
+      const stub = stubBackend({ resultRows: 12_000 });
+      try {
+        const srcId = await loadSource([[1], [2]], ['A']);
+        const fId = store().addFormulaCard(srcId)!;
+        await flush();
+        await flush();
+        const card = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+        const cached = store().matrices.get(card.displayMatrixId)!;
+        expect(cached.rowCount()).toBe(12_000);
+        // Assembled in order, and the last row is really the last one.
+        expect(cached.cell(0, 0)).toBe(0);
+        expect(cached.cell(11_999, 0)).toBe(11_999);
+        // Three windows: 5000 + 5000 + 2000.
+        const windows = stub.calls.filter((c) => c.url.includes('/window'));
+        expect(windows.length).toBe(3);
+      } finally {
+        stub.restore();
+      }
     });
-    // Nothing changed yet — the card still reads its frozen matrix.
-    const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
-    expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[0] });
   });
 
-  it('applies the offer as one explicit edit (input + node)', () => {
-    const { srcId, matrices } = setup();
-    const fId = store().addFormulaCard(srcId, matrices[0])!;
-    store().setActiveSource(srcId, 1);
-    store().applyRepoint(fId);
-    const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
-    expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[1] });
-    expect(store().repointOffers).toHaveLength(0);
-    // The dependency edge is unchanged (same data card), so close protection still holds.
-    expect(store().dependencies.getDependents(srcId)).toContain(fId);
-  });
-
-  it('flags a column change so the confirm cannot be a blind one', () => {
-    const { srcId, matrices } = setup();
-    store().addFormulaCard(srcId, matrices[0]);
-    store().setActiveSource(srcId, 2);
-    const offer = store().repointOffers[0];
-    expect(offer.sameColumns).toBe(false);
-    expect(offer.addedLabels).toEqual(['Z']);
-    expect(offer.removedLabels).toEqual(['A', 'B']);
-    expect(offer.toCols).toBe(1);
-  });
-
-  it('dismissing keeps the current input and clears the offer', () => {
-    const { srcId, matrices } = setup();
-    const fId = store().addFormulaCard(srcId, matrices[0])!;
-    store().setActiveSource(srcId, 1);
-    store().dismissRepoint(fId);
-    expect(store().repointOffers).toHaveLength(0);
-    const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
-    expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[0] });
-  });
-
-  it('applies to every card reading the same data card in one go', () => {
-    const { srcId, matrices } = setup();
-    const a = store().addFormulaCard(srcId, matrices[0])!;
-    const b = store().addFormulaCard(srcId, matrices[0])!;
-    store().setActiveSource(srcId, 1);
-    expect(store().repointOffers).toHaveLength(2);
-    store().applyRepointsForOwner(srcId);
-    expect(store().repointOffers).toHaveLength(0);
-    for (const id of [a, b]) {
-      const fn = store().cards.find((c) => c.id === id) as FunctionCardModel;
-      expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[1] });
+  // ── re-point confirmation (v2: switching a file is an explicit graph edit) ──────
+  describe('re-point offers', () => {
+    /** Two files in one data card: identical headers, and a third file with different ones. */
+    function setup() {
+      const srcId = store().addMatrixCard([
+        { name: 'a.txt', matrix: matrix([[1, 2], [3, 4]], ['A', 'B']) },
+        { name: 'b.txt', matrix: matrix([[5, 6], [7, 8]], ['A', 'B']) },
+        { name: 'c.txt', matrix: matrix([[9], [10]], ['Z']) },
+      ]);
+      const card = store().cards.find((c) => c.id === srcId) as MatrixCardModel;
+      return { srcId, matrices: card.sources.map((source) => source.matrixId) };
     }
+
+    it('offers the switch for a function card instead of re-pointing it', () => {
+      const { srcId, matrices } = setup();
+      const fId = store().addFormulaCard(srcId, matrices[0])!;
+      store().setActiveSource(srcId, 1);
+      const offers = store().repointOffers;
+      expect(offers).toHaveLength(1);
+      expect(offers[0]).toMatchObject({
+        cardId: fId,
+        ownerCardId: srcId,
+        fromMatrixId: matrices[0],
+        toMatrixId: matrices[1],
+        sameColumns: true,
+        addedLabels: [],
+        removedLabels: [],
+        toName: 'b.txt',
+      });
+      // Nothing changed yet — the card still reads its frozen matrix.
+      const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[0] });
+    });
+
+    it('applies the offer as one explicit edit (input + node)', () => {
+      const { srcId, matrices } = setup();
+      const fId = store().addFormulaCard(srcId, matrices[0])!;
+      store().setActiveSource(srcId, 1);
+      store().applyRepoint(fId);
+      const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[1] });
+      expect(store().repointOffers).toHaveLength(0);
+      // The dependency edge is unchanged (same data card), so close protection still holds.
+      expect(store().dependencies.getDependents(srcId)).toContain(fId);
+    });
+
+    it('flags a column change so the confirm cannot be a blind one', () => {
+      const { srcId, matrices } = setup();
+      store().addFormulaCard(srcId, matrices[0]);
+      store().setActiveSource(srcId, 2);
+      const offer = store().repointOffers[0];
+      expect(offer.sameColumns).toBe(false);
+      expect(offer.addedLabels).toEqual(['Z']);
+      expect(offer.removedLabels).toEqual(['A', 'B']);
+      expect(offer.toCols).toBe(1);
+    });
+
+    it('dismissing keeps the current input and clears the offer', () => {
+      const { srcId, matrices } = setup();
+      const fId = store().addFormulaCard(srcId, matrices[0])!;
+      store().setActiveSource(srcId, 1);
+      store().dismissRepoint(fId);
+      expect(store().repointOffers).toHaveLength(0);
+      const fn = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+      expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[0] });
+    });
+
+    it('applies to every card reading the same data card in one go', () => {
+      const { srcId, matrices } = setup();
+      const a = store().addFormulaCard(srcId, matrices[0])!;
+      const b = store().addFormulaCard(srcId, matrices[0])!;
+      store().setActiveSource(srcId, 1);
+      expect(store().repointOffers).toHaveLength(2);
+      store().applyRepointsForOwner(srcId);
+      expect(store().repointOffers).toHaveLength(0);
+      for (const id of [a, b]) {
+        const fn = store().cards.find((c) => c.id === id) as FunctionCardModel;
+        expect(fn.inputs[0].target).toMatchObject({ matrixId: matrices[1] });
+      }
+    });
+
+    it('offers nothing when the new file is already the card input', () => {
+      const { srcId, matrices } = setup();
+      store().addFormulaCard(srcId, matrices[1]);
+      store().setActiveSource(srcId, 1);
+      expect(store().repointOffers).toHaveLength(0);
+    });
   });
 
-  it('offers nothing when the new file is already the card input', () => {
-    const { srcId, matrices } = setup();
-    store().addFormulaCard(srcId, matrices[1]);
-    store().setActiveSource(srcId, 1);
-    expect(store().repointOffers).toHaveLength(0);
-  });
-});
+  // ── output column rename + the column-count contract ───────────────────────────
+  describe('column rename contract', () => {
+    async function card() {
+      const srcId = store().addMatrixCard([{ name: 's.txt', matrix: matrix([[1], [2]], ['A']) }]);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const id = store().addFormulaCard(srcId)!;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      return store().cards.find((c) => c.id === id) as FunctionCardModel;
+    }
 
-// ── output column rename + the column-count contract ───────────────────────────
-describe('column rename contract', () => {
-  async function card() {
-    const srcId = store().addMatrixCard([{ name: 's.txt', matrix: matrix([[1], [2]], ['A']) }]);
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    const id = store().addFormulaCard(srcId)!;
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    return store().cards.find((c) => c.id === id) as FunctionCardModel;
-  }
+    it('creates the contract on the first rename (naming promises the width)', async () => {
+      const before = await card();
+      expect(before.params.columnContract).toBeUndefined();
+      store().renameOutputColumn(before.id, 0, 'temperature');
+      const after = store().cards.find((c) => c.id === before.id) as FunctionCardModel;
+      expect(after.params.formulas[0].name).toBe('temperature');
+      expect(after.params.columnContract).toEqual({ outputId: 'result', columns: 1 });
+    });
 
-  it('creates the contract on the first rename (naming promises the width)', async () => {
-    const before = await card();
-    expect(before.params.columnContract).toBeUndefined();
-    store().renameOutputColumn(before.id, 0, 'temperature');
-    const after = store().cards.find((c) => c.id === before.id) as FunctionCardModel;
-    expect(after.params.formulas[0].name).toBe('temperature');
-    expect(after.params.columnContract).toEqual({ outputId: 'result', columns: 1 });
-  });
+    it('extends the contract explicitly (the way out of a self-edit violation)', async () => {
+      const c = await card();
+      store().renameOutputColumn(c.id, 0, 'a');
+      store().setFormula(c.id, 1, 'b', 'A * 2');
+      expect(
+        (store().cards.find((e) => e.id === c.id) as FunctionCardModel).params.columnContract,
+      ).toEqual({ outputId: 'result', columns: 1 });
+      store().setColumnContract(c.id, 2);
+      expect(
+        (store().cards.find((e) => e.id === c.id) as FunctionCardModel).params.columnContract,
+      ).toEqual({ outputId: 'result', columns: 2 });
+    });
 
-  it('extends the contract explicitly (the way out of a self-edit violation)', async () => {
-    const c = await card();
-    store().renameOutputColumn(c.id, 0, 'a');
-    store().setFormula(c.id, 1, 'b', 'A * 2');
-    expect(
-      (store().cards.find((e) => e.id === c.id) as FunctionCardModel).params.columnContract,
-    ).toEqual({ outputId: 'result', columns: 1 });
-    store().setColumnContract(c.id, 2);
-    expect(
-      (store().cards.find((e) => e.id === c.id) as FunctionCardModel).params.columnContract,
-    ).toEqual({ outputId: 'result', columns: 2 });
-  });
+    it('clears the contract, so the width is free again', async () => {
+      const c = await card();
+      store().renameOutputColumn(c.id, 0, 'a');
+      store().setColumnContract(c.id, null);
+      expect(
+        (store().cards.find((e) => e.id === c.id) as FunctionCardModel).params.columnContract,
+      ).toBeUndefined();
+    });
 
-  it('clears the contract, so the width is free again', async () => {
-    const c = await card();
-    store().renameOutputColumn(c.id, 0, 'a');
-    store().setColumnContract(c.id, null);
-    expect(
-      (store().cards.find((e) => e.id === c.id) as FunctionCardModel).params.columnContract,
-    ).toBeUndefined();
-  });
-
-  it('survives a snapshot round-trip (a contract the user cannot see is useless)', async () => {
-    const c = await card();
-    store().renameOutputColumn(c.id, 0, 'kept');
-    store().setColumnContract(c.id, 1);
-    const snapshot = store().toSnapshot();
-    store().reset();
-    store().loadSnapshot(snapshot);
-    const restored = store().cards.find((e) => e.id === c.id) as FunctionCardModel;
-    expect(restored.params.columnContract).toEqual({ outputId: 'result', columns: 1 });
-    expect(restored.params.formulas[0].name).toBe('kept');
+    it('survives a snapshot round-trip (a contract the user cannot see is useless)', async () => {
+      const c = await card();
+      store().renameOutputColumn(c.id, 0, 'kept');
+      store().setColumnContract(c.id, 1);
+      const snapshot = store().toSnapshot();
+      store().reset();
+      store().loadSnapshot(snapshot);
+      const restored = store().cards.find((e) => e.id === c.id) as FunctionCardModel;
+      expect(restored.params.columnContract).toEqual({ outputId: 'result', columns: 1 });
+      expect(restored.params.formulas[0].name).toBe('kept');
+    });
   });
 });

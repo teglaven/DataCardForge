@@ -42,6 +42,7 @@ const dictionaries = {
     'status.notVector': '注意：{format} 不是矢量格式，期刊投稿请用 SVG',
     'status.cycle': '循环依赖：{path}',
     'status.cycleDropped': '工作区含 {n} 条循环依赖，已忽略（保存文件可能被手工编辑过）',
+    'status.resultTruncated': '结果超过 {n} 行，只显示前 {n} 行（完整结果仍在后端）',
     'status.workspace': '已打开 {name}（{cards} 张卡片 · {matrices} 个矩阵）',
     'status.cards': '{n} 张卡片',
 
@@ -240,6 +241,7 @@ const dictionaries = {
     'status.notVector': 'Note: {format} is not vector — use SVG for journal submission',
     'status.cycle': 'Dependency cycle: {path}',
     'status.cycleDropped': 'The workspace had {n} dependency cycle(s); they were ignored (the file may have been edited by hand)',
+    'status.resultTruncated': 'The result has more than {n} rows; only the first {n} are shown (the full result stays on the backend)',
     'status.workspace': 'Opened {name} ({cards} cards · {matrices} matrices)',
     'status.cards': '{n} cards',
 
