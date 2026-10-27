@@ -5,6 +5,8 @@
 #include <queue>
 
 #include "expression.h"
+#include "matrix_value.h"  // ShapeError (matrix-mode failures)
+#include "signature.h"
 
 namespace dc {
 
@@ -84,6 +86,48 @@ bool NodeRegistry::wouldCycle(int64_t dependentId, int64_t dependsOnId,
   return false;
 }
 
+namespace {
+
+// Shared creation body. REQUIRES the registry lock to be held (create/createV2 take it).
+// `nOutputs` comes from the signature (K), never from the data.
+NodeRegistry::CreateResult createLocked(std::map<int64_t, ComputeNode>* nodes,
+                                        std::map<int64_t, std::set<int64_t>>* dependents,
+                                        std::map<int64_t, std::set<int64_t>>* dependencies,
+                                        std::map<int64_t, std::pair<int64_t, int32_t>>* owners,
+                                        MatrixStore* store, int64_t nodeId,
+                                        const std::string& signatureId,
+                                        const std::vector<PortBinding>& inputs,
+                                        const std::string& formula, const Json& params,
+                                        size_t nOutputs) {
+  NodeRegistry::CreateResult result;
+  ComputeNode node;
+  node.id = nodeId;
+  node.signatureId = signatureId;
+  // v2: `portId` is the identity. A v1 client that only sends `varName` keeps working —
+  // the identity then falls back to the declared variable name.
+  for (PortBinding b : inputs) {
+    if (b.portId.empty()) b.portId = b.varName;
+    node.inputs.push_back(std::move(b));
+  }
+  node.formula = formula;
+  node.params = params;
+  // K is a signature property, never data-dependent.
+  for (size_t i = 0; i < nOutputs; ++i) node.resultMatrixIds.push_back(store->insert(Matrix{}));
+  for (size_t i = 0; i < node.resultMatrixIds.size(); ++i)
+    (*owners)[NodeRegistry::matrixKey(node.resultMatrixIds[i])] = {nodeId, static_cast<int32_t>(i)};
+  for (const auto& b : node.inputs) {
+    if (b.sourceNodeId < 0 && b.sourceMatrixId < 0) continue;
+    int64_t key = NodeRegistry::sourceKey(b);
+    (*dependents)[key].insert(nodeId);
+    (*dependencies)[nodeId].insert(key);
+  }
+  nodes->emplace(nodeId, std::move(node));
+  result.nodeId = nodeId;
+  return result;
+}
+
+}  // namespace
+
 NodeRegistry::CreateResult NodeRegistry::create(const std::vector<PortBinding>& inputs,
                                                 const std::string& formula) {
   std::lock_guard<std::mutex> lock(mu_);
@@ -100,28 +144,46 @@ NodeRegistry::CreateResult NodeRegistry::create(const std::vector<PortBinding>& 
     }
   }
 
-  ComputeNode node;
-  node.id = nextNodeId_++;
-  // v2: `portId` is the identity. A v1 client that only sends `varName` keeps working —
-  // the identity then falls back to the declared variable name.
-  for (PortBinding b : inputs) {
-    if (b.portId.empty()) b.portId = b.varName;
-    node.inputs.push_back(std::move(b));
+  int64_t nodeId = nextNodeId_++;
+  return createLocked(&nodes_, &dependents_, &dependencies_, &resultOwner_, store_, nodeId, "",
+                      inputs, formula, Json::object(), 1);
+}
+
+NodeRegistry::CreateResult NodeRegistry::createV2(const std::string& signatureId,
+                                                  const std::vector<PortBinding>& inputs,
+                                                  const Json& params) {
+  std::lock_guard<std::mutex> lock(mu_);
+  const FunctionSignature* sig = findSignature(signatureId);
+  if (!sig) {
+    CreateResult refused;
+    refused.errorCode = "unknownSignature";
+    return refused;
   }
-  node.formula = formula;
-  // v1 nodes have exactly one output; K is a signature property, never data-dependent.
-  node.resultMatrixIds.push_back(store_->insert(Matrix{}));
-  int64_t nodeId = node.id;
-  resultOwner_[matrixKey(node.resultMatrixIds[0])] = {nodeId, 0};
-  for (const auto& b : node.inputs) {
+
+  // Atomic edge check (same rule as v1): every source must exist, no edge may close a loop.
+  int64_t tentativeId = nextNodeId_;
+  for (const auto& b : inputs) {
     if (b.sourceNodeId < 0 && b.sourceMatrixId < 0) continue;
-    int64_t key = sourceKey(b);
-    dependents_[key].insert(nodeId);
-    dependencies_[nodeId].insert(key);
+    std::vector<int64_t> path;
+    if (wouldCycle(tentativeId, sourceKey(b), &path)) {
+      CreateResult result;
+      result.cyclePath = path;
+      return result;
+    }
   }
-  nodes_.emplace(nodeId, std::move(node));
-  result.nodeId = nodeId;
-  return result;
+
+  int64_t nodeId = nextNodeId_++;
+  return createLocked(&nodes_, &dependents_, &dependencies_, &resultOwner_, store_, nodeId,
+                      signatureId, inputs, "", params, sig->outputs.size());
+}
+
+bool NodeRegistry::updateParams(int64_t nodeId, const Json& params) {
+  std::lock_guard<std::mutex> lock(mu_);
+  auto it = nodes_.find(nodeId);
+  if (it == nodes_.end()) return false;
+  it->second.params = params;
+  it->second.state = NodeState::Dirty;
+  return true;
 }
 
 bool NodeRegistry::update(int64_t nodeId, const std::string* formula,
@@ -336,6 +398,8 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   // ── phase 1 (locked, short): publish `computing` and copy the evaluation request ──
   std::vector<PortBinding> bindings;
   std::string formula;
+  std::string signatureId;
+  Json params = Json::object();
   {
     std::lock_guard<std::mutex> lock(mu_);
     auto it = nodes_.find(nodeId);
@@ -345,6 +409,8 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
                                 {"state", Json(std::string("computing"))}}));
     bindings = it->second.inputs;
     formula = it->second.formula;
+    signatureId = it->second.signatureId;
+    params = it->second.params;
   }
 
   // ── phase 2 (unlocked): resolve inputs; the store has its own mutex ──
@@ -360,14 +426,58 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   }
 
   // ── phase 3 (unlocked): evaluate. NOTHING here holds mu_. ──
-  std::vector<double> values;
+  // One `vector<Column>` per declared output ordinal. K is fixed by the signature; the
+  // evaluator only decides what goes *inside* each output, never how many there are.
+  std::vector<std::vector<Column>> outputs;
   std::string errorCode;
+  std::string errorName;
   int64_t errorPosition = -1;
+  const size_t rowLength = length == 0 ? 1 : length;
   try {
-    values = ExprEngine::evaluate(formula, names, data, length == 0 ? 1 : length);
+    if (!signatureId.empty()) {
+      if (signatureId == kSigExpressionColumns) {
+        // builtin:expression-columns — one wide table, one column per expression. This is
+        // the v1 formula card's semantics, now computed once in one node instead of once
+        // per column in N nodes (the browser-side merge disappears with it).
+        std::vector<Column> columns;
+        const Json* formulas = params.find("formulas");
+        if (!formulas || !formulas->isArray() || formulas->items().empty()) {
+          errorCode = "badSignatureParams";
+          errorName = "formulas";
+        } else {
+          const auto& list = formulas->items();
+          for (size_t i = 0; i < list.size(); ++i) {
+            const Json& f = list[i];
+            const std::string expression = f["expression"].isString() ? f["expression"].asString() : "";
+            std::string name = f["name"].isString() ? f["name"].asString() : "";
+            if (name.empty()) name = "Col" + std::to_string(i + 1);
+            Column col;
+            col.posName = "Pos." + std::to_string(i + 1);
+            col.annotation = name;
+            col.data = ExprEngine::evaluate(expression, names, data, rowLength);
+            columns.push_back(std::move(col));
+          }
+        }
+        if (errorCode.empty()) outputs.push_back(std::move(columns));
+      } else {
+        errorCode = "unknownSignature";
+        errorName = signatureId;
+      }
+    } else {
+      std::vector<double> values = ExprEngine::evaluate(formula, names, data, rowLength);
+      Column out;
+      out.posName = "Pos.1";
+      out.annotation = "";
+      out.data = std::move(values);
+      outputs.push_back({std::move(out)});
+    }
   } catch (const ExpressionError& e) {
     errorCode = e.code;
     errorPosition = e.position;
+  } catch (const ShapeError& e) {
+    // Matrix-mode shape failures are structured too (never a silent garbage matrix).
+    errorCode = e.code;
+    errorName = e.what();
   } catch (const std::exception&) {
     errorCode = "internalError";
   }
@@ -378,19 +488,33 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   if (it == nodes_.end()) return;  // deleted while computing
   ComputeNode& node = it->second;
   if (!errorCode.empty()) {
-    failNodeLocked(nodeId, errorCode, Json::object({{"position", Json(errorPosition)}}));
+    Json params_out = Json::object();
+    if (errorPosition >= 0) params_out.set("position", Json(errorPosition));
+    if (!errorName.empty()) params_out.set("name", Json(errorName));
+    failNodeLocked(nodeId, errorCode, std::move(params_out));
     return;
   }
-  Column out;
-  out.posName = "Pos.1";
-  out.annotation = "";
-  out.data = std::move(values);
-  store_->replace(node.resultMatrixIds[0], {out});
+  // The signature promised K outputs; a short fill is a structured error, never UB
+  // (port-semantics-v1 §evaluation: "少填 = 结构化错误").
+  if (outputs.size() != node.resultMatrixIds.size()) {
+    failNodeLocked(nodeId, "internalError",
+                   Json::object({{"expected", Json(static_cast<int64_t>(node.resultMatrixIds.size()))},
+                                 {"got", Json(static_cast<int64_t>(outputs.size()))}}));
+    return;
+  }
+  for (size_t i = 0; i < outputs.size(); ++i)
+    store_->replace(node.resultMatrixIds[i], std::move(outputs[i]));
   node.state = NodeState::Done;
   node.errorCode.clear();
-  bus_->publish(Json::object({{"nodeId", Json(nodeId)},
-                              {"state", Json(std::string("done"))},
-                              {"matrixId", Json(node.resultMatrixIds[0])}}));
+  Json done = Json::object({{"nodeId", Json(nodeId)},
+                            {"state", Json(std::string("done"))},
+                            {"matrixId", Json(node.resultMatrixIds[0])}});
+  if (node.resultMatrixIds.size() > 1) {
+    Json ids = Json::array();
+    for (int64_t id : node.resultMatrixIds) ids.push(Json(id));
+    done.set("resultMatrixIds", std::move(ids));
+  }
+  bus_->publish(std::move(done));
 }
 
 void NodeRegistry::recomputeSubtree(int64_t nodeId) {

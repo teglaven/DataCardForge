@@ -44,6 +44,7 @@ struct ComputeNode {
   std::string signatureId;          // v2: registry entry; empty ⇒ the v1 `formula` path
   std::vector<PortBinding> inputs;  // ordered; identity is `portId`, this order is display only
   std::string formula;              // v1 single-expression formula
+  Json params = Json::object();     // v2 parameters (separate from the dataflow graph)
   // Outputs indexed by the signature's output ordinal. Always ≥ 1 element once created
   // (v1 nodes have exactly one). K is fixed by the signature, never by the data.
   std::vector<int64_t> resultMatrixIds;
@@ -78,11 +79,21 @@ class NodeRegistry {
   struct CreateResult {
     int64_t nodeId = -1;
     std::vector<int64_t> cyclePath;  // empty when accepted
+    std::string errorCode;           // structured refusal when nodeId < 0 and no cycle
   };
   CreateResult create(const std::vector<PortBinding>& inputs, const std::string& formula);
 
+  // v2: create from a registry signature. K outputs come from the signature, so the node
+  // gets exactly K result matrices at creation (never data-dependent).
+  // Unknown signature ⇒ {nodeId=-1, errorCode="unknownSignature"}.
+  CreateResult createV2(const std::string& signatureId, const std::vector<PortBinding>& inputs,
+                        const Json& params);
+
   bool update(int64_t nodeId, const std::string* formula,
               const std::vector<PortBinding>* inputs, std::vector<int64_t>* cycleOut);
+
+  // Replace the parameter bag (v2). Marks the node dirty.
+  bool updateParams(int64_t nodeId, const Json& params);
 
   // Refuses with hasDependents semantics left to the caller (close protection is a UI
   // rule; the registry just reports it).

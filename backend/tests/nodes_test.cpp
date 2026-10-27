@@ -136,6 +136,109 @@ int main() {
   auto ne2 = nodes.get(rErr2.nodeId);
   CHECK(ne2 && ne2->state == NodeState::Error && ne2->errorCode == "expectedClose");
 
+  // ── v2 signatures (docs/architecture/port-semantics-v1.md) ──────────────
+  // Unknown signature is a structured refusal, never a crash or a silent node.
+  auto badSig = nodes.createV2("builtin:nope", {}, Json::object());
+  CHECK(badSig.nodeId < 0 && badSig.errorCode == "unknownSignature");
+
+  // builtin:expression-columns: ONE node, ONE wide table, one column per expression.
+  // This is what replaces the v1 "one node per formula column" mapping.
+  Column two;
+  two.posName = "Pos.1";
+  two.annotation = "A";
+  two.data = {1, 2, 3, 4};
+  Column three;
+  three.posName = "Pos.2";
+  three.annotation = "B";
+  three.data = {10, 20, 30, 40};
+  int64_t m2 = store.insert(Matrix({two, three}));
+
+  PortBinding src;
+  src.portId = "src";
+  src.varName = "src";
+  src.mode = "matrix";
+  src.sourceMatrixId = m2;
+  Json params = Json::object();
+  Json formulas = Json::array();
+  Json f1 = Json::object({{"name", Json("double")}, {"expression", Json("A * 2")}});
+  Json f2 = Json::object({{"name", Json("sum")}, {"expression", Json("A + B")}});
+  formulas.push(std::move(f1));
+  formulas.push(std::move(f2));
+  params.set("formulas", std::move(formulas));
+
+  auto sigNode = nodes.createV2("builtin:expression-columns", {src}, params);
+  CHECK(sigNode.nodeId > 0 && sigNode.cyclePath.empty() && sigNode.errorCode.empty());
+  nodes.recomputeSubtree(sigNode.nodeId);
+  auto sn = nodes.get(sigNode.nodeId);
+  CHECK(sn && sn->state == NodeState::Done);
+  // K is fixed by the signature: one output, however many columns it holds.
+  CHECK(sn && sn->resultMatrixIds.size() == 1);
+  Matrix sigOut;
+  CHECK(store.snapshot(sn ? sn->resultMatrixIds[0] : -1, &sigOut));
+  CHECK(sigOut.columnCount() == 2);
+  CHECK(sigOut.column(0).data == std::vector<double>({2, 4, 6, 8}));
+  CHECK(sigOut.column(1).data == std::vector<double>({11, 22, 33, 44}));
+  // Column names ride as annotations so downstream cards see the user's labels.
+  CHECK(sigOut.column(0).annotation == "double");
+  CHECK(sigOut.column(1).annotation == "sum");
+
+  // Editing one expression re-runs the whole node once (not N times).
+  Json formulas2 = Json::array();
+  Json g1 = Json::object({{"name", Json("triple")}, {"expression", Json("A * 3")}});
+  formulas2.push(std::move(g1));
+  Json params2 = Json::object();
+  params2.set("formulas", std::move(formulas2));
+  CHECK(nodes.updateParams(sigNode.nodeId, params2));
+  nodes.recomputeSubtree(sigNode.nodeId);
+  Matrix out2;
+  CHECK(store.snapshot(sn->resultMatrixIds[0], &out2));
+  CHECK(out2.columnCount() == 1);
+  CHECK(out2.column(0).data == std::vector<double>({3, 6, 9, 12}));
+
+  // A bad expression inside the signature fails the WHOLE node with the parser's code
+  // (the v1 per-column mapping would have failed only that one column's node).
+  Json params3 = Json::object();
+  Json formulas3 = Json::array();
+  Json broken = Json::object({{"name", Json("bad")}, {"expression", Json("NOPE(A)")}});
+  formulas3.push(std::move(broken));
+  params3.set("formulas", std::move(formulas3));
+  CHECK(nodes.updateParams(sigNode.nodeId, params3));
+  nodes.recomputeSubtree(sigNode.nodeId);
+  auto broken2 = nodes.get(sigNode.nodeId);
+  CHECK(broken2 && broken2->state == NodeState::Error &&
+        broken2->errorCode == "unknownFunction");
+  // …and it must not keep serving the previous numbers.
+  Matrix cleared;
+  CHECK(store.snapshot(sigNode.nodeId > 0 ? sn->resultMatrixIds[0] : -1, &cleared));
+  CHECK(cleared.columnCount() == 0);
+
+  // Missing params is a structured error, not UB.
+  CHECK(nodes.updateParams(sigNode.nodeId, Json::object()));
+  nodes.recomputeSubtree(sigNode.nodeId);
+  auto noParams = nodes.get(sigNode.nodeId);
+  CHECK(noParams && noParams->state == NodeState::Error &&
+        noParams->errorCode == "badSignatureParams");
+
+  // Result matrices of a signature node are mid-edges: a downstream node can read one.
+  Json params4 = Json::object();
+  Json formulas4 = Json::array();
+  Json ok1 = Json::object({{"name", Json("double")}, {"expression", Json("A * 2")}});
+  formulas4.push(std::move(ok1));
+  params4.set("formulas", std::move(formulas4));
+  CHECK(nodes.updateParams(sigNode.nodeId, params4));
+  nodes.recomputeSubtree(sigNode.nodeId);
+  PortBinding downstream2;
+  downstream2.portId = "up";
+  downstream2.varName = "up";
+  downstream2.sourceNodeId = sigNode.nodeId;
+  downstream2.sourceOutputIndex = 0;
+  auto d2 = nodes.create({downstream2}, "up + 1");
+  CHECK(d2.nodeId > 0);
+  nodes.recomputeSubtree(d2.nodeId);
+  auto d2n = nodes.get(d2.nodeId);
+  CHECK(d2n && d2n->state == NodeState::Done);
+  CHECK(columnOf(store, d2n ? d2n->resultMatrixId() : -1) == std::vector<double>({3, 5, 7, 9}));
+
   std::printf("%s: node_registry (%d failures)\n", failures == 0 ? "PASS" : "FAILED", failures);
   return failures == 0 ? 0 : 1;
 }

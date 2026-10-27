@@ -24,6 +24,7 @@ add_library(dc_core
   src/matrix_store.cpp
   src/matrix_value.cpp
   src/expression.cpp
+  src/signature.cpp
   src/nodes.cpp
 )
 target_include_directories(dc_core PUBLIC src)

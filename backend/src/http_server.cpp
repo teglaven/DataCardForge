@@ -519,7 +519,15 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       inputs.push_back(std::move(b));
     }
     std::string formula = parsed["formula"].isString() ? parsed["formula"].asString() : "";
-    auto result = nodes_->create(inputs, formula);
+    // v2: a signature-driven node carries its parameters in `params` (never in inputs).
+    const std::string signatureId =
+        parsed["signatureId"].isString() ? parsed["signatureId"].asString() : "";
+    const Json params = parsed["params"].isObject() ? parsed["params"] : Json::object();
+    auto result = signatureId.empty() ? nodes_->create(inputs, formula)
+                                      : nodes_->createV2(signatureId, inputs, params);
+    if (!result.errorCode.empty())
+      return jsonError(400, result.errorCode,
+                       Json::object({{"signatureId", Json(signatureId)}}));
     if (!result.cyclePath.empty()) {
       Json path = Json::array();
       for (auto p : result.cyclePath) path.push(Json(p));
@@ -531,6 +539,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
     Json out = Json::object({{"nodeId", Json(result.nodeId)},
                              {"resultMatrixId", Json(node ? node->resultMatrixId() : int64_t{-1})},
                              {"state", Json(std::string(node ? nodeName(node->state) : "dirty"))}});
+    if (node && !node->signatureId.empty()) out.set("signatureId", Json(node->signatureId));
     if (node) {
       Json ids = Json::array();
       for (int64_t id : node->resultMatrixIds) ids.push(Json(id));
@@ -581,6 +590,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         }
       }
       const std::string* formula = parsed["formula"].isString() ? &parsed["formula"].asString() : nullptr;
+      if (parsed["params"].isObject()) nodes_->updateParams(id, parsed["params"]);
       std::vector<int64_t> cycleOut;
       if (!nodes_->update(id, formula, haveInputs ? &inputs : nullptr, &cycleOut)) {
         if (!cycleOut.empty()) {
