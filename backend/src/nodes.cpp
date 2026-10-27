@@ -482,6 +482,27 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
     errorCode = "internalError";
   }
 
+  // ── phase 3b (unlocked): column contract ──
+  // The output list of a function card may carry a promised column count
+  // (`params.columnContract`), set when the user first names the output's columns. It is
+  // an explicit contract, not a shape heuristic: when the produced width drifts, the data
+  // flow STOPS HERE with a structured error instead of silently re-labelling columns.
+  // K (the number of outputs) is still fixed by the signature; this is about the width of
+  // one output table.
+  int64_t contractExpected = -1;
+  int64_t contractActual = -1;
+  if (errorCode.empty()) {
+    const Json* contract = params.find("columnContract");
+    if (contract && contract->isObject() && (*contract)["columns"].isNumber()) {
+      contractExpected = static_cast<int64_t>((*contract)["columns"].asNumber());
+      contractActual = outputs.empty() ? 0 : static_cast<int64_t>(outputs[0].size());
+      if (contractExpected != contractActual) {
+        errorCode = "columnContractViolation";
+        errorName.clear();
+      }
+    }
+  }
+
   // ── phase 4 (locked, short): commit ──
   std::lock_guard<std::mutex> lock(mu_);
   auto it = nodes_.find(nodeId);
@@ -491,6 +512,10 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
     Json params_out = Json::object();
     if (errorPosition >= 0) params_out.set("position", Json(errorPosition));
     if (!errorName.empty()) params_out.set("name", Json(errorName));
+    if (contractExpected >= 0) {
+      params_out.set("expected", Json(contractExpected));
+      params_out.set("actual", Json(contractActual));
+    }
     failNodeLocked(nodeId, errorCode, std::move(params_out));
     return;
   }

@@ -239,6 +239,61 @@ int main() {
   CHECK(d2n && d2n->state == NodeState::Done);
   CHECK(columnOf(store, d2n ? d2n->resultMatrixId() : -1) == std::vector<double>({3, 5, 7, 9}));
 
+  // Column contract: naming the output's columns promises their count. A drift is a
+  // structured stop (the data flow ends here), not a silent re-labelling.
+  Json params5 = Json::object();
+  Json formulas5 = Json::array();
+  Json f5a = Json::object({{"name", Json("a")}, {"expression", Json("A * 2")}});
+  Json f5b = Json::object({{"name", Json("b")}, {"expression", Json("A + 1")}});
+  formulas5.push(std::move(f5a));
+  formulas5.push(std::move(f5b));
+  params5.set("formulas", std::move(formulas5));
+  params5.set("columnContract", Json::object({{"outputId", Json("result")}, {"columns", Json(2)}}));
+  CHECK(nodes.updateParams(sigNode.nodeId, params5));
+  nodes.recomputeSubtree(sigNode.nodeId);
+  auto contracted = nodes.get(sigNode.nodeId);
+  CHECK(contracted && contracted->state == NodeState::Done &&
+        contracted->resultMatrixIds.size() == 1);
+
+  // …adding a third expression without extending the contract must fail the node.
+  Json formulas6 = Json::array();
+  Json g6a = Json::object({{"name", Json("a")}, {"expression", Json("A * 2")}});
+  Json g6b = Json::object({{"name", Json("b")}, {"expression", Json("A + 1")}});
+  Json g6c = Json::object({{"name", Json("c")}, {"expression", Json("A")}});
+  formulas6.push(std::move(g6a));
+  formulas6.push(std::move(g6b));
+  formulas6.push(std::move(g6c));
+  Json params6 = Json::object();
+  params6.set("formulas", std::move(formulas6));
+  params6.set("columnContract", Json::object({{"outputId", Json("result")}, {"columns", Json(2)}}));
+  CHECK(nodes.updateParams(sigNode.nodeId, params6));
+  nodes.recomputeSubtree(sigNode.nodeId);
+  auto violated = nodes.get(sigNode.nodeId);
+  CHECK(violated && violated->state == NodeState::Error &&
+        violated->errorCode == "columnContractViolation");
+  CHECK(violated && violated->errorParams["expected"].asNumber() == 2);
+  CHECK(violated && violated->errorParams["actual"].asNumber() == 3);
+  // The data flow really stops: the previous result is cleared.
+  Matrix stopped;
+  CHECK(store.snapshot(violated->resultMatrixId(), &stopped));
+  CHECK(stopped.columnCount() == 0);
+
+  // Extending the contract is the explicit way out.
+  Json params7 = Json::object();
+  Json formulas7 = Json::array();
+  Json h1 = Json::object({{"name", Json("a")}, {"expression", Json("A * 2")}});
+  Json h2 = Json::object({{"name", Json("b")}, {"expression", Json("A + 1")}});
+  Json h3 = Json::object({{"name", Json("c")}, {"expression", Json("A")}});
+  formulas7.push(std::move(h1));
+  formulas7.push(std::move(h2));
+  formulas7.push(std::move(h3));
+  params7.set("formulas", std::move(formulas7));
+  params7.set("columnContract", Json::object({{"outputId", Json("result")}, {"columns", Json(3)}}));
+  CHECK(nodes.updateParams(sigNode.nodeId, params7));
+  nodes.recomputeSubtree(sigNode.nodeId);
+  auto extended = nodes.get(sigNode.nodeId);
+  CHECK(extended && extended->state == NodeState::Done);
+
   std::printf("%s: node_registry (%d failures)\n", failures == 0 ? "PASS" : "FAILED", failures);
   return failures == 0 ? 0 : 1;
 }
