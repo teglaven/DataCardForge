@@ -21,11 +21,20 @@ Calibration from the 2026-10-27 night (all times CST):
 
 Usage:
   turnwatch.py                  # one line, exit 0 green / 1 yellow / 2 red
+  turnwatch.py --notify         # on yellow/red: drop a STOP marker + print the audit prompt
   turnwatch.py --deep           # + last-10-min call count and hot files
   turnwatch.py --json           # machine-readable, for a notifier
   turnwatch.py --loop 300       # supervise continuously (prints on state change)
 
 Environment: DC_USAGE_FILE, DC_REPO, DC_SESSION_DIR override the defaults.
+
+Why the stop-prompt is EVIDENCE, not a verdict
+----------------------------------------------
+"判断一下执行是否有问题" invites self-justification: the model cannot see its own budget,
+it is reading the very context that made it loop, and its trained instinct is to report
+progress. What it *can* do is run three commands and paste their output. So the prompt asks
+for a state dump with numbers, offers three exits, and forbids narrative. The human (or the
+next, freshly-contexted turn) decides.
 """
 from __future__ import annotations
 
@@ -250,11 +259,39 @@ def line(data: dict) -> str:
     return " | ".join(bits)
 
 
+# The prompt that goes into the stopped turn. It asks for evidence, never for a verdict,
+# and it names exactly three exits so the answer cannot be "I will keep going, everything is
+# fine". Kept short on purpose: a long prompt is itself context growth.
+AUDIT_PROMPT = """[看门狗 {level}] 触发：{why}
+
+停下手里的活，先做一次执行审计。只许读和报告，不许继续原任务。逐条给出，不许省略输出：
+
+1. `git status --short` 与 `git log -1 --format='%h %ad %s'` —— 原样贴出。
+2. 自上一次提交以来：新建/改动的文件清单，以及 `git diff --stat` 的最后一行。
+3. 本回合跑过的门禁（vitest / ctest / build）各一条关键输出行；没跑就写"未跑"。
+4. 你现在停在哪一步（一句话），下一步最小可交付动作是什么（一句话，要具体到文件）。
+5. 结论从这三个里选一个，并给出理由（不超过两行）：
+   a) 继续，但把范围收窄为：<具体内容>
+   b) 压缩上下文后重启（本回合产出未落盘，建议先提交/写日志）
+   c) 交给人类决定，因为：<具体卡点>
+"""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--deep", action="store_true", help="also measure call density + hot files")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--loop", type=int, metavar="SECONDS", help="supervise continuously")
+    ap.add_argument(
+        "--notify",
+        action="store_true",
+        help="on yellow/red, write the STOP marker and print the audit prompt",
+    )
+    ap.add_argument(
+        "--stop-file",
+        default="/tmp/dc-turnwatch-stop",
+        help="marker path the agent is instructed to check before each turn",
+    )
     args = ap.parse_args()
 
     if args.loop:
@@ -265,6 +302,19 @@ def main() -> int:
             if text != seen:  # print on change only: a log of transitions, not noise
                 print(datetime.datetime.now(TZ).strftime("%H:%M:%S"), text, flush=True)
                 seen = text
+                if args.notify:
+                    if data.get("level") in ("YELLOW", "RED"):
+                        prompt = AUDIT_PROMPT.format(
+                            level=data["level"], why="; ".join(data["reasons"])
+                        )
+                        with open(args.stop_file, "w", encoding="utf-8") as f:
+                            f.write(prompt)
+                        print(prompt, flush=True)
+                    else:
+                        try:
+                            os.unlink(args.stop_file)
+                        except OSError:
+                            pass
             import time
 
             time.sleep(args.loop)
@@ -274,7 +324,29 @@ def main() -> int:
         print(json.dumps(data, ensure_ascii=False))
     else:
         print(line(data))
-    return {"GREEN": 0, "IDLE": 0, "YELLOW": 1, "RED": 2}.get(data.get("level"), 0)
+
+    level = data.get("level")
+    if args.notify and level not in ("YELLOW", "RED"):
+        # A stale marker is worse than none: the agent would stop for a condition that has
+        # already cleared. Green/IDLE always clears it.
+        try:
+            os.unlink(args.stop_file)
+            print(f"(cleared stale marker {args.stop_file})")
+        except OSError:
+            pass
+    if args.notify and level in ("YELLOW", "RED"):
+        why = "; ".join(data["reasons"])
+        prompt = AUDIT_PROMPT.format(level=level, why=why)
+        try:
+            os.unlink(args.stop_file)
+        except OSError:
+            pass
+        with open(args.stop_file, "w", encoding="utf-8") as f:
+            f.write(prompt)
+        print()
+        print(prompt)
+        print(f"(marker written to {args.stop_file})")
+    return {"GREEN": 0, "IDLE": 0, "YELLOW": 1, "RED": 2}.get(level, 0)
 
 
 if __name__ == "__main__":
