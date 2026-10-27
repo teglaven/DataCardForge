@@ -183,6 +183,7 @@ bool NodeRegistry::updateParams(int64_t nodeId, const Json& params) {
   if (it == nodes_.end()) return false;
   it->second.params = params;
   it->second.state = NodeState::Dirty;
+  ++it->second.definitionVersion;
   return true;
 }
 
@@ -225,6 +226,7 @@ bool NodeRegistry::update(int64_t nodeId, const std::string* formula,
   }
   if (formula) it->second.formula = *formula;
   it->second.state = NodeState::Dirty;
+  ++it->second.definitionVersion;
   return true;
 }
 
@@ -400,6 +402,7 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   std::string formula;
   std::string signatureId;
   Json params = Json::object();
+  uint64_t definitionVersion = 0;
   {
     std::lock_guard<std::mutex> lock(mu_);
     auto it = nodes_.find(nodeId);
@@ -411,6 +414,7 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
     formula = it->second.formula;
     signatureId = it->second.signatureId;
     params = it->second.params;
+    definitionVersion = it->second.definitionVersion;
   }
 
   // ── phase 2 (unlocked): resolve inputs; the store has its own mutex ──
@@ -508,6 +512,14 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   auto it = nodes_.find(nodeId);
   if (it == nodes_.end()) return;  // deleted while computing
   ComputeNode& node = it->second;
+  if (node.definitionVersion != definitionVersion) {
+    // The definition changed while we were computing: do not publish numbers that no
+    // longer describe this node. Leave it dirty so the update's own recompute runs.
+    node.state = NodeState::Dirty;
+    bus_->publish(Json::object({{"nodeId", Json(nodeId)},
+                                {"state", Json(std::string("dirty"))}}));
+    return;
+  }
   if (!errorCode.empty()) {
     Json params_out = Json::object();
     if (errorPosition >= 0) params_out.set("position", Json(errorPosition));

@@ -53,6 +53,11 @@ struct ComputeNode {
   NodeState state = NodeState::Dirty;
   std::string errorCode;            // structured code when state == Error
   Json errorParams = Json::object();
+  // Bumped by every definition change (inputs / formula / params). Evaluation runs
+  // unlocked (max-headroom), so it must refuse to publish a result computed from a
+  // definition that has since been replaced — that would be exactly the "downstream reads
+  // stale numbers" class the 2026-10-18 audit went after.
+  uint64_t definitionVersion = 0;
 };
 
 class EventBus {

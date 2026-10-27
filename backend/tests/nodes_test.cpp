@@ -294,6 +294,35 @@ int main() {
   auto extended = nodes.get(sigNode.nodeId);
   CHECK(extended && extended->state == NodeState::Done);
 
+  // Definition version: an edit invalidates an in-flight evaluation. The registry cannot
+  // be paused mid-run from a test, so this pins the mechanism (the version moves on every
+  // definition change) plus the observable contract: after an edit + recompute, the node
+  // reflects the NEW definition, never a stale Done from the old one.
+  Json v1Params = Json::object();
+  Json v1Formulas = Json::array();
+  Json v1f = Json::object({{"name", Json("first")}, {"expression", Json("A * 2")}});
+  v1Formulas.push(std::move(v1f));
+  v1Params.set("formulas", std::move(v1Formulas));
+  CHECK(nodes.updateParams(sigNode.nodeId, v1Params));
+  auto v1Node = nodes.get(sigNode.nodeId);
+  const uint64_t versionAfterFirst = v1Node ? v1Node->definitionVersion : 0;
+  CHECK(versionAfterFirst > 0);
+  Json v2Params = Json::object();
+  Json v2Formulas = Json::array();
+  Json v2f = Json::object({{"name", Json("second")}, {"expression", Json("A * 3")}});
+  v2Formulas.push(std::move(v2f));
+  v2Params.set("formulas", std::move(v2Formulas));
+  CHECK(nodes.updateParams(sigNode.nodeId, v2Params));
+  auto v2Node = nodes.get(sigNode.nodeId);
+  CHECK(v2Node && v2Node->definitionVersion > versionAfterFirst);
+  nodes.recomputeSubtree(sigNode.nodeId);
+  auto afterEdit = nodes.get(sigNode.nodeId);
+  CHECK(afterEdit && afterEdit->state == NodeState::Done);
+  Matrix edited;
+  CHECK(store.snapshot(afterEdit->resultMatrixIds[0], &edited));
+  CHECK(edited.columnCount() == 1);
+  CHECK(edited.column(0).data == std::vector<double>({3, 6, 9, 12}));
+
   std::printf("%s: node_registry (%d failures)\n", failures == 0 ? "PASS" : "FAILED", failures);
   return failures == 0 ? 0 : 1;
 }
