@@ -390,7 +390,20 @@ bool NodeRegistry::gatherInputs(const std::vector<PortBinding>& bindings,
     size_t columnCount = 0;
     const std::string alias = b.varName;
     const size_t firstColumn = names->size();
+    const bool cellMode = b.mode == "cell" && b.columnIndex >= 0;
+    const int32_t wantedColumn = b.columnIndex;
     const bool found = store_->withMatrix(matrixId, [&](const Matrix& m) {
+      if (cellMode) {
+        // A port declared as a COLUMN binds exactly that column: signatures that take a
+        // column (not a table) must not receive the whole table and quietly pick one.
+        if (static_cast<size_t>(wantedColumn) >= m.columnCount()) return;
+        const Column& col = m.column(static_cast<size_t>(wantedColumn));
+        names->push_back(Matrix::label(col));
+        data->push_back(col.data);
+        columnCount = 1;
+        *length = std::max(*length, m.rowCount());
+        return;
+      }
       for (const auto& col : m.columns()) {
         names->push_back(Matrix::label(col));
         data->push_back(col.data);

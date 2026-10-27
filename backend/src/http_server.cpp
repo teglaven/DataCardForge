@@ -550,6 +550,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       if (ij["sourceNodeId"].isNumber()) b.sourceNodeId = static_cast<int64_t>(ij["sourceNodeId"].asNumber());
       if (ij["sourceMatrixId"].isNumber()) b.sourceMatrixId = static_cast<int64_t>(ij["sourceMatrixId"].asNumber());
       if (ij["sourceOutputIndex"].isNumber()) b.sourceOutputIndex = static_cast<int32_t>(ij["sourceOutputIndex"].asNumber());
+      if (ij["columnIndex"].isNumber()) b.columnIndex = static_cast<int32_t>(ij["columnIndex"].asNumber());
       inputs.push_back(std::move(b));
     }
     std::string formula = parsed["formula"].isString() ? parsed["formula"].asString() : "";
@@ -620,6 +621,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
           if (ij["sourceNodeId"].isNumber()) b.sourceNodeId = static_cast<int64_t>(ij["sourceNodeId"].asNumber());
           if (ij["sourceMatrixId"].isNumber()) b.sourceMatrixId = static_cast<int64_t>(ij["sourceMatrixId"].asNumber());
           if (ij["sourceOutputIndex"].isNumber()) b.sourceOutputIndex = static_cast<int32_t>(ij["sourceOutputIndex"].asNumber());
+          if (ij["columnIndex"].isNumber()) b.columnIndex = static_cast<int32_t>(ij["columnIndex"].asNumber());
           inputs.push_back(std::move(b));
         }
       }

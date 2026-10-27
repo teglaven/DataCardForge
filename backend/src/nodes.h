@@ -36,6 +36,10 @@ struct PortBinding {
   int64_t sourceMatrixId = -1;      // when bound to a stored matrix
   int64_t sourceNodeId = -1;        // when bound to another node's result
   int32_t sourceOutputIndex = 0;    // which output of a K-output node (v1 data is always 0)
+  // `mode == "cell"`: bind exactly this one column of the source (`columnIndex >= 0`).
+  // This is what the field always meant — v1 never read it, so a "cell" port silently
+  // bound the whole table. Signatures that declare a column (not a table) need it.
+  int32_t columnIndex = -1;
 };
 
 struct ComputeNode {
