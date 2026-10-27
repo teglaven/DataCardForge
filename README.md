@@ -13,8 +13,8 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 
 **Author & provenance**: `teglaven` · GPL-3.0 · see [`PROVENANCE.md`](PROVENANCE.md) for the
 verifiable author identity, timeline and commit anchors.
-**Verified state**: 63 commits · 394 frontend unit tests · 7 backend ctest cases (3 opt-in) ·
-65 end-to-end smoke checks — all green.
+**Verified state** (last verified 2026-10-27): 394 frontend unit tests · 7 backend ctest cases
+(3 opt-in) · 65 end-to-end smoke checks — all green.
 
 ## Design Philosophy
 

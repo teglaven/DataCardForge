@@ -17,7 +17,7 @@
 
 ## 二、身份统一记录（公开前）
 
-首次公开推送前，全仓库 63 个提交的 **author / committer 已统一为**
+身份统一时覆盖了当时的全部 63 个提交，**author / committer 统一为**
 `teglaven <141315067@qq.com>`，两个注解 tag 的 tagger 同样统一。
 
 提交作者串及数量：
