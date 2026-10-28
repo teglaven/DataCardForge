@@ -12,12 +12,31 @@ endif()
 find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 find_package(Threads REQUIRED)
 
-execute_process(COMMAND git rev-parse --short HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-                OUTPUT_VARIABLE DC_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-if(NOT DC_SHA)
-  set(DC_SHA "unknown")
-endif()
-add_compile_definitions(DC_GIT_SHA="${DC_SHA}")
+# ── build id ───────────────────────────────────────────────────────────
+# `/api/hello` reports the commit the binary was built from, so the value has to be produced
+# by the BUILD, not by the configure step: a configure-time `git rev-parse` freezes at the
+# first `cmake -S`, and then a stale id makes a current binary look like an old one (that is
+# how `build=c7f01b6` was read as "the new engine is not deployed"). A generated header keeps
+# the value in the binary (no shelling out at runtime) and depends on the git refs, so a new
+# commit re-generates it.
+set(DC_SHA_HEADER ${CMAKE_BINARY_DIR}/generated/build_sha.h)
+set(DC_SHA_SCRIPT ${CMAKE_SOURCE_DIR}/scripts/write-build-sha.sh)
+set(DC_SHA_DEPS ${DC_SHA_SCRIPT})
+foreach(dep
+    ${CMAKE_SOURCE_DIR}/../.git/HEAD
+    ${CMAKE_SOURCE_DIR}/../.git/refs/heads/main
+    ${CMAKE_SOURCE_DIR}/../.git/packed-refs)
+  if(EXISTS ${dep})
+    list(APPEND DC_SHA_DEPS ${dep})
+  endif()
+endforeach()
+add_custom_command(
+  OUTPUT ${DC_SHA_HEADER}
+  COMMAND sh ${DC_SHA_SCRIPT} ${CMAKE_SOURCE_DIR}/.. ${DC_SHA_HEADER}
+  DEPENDS ${DC_SHA_DEPS}
+  COMMENT "Baking build sha into generated/build_sha.h"
+  VERBATIM)
+add_custom_target(dc_build_sha DEPENDS ${DC_SHA_HEADER})
 
 add_library(dc_core
   src/json.cpp
@@ -31,7 +50,9 @@ add_library(dc_core
 target_include_directories(dc_core PUBLIC src)
 target_link_libraries(dc_core PUBLIC Eigen3::Eigen)
 
-add_executable(dc_backend src/http_server.cpp src/main.cpp)
+add_executable(dc_backend src/http_server.cpp src/main.cpp ${DC_SHA_HEADER})
+target_include_directories(dc_backend PRIVATE ${CMAKE_BINARY_DIR}/generated)
+add_dependencies(dc_backend dc_build_sha)
 target_link_libraries(dc_backend PRIVATE dc_core Threads::Threads)
 
 # Fixture runner: the same xlayer JSON that gates the TS reference (stage-0 contract).

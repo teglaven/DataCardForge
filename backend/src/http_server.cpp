@@ -1,4 +1,5 @@
 #include "http_server.h"
+#include "build_sha.h"  // generated at build time
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -374,7 +375,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
     caps.push(Json("card.v2"));
     Json limits = Json::object({{"maxWindowRows", Json(5000)}});
     return jsonOk(Json::object({{"protocol", Json(1)},
-                                {"build", Json(std::string(DC_GIT_SHA))},
+                                {"build", Json(std::string(DC_BUILD_SHA))},
                                 {"capabilities", std::move(caps)},
                                 {"limits", std::move(limits)}}));
   }
