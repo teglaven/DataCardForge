@@ -285,6 +285,19 @@ describe('available-column chips', () => {
     });
     expect(expr.value).toBe('IF(Pos.1 > 0, 1, 0)Pos.2');
   });
+
+  it('prints the reference it inserts, and lists every column', async () => {
+    // Printing only the annotation taught nothing about what a click inserts, and the
+    // 6-chip cap left columns 7+ of a 10-column table with no way to learn their number.
+    const names = Array.from({ length: 9 }, (_, i) => `sensor_${i + 1}`);
+    const card = makeCard({ params: { formulas: [{ name: 'out', expression: '1' }] } });
+    const host = await mountFormulaCard(card, names);
+    const chips = [...host.querySelectorAll<HTMLButtonElement>('.formula-card__col-chip')];
+    expect(chips).toHaveLength(names.length);
+    expect(chips[0].textContent).toContain('Pos.1');
+    expect(chips[0].textContent).toContain('sensor_1');
+    expect(chips[8].textContent).toContain('Pos.9');
+  });
 });
 
 describe('delayed hover tooltip', () => {

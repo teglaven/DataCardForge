@@ -1280,6 +1280,9 @@ body {
 /* The "available columns" line became chips: a truncated string cannot be read back, and
    clicking a chip is how a user learns that this column is `Pos.N` (see FormulaCard). */
 .formula-card__col-chip {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
   max-width: 100%;
   padding: 1px 5px;
   font-family: inherit;
@@ -1305,9 +1308,17 @@ body {
   opacity: 0.6;
 }
 
-.formula-card__cols-more {
-  align-self: center;
-  color: var(--text-dim);
+/* The reference part of a chip: the spelling the click inserts. */
+.formula-card__col-chip-pos {
+  margin-right: 4px;
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+.formula-card__col-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .formula-card__main {

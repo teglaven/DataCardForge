@@ -333,30 +333,36 @@ export function FormulaCard({
               // needs is "the column is called Pos.3", and typing that by hand from a
               // truncated string is where the placeholder used to fail them. The list order
               // is column order, so each chip knows its own `Pos.N`.
+              //
+              // The chip prints the spelling it inserts (`Pos.1`) *next to* the printed
+              // name, because "this column is Pos.1 and its name is 时间_秒" is the whole
+              // lesson; printing only the name taught nothing, and only the first six
+              // columns were reachable at all — a 10-column table left columns 7–10 with no
+              // way to discover their number.
               <div className="formula-card__cols" {...columnsHover.anchorProps}>
-                {sourceColumnNames.slice(0, 6).map((name, index) => (
-                  <button
-                    key={`${index}:${name}`}
-                    type="button"
-                    className="formula-card__col-chip card__control"
-                    aria-label={t('help.chip.insert', {
-                      pos: `Pos.${index + 1}`,
-                      name,
-                    })}
-                    // Keep the caret where the user left it: without this the mousedown
-                    // moves focus to the chip and the expression input blurs first.
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => insertPositionRef(`Pos.${index + 1}`)}
-                    disabled={!expressionShaped}
-                  >
-                    {name}
-                  </button>
-                ))}
-                {sourceColumnNames.length > 6 ? (
-                  <span className="formula-card__cols-more">
-                    +{sourceColumnNames.length - 6}
-                  </span>
-                ) : null}
+                {sourceColumnNames.map((name, index) => {
+                  const pos = `Pos.${index + 1}`;
+                  return (
+                    <button
+                      key={`${index}:${name}`}
+                      type="button"
+                      className="formula-card__col-chip card__control"
+                      aria-label={t('help.chip.insert', { pos, name })}
+                      // Keep the caret where the user left it: without this the mousedown
+                      // moves focus to the chip and the expression input blurs first.
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => insertPositionRef(pos)}
+                      disabled={!expressionShaped}
+                    >
+                      <span className="formula-card__col-chip-pos">{pos}</span>
+                      {/* A header-less table's annotation *is* "Pos.3"; printing it twice
+                          says nothing. */}
+                      {name === pos ? null : (
+                        <span className="formula-card__col-chip-name">{name}</span>
+                      )}
+                    </button>
+                  );
+                })}
                 {columnsHover.tooltip}
               </div>
             ) : null}
