@@ -50,6 +50,8 @@ export interface NodeCreateResult {
   /** Echoes the signature the server created the node with (v2). */
   signatureId?: string;
   state?: NodeStateName;
+  /** Present when creation left the node lazy and uncomputed (e.g. builtin:summary). */
+  reason?: DirtyReasonName;
   /** Structured refusal data when ok=false (cycle path etc.). Never user prose. */
   code?: string;
   cyclePath?: number[];
@@ -63,18 +65,25 @@ export interface SignatureDto {
   displayName: string;
   inputs: Array<{ portId: string; displayName: string; required: boolean }>;
   outputs: Array<{ outputId: string }>;
+  /** "auto" computes right after creation; "explicit" needs POST /nodes/{id}/compute. */
+  compute?: 'auto' | 'explicit';
 }
 
 export interface NodeStatusDto {
   nodeId: number;
   state: NodeStateName;
   resultMatrixId: number;
+  /** Present only while `state === "dirty"`: why the node has not computed yet. */
+  reason?: DirtyReasonName;
   /** Structured error identity, present only while `state === "error"`. */
   code?: string;
   params?: Record<string, unknown>;
 }
 
 export type NodeStateName = 'dirty' | 'computing' | 'done' | 'error';
+
+/** Why a dirty node has not computed yet; present only while `state === "dirty"`. */
+export type DirtyReasonName = 'notRequested' | 'upstreamChanged' | 'definitionChanged';
 
 export interface NodeEvent {
   seq: number;
@@ -307,6 +316,26 @@ export class BackendClient {
       return await jsonRequest<NodeStatusDto>(this.base, `/nodes/${nodeId}`);
     } catch {
       return null;
+    }
+  }
+
+  /** 显式请求一次计算（惰性签名 builtin:summary 的唯一触发入口）。 */
+  async computeNode(nodeId: number): Promise<{
+    ok: boolean;
+    state?: NodeStateName;
+    reason?: DirtyReasonName;
+    resultMatrixIds?: number[];
+    code?: string;
+  }> {
+    try {
+      const r = await jsonRequest<{ nodeId: number; state: NodeStateName; resultMatrixIds?: number[] }>(
+        this.base,
+        `/nodes/${nodeId}/compute`,
+        { method: 'POST' },
+      );
+      return { ok: true, ...r };
+    } catch (e) {
+      return { ok: false, code: (e as { code?: string }).code ?? 'backendUnavailable' };
     }
   }
 

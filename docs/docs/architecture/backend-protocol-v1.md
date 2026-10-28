@@ -51,12 +51,21 @@ GET /api/hello
 ### 节点
 - `POST /api/nodes` `{kind, inputs, formula}` → `{nodeId, resultMatrixId}`
   - 输入绑定成环 ⇒ `409 {code:"cycle", path:[...]}`，**整批原子拒绝**（N 条边要么全加要么全不加）。
-- `GET /api/nodes/{id}` → `{nodeId, state, resultMatrixId, code?, params?}`
+- `GET /api/nodes/{id}` → `{nodeId, state, resultMatrixId, code?, params?, reason?}`
   - 阶段 3 新增：读单个节点的权威状态快照。事件流是有界且瞬时的，重连或恢复工作区后前端靠它
     重建四态指示灯与错误码，无需回放历史事件。`state === "error"` 时附带结构化 `code`+`params`。
+  - `state === "dirty"` 时附带 `reason`（2026-10-27，纯增量）：
+    `notRequested`（建了还没要求计算）/ `upstreamChanged`（上游矩阵或节点变了）/
+    `definitionChanged`（参数或连线被改过）。四态灯不变；`reason` 让两种"灰"可区分。
 - `GET /api/nodes` → `{nodes: [id, …]}`
   - 阶段 3 新增：列出服务端当前全部计算节点 id，供前端把恢复出的公式卡与服务端权威集合对齐。
 - `PATCH /api/nodes/{id}` `{formula?, inputs?}` → 触发重算调度
+  - 2026-10-27：对 `explicitCompute` 签名（`builtin:summary`），PATCH **只标脏不计算**
+    （`definitionChanged`），旧结果被清空——"改定义"不是"要求计算"。
+- `POST /api/nodes/{id}/compute` → `{nodeId, state, resultMatrixIds, code?, params?}`
+  - 2026-10-27 新增。`explicitCompute` 签名的**唯一**触发入口；对普通节点等价于"现在就重算一次"。
+    不折叠进 `PATCH`（改定义≠要求计算），也绝不进 `GET`（读路径不得有副作用：重连/轮询/
+    恢复工作区都会读）。
 - `DELETE /api/nodes/{id}` — 有依赖者时 `409 {code:"hasDependents"}`（关闭保护的服务端侧）
   - 成功时一并释放该节点的结果矩阵（前端关卡即回收其显示缓存对应的服务端副本）。
 - `POST /api/nodes/{id}/cancel` — 长任务取消
@@ -105,8 +114,16 @@ names     namesLen 字节的 JSON 数组（UTF-8），元素是 "Pos.1 annotatio
   正是「端口=一列」，所以它现在真的有语义。
 - `builtin:linear-regression`：端口 `x` / `y`（各一列），无参数，输出 `fit` 为签名固定的
   1 行 × 5 列（slope/intercept/r/r2/n）。它不是表达式形状——存在的意义是证明签名模型通用。
-- `GET /api/signatures` → `{signatures:[{id, version, displayName, inputs:[{portId,
+- `builtin:summary`（2026-10-27）：端口 `src`（**矩阵**），输出 `result`。形状
+  **行 = 统计量目录、列 = 输入变量**；行序是目录序（`backend/src/signature.cpp`
+  的 `summaryStatCatalog()`），行身份不随数据变；列标签原样继承源列（无表头列是 `Pos.N`）。
+  参数：`params.stats`（目录 id 子集，只筛不排）、`params.columns`（按列名选变量）。
+  语义与口径见[决策记录](../decisions/2026-10-27-summary-builtin.md)。
+  **它是第一个惰性签名**（`compute: "explicit"`）：创建不算，`POST /api/nodes/{id}/compute`
+  是唯一触发；上游变化 ⇒ `dirty` + `reason:"upstreamChanged"` 且结果矩阵被清空。
+- `GET /api/signatures` → `{signatures:[{id, version, displayName, compute, inputs:[{portId,
   displayName, required}], outputs:[{outputId}]}]}`：后端能求值的全部函数签名。
+  `compute` 取 `"auto"`（建完即算）或 `"explicit"`（须显式触发）。
   前端当前只建一种卡，但这是**函数选择器与插件工具**的发现接口——按端口语义规格，
   内置函数与插件注册进同一张表。
 - **能力协商**：`signature.v1` / `card.v2` 是 v2 客户端**必需**的能力。协议号仍是 1

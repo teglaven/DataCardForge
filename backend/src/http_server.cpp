@@ -523,6 +523,11 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       list.push(Json::object({{"id", Json(sig->id)},
                               {"version", Json(sig->version)},
                               {"displayName", Json(sig->displayName)},
+                              // "auto": evaluated at creation (every signature before
+                              // 2026-10-27). "explicit": created uncomputed; the client
+                              // must POST /api/nodes/{id}/compute to get numbers. Without
+                              // this field a client would render an empty table as data.
+                              {"compute", Json(std::string(sig->explicitCompute ? "explicit" : "auto"))},
                               {"inputs", std::move(inputs)},
                               {"outputs", std::move(outputs)}}));
     }
@@ -579,6 +584,10 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       Json ids = Json::array();
       for (int64_t id : node->resultMatrixIds) ids.push(Json(id));
       out.set("resultMatrixIds", std::move(ids));
+      // A lazy signature comes back dirty on purpose: `reason` is how the client tells
+      // "you have not asked me to compute yet" from "your upstream changed".
+      if (node->state == NodeState::Dirty)
+        out.set("reason", Json(std::string(dirtyReasonName(node->dirtyReason))));
     }
     return jsonOk(std::move(out));
   }
@@ -599,6 +608,8 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       Json out = Json::object({{"nodeId", Json(existing->id)},
                                {"state", Json(std::string(nodeName(existing->state)))},
                                {"resultMatrixId", Json(existing->resultMatrixId())}});
+      if (existing->state == NodeState::Dirty)
+        out.set("reason", Json(std::string(dirtyReasonName(existing->dirtyReason))));
       if (existing->state == NodeState::Error) {
         out.set("code", Json(existing->errorCode));
         out.set("params", existing->errorParams);
@@ -648,6 +659,25 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         return jsonError(hadDependents ? 409 : 404, hadDependents ? "hasDependents" : "unknownNode");
       }
       return jsonOk(Json::object({{"deleted", Json(id)}}));
+    }
+
+    if (suffix == "/compute" && req.method == "POST") {
+      // The ONE trigger for `explicitCompute` signatures (builtin:summary). Deliberately
+      // not folded into PATCH (an edit is not a compute request) and never into a GET
+      // (reconnect/polling paths read status; they must not spend compute).
+      nodes_->computeNow(id);
+      const auto node = nodes_->get(id);
+      if (!node) return jsonError(404, "unknownNode", Json::object({{"nodeId", Json(id)}}));
+      Json ids = Json::array();
+      for (int64_t matrixId : node->resultMatrixIds) ids.push(Json(matrixId));
+      Json out = Json::object({{"nodeId", Json(id)},
+                               {"state", Json(std::string(nodeName(node->state)))},
+                               {"resultMatrixIds", std::move(ids)}});
+      if (node->state == NodeState::Error) {
+        out.set("code", Json(node->errorCode));
+        out.set("params", node->errorParams);
+      }
+      return jsonOk(std::move(out));
     }
 
     if (suffix == "/cancel" && req.method == "POST") {
