@@ -16,7 +16,7 @@
 import { StrictMode } from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   MAX_ZOOM,
@@ -28,7 +28,7 @@ import {
 } from '../src/ui/cardMetrics.ts';
 import { MatrixData } from '../src/core/MatrixData.ts';
 import { useWorkspace } from '../src/ui/workspaceStore.ts';
-import { CardCanvas } from '../src/ui/components/CardCanvas.tsx';
+import { CardCanvas, isInteractivePress } from '../src/ui/components/CardCanvas.tsx';
 
 // React 19 wants this set so act() works outside its test renderer.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -241,6 +241,83 @@ describe('pan gestures', () => {
 
     expect(store().view).toEqual({ x: 0, y: 0, zoom: 1 });
     expect(store().selectedId).toBeNull();
+  });
+
+  // Regression: arming the pan captures the pointer on the canvas, which retargets the
+  // button's `pointerup` — and therefore its `click` — to the canvas, so pressing
+  // 「打开数据文件…」 opened no picker at all. jsdom has no pointer capture, so what the
+  // tests can pin down is the press classification that keeps the capture off the button.
+  it('does not arm a pan under the empty-state file button', async () => {
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+    const button = host.querySelector<HTMLButtonElement>('.empty-state__button');
+    expect(button).not.toBeNull();
+
+    const captured = vi.fn();
+    canvas.setPointerCapture = captured;
+
+    expect(isInteractivePress(button)).toBe(true);
+    await act(async () => {
+      button!.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, clientX: 500, clientY: 400, bubbles: true }),
+      );
+      button!.dispatchEvent(
+        new MouseEvent('pointerup', { clientX: 500, clientY: 400, bubbles: true }),
+      );
+    });
+
+    // Without a capture the click reaches the button (and opens the picker), not the canvas.
+    expect(captured).not.toHaveBeenCalled();
+    expect(store().view).toEqual({ x: 0, y: 0, zoom: 1 });
+  });
+
+  it('classifies controls and the empty-state overlay as interactive, the bare plane as not', () => {
+    const button = document.createElement('button');
+    const input = document.createElement('input');
+    const label = document.createElement('label');
+    const roleButton = document.createElement('div');
+    roleButton.setAttribute('role', 'button');
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    // The press lands on whatever is under the cursor, so a child of the overlay counts too.
+    const title = document.createElement('h2');
+    empty.appendChild(title);
+    const bare = document.createElement('div');
+    bare.className = 'canvas__world';
+
+    for (const element of [button, input, label, roleButton, empty, title]) {
+      expect(isInteractivePress(element)).toBe(true);
+    }
+    expect(isInteractivePress(bare)).toBe(false);
+    expect(isInteractivePress(null)).toBe(false);
+  });
+
+  it('still arms a pan on the bare plane', async () => {
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+    const world = host.querySelector('.canvas__world') as HTMLElement;
+    expect(world).not.toBeNull();
+
+    const captured = vi.fn();
+    canvas.setPointerCapture = captured;
+
+    await act(async () => {
+      world.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, clientX: 500, clientY: 400, bubbles: true }),
+      );
+    });
+    expect(captured).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      canvas.dispatchEvent(
+        new MouseEvent('pointermove', { clientX: 470, clientY: 380, bubbles: true }),
+      );
+      canvas.dispatchEvent(
+        new MouseEvent('pointerup', { clientX: 470, clientY: 380, bubbles: true }),
+      );
+    });
+
+    expect(store().view).toEqual({ x: 30, y: 20, zoom: 1 });
   });
 });
 

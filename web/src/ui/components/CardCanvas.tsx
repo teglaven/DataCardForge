@@ -46,6 +46,29 @@ const PAN_THRESHOLD = 4;
 /** Dot-grid pitch of the canvas backdrop, in px. Drives the pan-parallax offset below. */
 const GRID_SIZE = 22;
 
+/**
+ * Press targets that own their own click and therefore must not arm a pan.
+ *
+ * Arming the pan captures the pointer on the canvas, and a captured pointer delivers its
+ * `pointerup` to the capturing element. The browser then dispatches the resulting `click`
+ * to the nearest common ancestor of press and release — the canvas — so the control's own
+ * click handler never runs. That is exactly how the empty-state「打开数据文件…」button came to
+ * do nothing at all: no picker, no error, no toast. Drag & drop and the canvas context menu
+ * never travel through that click, which is why they kept working.
+ */
+const INTERACTIVE =
+  'button, a, input, select, textarea, label, [role="button"], [contenteditable="true"], .empty-state';
+
+/**
+ * Whether a press lands on a control (or on the empty-state overlay) rather than on the
+ * bare canvas. Exported as a pure helper because jsdom does not implement pointer capture:
+ * a DOM-level test cannot reproduce the retargeted click, only the classification.
+ */
+export function isInteractivePress(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return target.closest(INTERACTIVE) !== null;
+}
+
 interface CardCanvasProps {
   onNewTable: () => void;
   onFilesDropped: (files: File[]) => void;
@@ -233,6 +256,10 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
   // Wheel/trackpad scrolling, middle-button drag and space+left drag all pan; a plain
   // left drag on the bare canvas pans too, but only after the pointer travels far enough
   // to rule out a click (clicking the background still clears the selection).
+  // A plain left press that lands on a control is *not* armed: the capture below would
+  // retarget that control's `pointerup` — and with it its `click` — to the canvas, which
+  // is why pressing the empty-state file button used to do nothing. Middle-button and
+  // space+left still pan from anywhere, controls included.
   // Deliberately *not* right-drag: the right button already opens the "new table" menu,
   // and the project's own connection/gesture conventions must not be re-purposed.
 
@@ -275,7 +302,9 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
       return;
     }
     // Plain left press on the bare canvas: armed, promoted to a pan once it moves.
-    if (event.button === 0 && !onCard) beginPan(event);
+    // Never armed over a control: `beginPan` captures the pointer, and that capture is
+    // what turned a press on the file button into a canvas click (see `INTERACTIVE`).
+    if (event.button === 0 && !onCard && !isInteractivePress(event.target)) beginPan(event);
   };
 
   const onPointerMove = (event: React.PointerEvent) => {
