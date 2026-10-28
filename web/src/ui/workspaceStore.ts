@@ -54,6 +54,9 @@ import {
 } from './migrate.ts';
 import { portBindingsFor, REGRESSION_PORT_X, REGRESSION_PORT_Y } from './bindings.ts';
 import { translatorFor, detectLocale, type Locale } from './i18n.ts';
+// Type-only: the store owns *whether* the reference is open, the content module owns what
+// is in it. Importing the type alone keeps the catalogue out of the store's runtime.
+import type { HelpSection } from './formulaHelp.ts';
 import { BackendClient, REQUIRED_CAPABILITIES, type NodeEvent, type SignatureDto } from '../backend/client.ts';
 
 export { lineColor };
@@ -337,6 +340,20 @@ interface WorkspaceState {
   // ── view helpers ────────────────────────────────────────────────────
   tileCards: (viewportWidth: number, viewportHeight: number) => void;
   cascadeCards: () => void;
+
+  // ── help dialog (帮助) ───────────────────────────────────────────────
+  /**
+   * The formula / function reference is a modal the app owns, not a card.
+   *
+   * It is reachable from two unrelated places — the top-left Help menu and the formula
+   * card's `?` button — and the card gets no props from `CardCanvas` for it. Two openers,
+   * one piece of state: that is what the store is for.
+   */
+  helpOpen: boolean;
+  /** Section the opener asked the dialog to scroll to; `null` means "open at the top". */
+  helpSection: HelpSection | null;
+  openHelp: (section?: HelpSection) => void;
+  closeHelp: () => void;
 
   // ── misc ────────────────────────────────────────────────────────────
   setLocale: (locale: Locale) => void;
@@ -1000,6 +1017,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     blockNonce: 0,
     repointOffers: [],
     toast: null,
+    helpOpen: false,
+    helpSection: null,
     locale: detectLocale(),
     nextCardId: 1,
     nextMatrixId: 1,
@@ -1942,6 +1961,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       set({ toast: null });
     },
 
+    // ── help dialog ───────────────────────────────────────────────────
+
+    openHelp(section) {
+      // Without a section the dialog opens at the top; an explicit one scrolls there.
+      set({ helpOpen: true, helpSection: section ?? null });
+    },
+
+    closeHelp() {
+      set({ helpOpen: false, helpSection: null });
+    },
+
     // ── compute backend ───────────────────────────────────────────────
 
     backend: { state: 'unknown' },
@@ -2167,6 +2197,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         blockNonce: 0,
         repointOffers: [],
         toast: null,
+        // A reset returns the app to its initial state, including "no modal open".
+        helpOpen: false,
+        helpSection: null,
         // The plane is empty again, so bring the view back to the origin — otherwise the
         // next workspace would open panned into the void left by the previous one.
         view: { x: 0, y: 0, zoom: 1 },

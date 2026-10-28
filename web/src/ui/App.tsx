@@ -20,6 +20,7 @@ import { exportChart } from '../charts/export.ts';
 import { isChartCard, isMatrixCard } from './types.ts';
 import { useWorkspace } from './workspaceStore.ts';
 import { CardCanvas } from './components/CardCanvas.tsx';
+import { HelpDialog } from './components/HelpDialog.tsx';
 import { MenuBar } from './components/MenuBar.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
 
@@ -289,6 +290,10 @@ export default function App() {
         onContextMenu={onCanvasContextMenu}
       />
       <StatusBar message={status} cardCount={cards.length} />
+      {/* The help modal is mounted once, here: both the Help menu and the formula card's
+          "?" reach it through the store. It renders through a portal, so this position in
+          the tree has no layout meaning. */}
+      <HelpDialog />
     </div>
   );
 }

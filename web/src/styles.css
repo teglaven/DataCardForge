@@ -1146,6 +1146,42 @@ body {
   margin: 0;
 }
 
+/* The zone name may be followed by a "?" button, so it has to be the part that shrinks. */
+.formula-card__zone-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formula-card__help-wrap {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* "?" — the one control that answers "what can I even type here?". */
+.formula-card__help {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: help;
+}
+
+.formula-card__help:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .formula-card__no-params {
   margin: 0;
   font-size: 11px;
@@ -1232,13 +1268,46 @@ body {
 }
 
 .formula-card__cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
   margin: 2px 0 0;
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text-dim);
+}
+
+/* The "available columns" line became chips: a truncated string cannot be read back, and
+   clicking a chip is how a user learns that this column is `Pos.N` (see FormulaCard). */
+.formula-card__col-chip {
+  max-width: 100%;
+  padding: 1px 5px;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.formula-card__col-chip:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.formula-card__col-chip:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.formula-card__cols-more {
+  align-self: center;
+  color: var(--text-dim);
 }
 
 .formula-card__main {
@@ -1252,7 +1321,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  flex: 0 1 auto;
+  /* Never shrink below its content: the formula rows are the card's whole point, and with
+     `0 1 auto` the result grid (whose flex basis is its content height) squeezed this zone
+     to 11 px the moment a card actually produced numbers — the expression row disappeared
+     exactly when the user had something to look at. Overflow stays reachable by scroll. */
+  flex: 0 0 auto;
   max-height: 45%;
   overflow-y: auto;
   padding: 5px 6px;
@@ -1356,7 +1429,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  flex: 1 1 auto;
+  /* Basis 0 so the result grid fills only the space the formula zone leaves, instead of
+     pushing it out with its own content height. */
+  flex: 1 1 0;
   min-height: 0;
   padding: 5px 6px 0;
 }
@@ -1754,4 +1829,216 @@ body {
 
 .backend-banner button {
   flex-shrink: 0;
+}
+
+/* ── Delayed hover tooltip (HoverHelp) ─────────────────────────────── */
+
+/*
+ * `position: fixed` + a portal, for the same reason `Popup` is portalled: inside a card
+ * (transform-positioned, `overflow: hidden`) a tooltip would be measured against the card
+ * and cut off at its edge. `pointer-events: none` keeps the box from stealing the pointer
+ * from the control that opened it — otherwise moving onto it would start the leave timer.
+ */
+.hover-help {
+  position: fixed;
+  z-index: 6500;
+  max-width: 260px;
+  padding: 5px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
+/* ── Help dialog (公式与函数说明) ───────────────────────────────────── */
+
+/* Above the menubar dropdown (5000) and the context menu (6000): it is modal. */
+.help-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 7000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(16, 21, 28, 0.42);
+}
+
+.help-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(84vh, 720px);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-active);
+  overflow: hidden;
+}
+
+.help-dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.help-dialog__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.help-dialog__close {
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.help-dialog__close:hover {
+  color: var(--on-danger);
+  background: var(--danger);
+}
+
+.help-dialog__body {
+  min-height: 0;
+  padding: 12px 16px 16px;
+  overflow-y: auto;
+}
+
+.help-dialog__section + .help-dialog__section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* The section the opener asked for (menu → 常见报错) gets a faint wash, so a deep link
+   visibly landed instead of looking like the dialog ignored it. Only the background is
+   touched: the section rhythm (margin/padding/border-top) stays the shared rule's. */
+.help-dialog__section--target {
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+.help-dialog__heading {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.help-dialog__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.help-dialog__table th {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.help-dialog__table td {
+  padding: 5px 8px;
+  vertical-align: top;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border);
+}
+
+.help-dialog__table td:first-child {
+  width: 42%;
+}
+
+.help-dialog__table code,
+.help-dialog__fn code,
+.help-dialog__example code {
+  padding: 1px 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 3px;
+}
+
+.help-dialog__note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.help-dialog__group + .help-dialog__group {
+  margin-top: 10px;
+}
+
+.help-dialog__group-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.help-dialog__fn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+}
+
+.help-dialog__fn {
+  display: grid;
+  grid-template-columns: minmax(150px, 34%) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.help-dialog__fn dt {
+  min-width: 0;
+  margin: 0;
+}
+
+.help-dialog__fn dd {
+  margin: 0;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.help-dialog__examples {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help-dialog__example {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.help-dialog__example-note {
+  color: var(--text-dim);
 }

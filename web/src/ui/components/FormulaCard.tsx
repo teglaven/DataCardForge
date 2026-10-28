@@ -29,6 +29,7 @@ import type { FunctionCardModel, NodeStatus } from '../types.ts';
 import type { MessageKey } from '../i18n.ts';
 import { CHART_TYPE_ORDER, chartTypeDef, minimumColumns, type ChartTypeId } from '../../charts/chartTypes.ts';
 import { CardShell } from './CardShell.tsx';
+import { HoverHelp, useHoverHelp } from './HoverHelp.tsx';
 import { Popup } from './Popup.tsx';
 import { VirtualTable } from './VirtualTable.tsx';
 
@@ -101,6 +102,22 @@ export function FormulaCard({
   const setFormula = useWorkspace((s) => s.setFormula);
   const removeFormula = useWorkspace((s) => s.removeFormula);
   const showToast = useWorkspace((s) => s.showToast);
+  // The reference dialog is store-owned: the Help menu opens the same one, and this card
+  // must not need a prop relayed through CardCanvas to reach it.
+  const openHelp = useWorkspace((s) => s.openHelp);
+  /**
+   * Explanations sit behind a ~1 s rest (`HoverHelp`), never on a native `title`: the card
+   * is dense, and instant browser tooltips fire on every accidental pass-over.
+   *
+   * One hook per *kind* of control, not per row: every expression row explains itself with
+   * the same sentence, and hooks cannot be called inside the `draft.map`.
+   */
+  const nameHover = useHoverHelp(t('help.hover.name'));
+  const expressionHover = useHoverHelp(t('help.hover.expr'));
+  const addHover = useHoverHelp(t('help.hover.addColumn'));
+  const columnsHover = useHoverHelp(t('help.columns.hint'));
+  /** One ref per rendered expression input, so a column chip can insert at its caret. */
+  const expressionRefs = useRef<Array<HTMLInputElement | null>>([]);
   /**
    * Register one rendered port as a connection endpoint.
    *
@@ -154,6 +171,47 @@ export function FormulaCard({
     const next = nameDraft[index] ?? '';
     if (next === formulas?.[index]?.name) return;
     onRenameOutputColumn(index, next);
+  };
+
+  /**
+   * Insert a `Pos.N` reference at the caret of the focused expression input.
+   *
+   * Why `Pos.N` and not the column's own label: a chip cannot know whether the name is
+   * spellable (a `/` or a space needs `[列名]`), while the position spelling always works.
+   * The chip index *is* the column order — `sourceColumnNames` is built from the matrix's
+   * own column list — so `Pos.${index + 1}` is exactly that column.
+   *
+   * The insertion target is whichever expression input has focus; with none focused the
+   * first row is used, so a click still does something visible instead of nothing.
+   */
+  const insertPositionRef = (reference: string): void => {
+    const inputs = expressionRefs.current;
+    const target =
+      inputs.find((element) => element !== null && element === document.activeElement) ??
+      inputs.find((element) => element !== null);
+    if (!target) return;
+    const row = inputs.indexOf(target);
+    // Read the selection BEFORE touching the draft; React replaces the input's value on
+    // commit, which discards the caret position.
+    const start = target.selectionStart ?? target.value.length;
+    const end = target.selectionEnd ?? start;
+    setDraft((rows) =>
+      rows.map((item, index) =>
+        index === row
+          ? {
+              ...item,
+              expression: item.expression.slice(0, start) + reference + item.expression.slice(end),
+            }
+          : item,
+      ),
+    );
+    // Restore focus and put the caret after the inserted text once React has committed the
+    // new value — a controlled input otherwise leaves the caret wherever it lands.
+    const caret = start + reference.length;
+    window.setTimeout(() => {
+      target.focus();
+      target.setSelectionRange(caret, caret);
+    }, 0);
   };
   const identityRef = useRef({ id: card.id, count: (formulas ?? []).length });
 
@@ -271,10 +329,36 @@ export function FormulaCard({
               </ul>
             )}
             {sourceColumnNames.length > 0 ? (
-              <p className="formula-card__cols" title={sourceColumnNames.join(', ')}>
-                {sourceColumnNames.slice(0, 6).join(', ')}
-                {sourceColumnNames.length > 6 ? `, … (+${sourceColumnNames.length - 6})` : ''}
-              </p>
+              // Clickable chips rather than a truncated text line: the one thing a new user
+              // needs is "the column is called Pos.3", and typing that by hand from a
+              // truncated string is where the placeholder used to fail them. The list order
+              // is column order, so each chip knows its own `Pos.N`.
+              <div className="formula-card__cols" {...columnsHover.anchorProps}>
+                {sourceColumnNames.slice(0, 6).map((name, index) => (
+                  <button
+                    key={`${index}:${name}`}
+                    type="button"
+                    className="formula-card__col-chip card__control"
+                    aria-label={t('help.chip.insert', {
+                      pos: `Pos.${index + 1}`,
+                      name,
+                    })}
+                    // Keep the caret where the user left it: without this the mousedown
+                    // moves focus to the chip and the expression input blurs first.
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => insertPositionRef(`Pos.${index + 1}`)}
+                    disabled={!expressionShaped}
+                  >
+                    {name}
+                  </button>
+                ))}
+                {sourceColumnNames.length > 6 ? (
+                  <span className="formula-card__cols-more">
+                    +{sourceColumnNames.length - 6}
+                  </span>
+                ) : null}
+                {columnsHover.tooltip}
+              </div>
             ) : null}
           </section>
 
@@ -282,7 +366,26 @@ export function FormulaCard({
           <div className="formula-card__main">
             <section className="formula-card__formulas" aria-label={t('formula.zoneFormulas')}>
               <div className="formula-card__zone-title">
-                {expressionShaped ? t('formula.zoneFormulas') : t('formula.zoneParams')}
+                <span className="formula-card__zone-name">
+                  {expressionShaped ? t('formula.zoneFormulas') : t('formula.zoneParams')}
+                </span>
+                {/* The reference lives one click away from where it is needed. There is no
+                    prop for this: the dialog is store state, so CardCanvas stays unaware.
+                    The wrapper form is fine here — an inline span around a button changes
+                    no layout; the inputs below use the hook instead. */}
+                <HoverHelp
+                  text={t('help.hover.openHelp')}
+                  className="formula-card__help-wrap"
+                >
+                  <button
+                    type="button"
+                    className="formula-card__help card__control"
+                    aria-label={t('help.title')}
+                    onClick={() => openHelp('functions')}
+                  >
+                    ?
+                  </button>
+                </HoverHelp>
               </div>
               {!expressionShaped ? (
                 <p className="formula-card__no-params">
@@ -300,6 +403,7 @@ export function FormulaCard({
                     value={formula.name}
                     placeholder={t('formula.namePlaceholder')}
                     aria-label={t('formula.namePlaceholder')}
+                    {...nameHover.anchorProps}
                     onChange={(e) =>
                       setDraft((rows) =>
                         rows.map((row, i) =>
@@ -310,12 +414,16 @@ export function FormulaCard({
                   />
                   <span className="formula-card__eq">=</span>
                   <input
+                    ref={(element) => {
+                      expressionRefs.current[index] = element;
+                    }}
                     type="text"
                     className="formula-card__expr card__control"
                     value={formula.expression}
                     placeholder={t('formula.exprPlaceholder')}
                     aria-label={t('formula.exprPlaceholder')}
                     spellCheck={false}
+                    {...expressionHover.anchorProps}
                     onChange={(e) =>
                       setDraft((rows) =>
                         rows.map((row, i) =>
@@ -337,9 +445,14 @@ export function FormulaCard({
                   ) : null}
                 </div>
               ))}
+              {/* One tooltip per kind of control, rendered once: every row shares the same
+                  sentence, and a hook cannot be called inside the map above. */}
+              {nameHover.tooltip}
+              {expressionHover.tooltip}
               <button
                 type="button"
                 className="formula-card__add card__control"
+                {...addHover.anchorProps}
                 onClick={() => {
                   const name = `Col${draft.length + 1}`;
                   setDraft((rows) => [...rows, { name, expression: 'A' }]);
@@ -348,6 +461,7 @@ export function FormulaCard({
               >
                 + {t('formula.addColumn')}
               </button>
+              {addHover.tooltip}
               {error ? (
                 <p className="formula-card__error" role="alert">
                   {error.message}

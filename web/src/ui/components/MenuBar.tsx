@@ -41,7 +41,10 @@ export function MenuBar({
 }: MenuBarProps) {
   const { t, locale } = useTranslator();
   const setLocale = useWorkspace((s) => s.setLocale);
-  const [open, setOpen] = useState<'file' | 'view' | 'language' | null>(null);
+  // The help modal is store state (the formula card's "?" opens the same dialog), so menu
+  // entries only raise a request — the dialog itself is rendered once by App.
+  const openHelp = useWorkspace((s) => s.openHelp);
+  const [open, setOpen] = useState<'file' | 'view' | 'language' | 'help' | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   // Click-outside / Escape closes whichever menu is open.
@@ -78,7 +81,7 @@ export function MenuBar({
   );
 
   const menu = (
-    id: 'file' | 'view' | 'language',
+    id: 'file' | 'view' | 'language' | 'help',
     label: string,
     children: React.ReactNode,
   ) => (
@@ -152,6 +155,17 @@ export function MenuBar({
               {language.label}
             </button>
           ))}
+        </>,
+      )}
+      {menu(
+        'help',
+        t('menu.help'),
+        <>
+          {item(t('menu.helpFormula'), () => openHelp('functions'))}
+          {item(t('menu.helpSyntax'), () => openHelp('syntax'))}
+          {item(t('menu.helpExamples'), () => openHelp('examples'))}
+          <div className="menubar__separator" />
+          {item(t('menu.helpErrors'), () => openHelp('errors'))}
         </>,
       )}
     </div>

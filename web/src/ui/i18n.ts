@@ -24,6 +24,11 @@ const dictionaries = {
     'menu.cascade': '层叠',
     'menu.resetView': '回到卡片',
     'menu.closeAll': '关闭全部卡片',
+    'menu.help': '帮助',
+    'menu.helpFormula': '公式与函数说明…',
+    'menu.helpSyntax': '列引用写法',
+    'menu.helpExamples': '示例',
+    'menu.helpErrors': '常见报错',
 
     'status.ready': '就绪 — 在空白处点击右键 → 打开数据文件，或直接拖入数据文件',
     'backend.offline': '计算后端不可达 — 数值计算全部在后端进行，请启动后端后重试',
@@ -211,6 +216,76 @@ const dictionaries = {
     'formula.error.columnContractViolation': '列数契约被破坏（锁定 {expected} 列，实际 {actual} 列）',
     'menu.newFormula': '新建公式卡…',
     'menu.newRegression': '新建回归卡…',
+
+    // 帮助（公式 / 函数说明）：菜单项、卡片上的「?」与悬停提示共用同一份文案。
+    // 签名（Pos.1、SUM(c)…）是代码，保持字面量；这里只有散文，因此两个语言都齐。
+    'help.title': '公式与函数说明',
+    'help.close': '关闭',
+    'help.section.syntax': '列引用写法',
+    'help.section.functions': '函数速查',
+    'help.section.examples': '示例',
+    'help.section.errors': '常见报错',
+    'help.syntax.form': '写法',
+    'help.syntax.meaning': '含义',
+    'help.functions.note': '聚合类先把整列压成一个数，再逐行展开；其余函数逐行计算。',
+    'help.group.aggregate': '聚合（整列 → 一个数，再逐行展开）',
+    'help.group.math': '数学',
+    'help.group.signal': '信号处理',
+    'help.group.conditional': '条件',
+    'help.syntax.pos': '位置名：列的固定编号，始终可用；大小写不敏感（pos.1 亦可）',
+    'help.syntax.bare': '裸列名：列名只含字母、数字、_ 或中文时可直接写',
+    'help.syntax.bracket':
+      '方括号引用任意列名（含 /、空格、(、- 等）；读到 ] 为止原样取用，全角【】/［］亦可',
+    'help.syntax.qualified':
+      '多输入时用 A、B、C…（或输入区显示的端口 id）指明是哪一路；只有一个矩阵输入时可省略',
+    'help.syntax.fullwidth': '全角标点按对应的半角符号解析，可以直接输入',
+    'help.example.scale': '把第 1 列乘 2',
+    'help.example.unit': '单位换算（m → km 之类）',
+    'help.example.zscore': '标准化（z 分数）',
+    'help.example.smooth': '5 点平滑',
+    'help.example.bracket': '列名含 / 时用方括号',
+    'help.example.positive': '只保留正值，其余置 0',
+    'help.error.unexpectedChar':
+      '有无法识别的字符 — 多半是列名里有 /、空格等符号，请改用 Pos.N 或 [列名]',
+    'help.error.unknownColumn': '列名不存在 — 点「可用列」里的列名插入正确写法',
+    'help.error.unknownFunction': '函数名拼错 — 函数表里的名字都不区分大小写',
+    'help.error.badArgCount': '参数个数不对 — 例如 POW 要 2 个、IF 要 3 个',
+    'help.error.expectedClose': '括号不配对 — 函数参数后面漏了右括号（全角 ） 也算）',
+    'help.error.columnContractViolation':
+      '输出列数与锁定的契约不符 — 改完公式后要么恢复列数，要么扩展契约',
+    'help.fn.SUM': '整列求和（忽略缺失值）',
+    'help.fn.AVG': '算术平均（与 MEAN 相同）',
+    'help.fn.MEAN': '算术平均（与 AVG 相同）',
+    'help.fn.MIN': '单参数取列最小值；多参数时逐行取各列最小值',
+    'help.fn.MAX': '单参数取列最大值；多参数时逐行取各列最大值',
+    'help.fn.MEDIAN': '中位数（偶数个样本取中间两值的平均）',
+    'help.fn.STD': '样本标准差（ddof = 1）',
+    'help.fn.COUNT': '有效值个数（只数有限值，NaN 与 ±∞ 不计）',
+    'help.fn.NAN': '缺失值个数（只数 NaN；±∞ 是另一种问题，不计入）',
+    'help.fn.VAR': '样本方差（ddof = 1）',
+    'help.fn.SEM': '标准误 = 标准差 / √n（不足 2 个有效值时记 0）',
+    'help.fn.QUANTILE': '分位数（R-7 线性插值）；q 可为常数或列名，逐行计算',
+    'help.fn.ABS': '绝对值',
+    'help.fn.SQRT': '平方根',
+    'help.fn.LOG': '自然对数（以 e 为底，与 LN 相同）',
+    'help.fn.LN': '自然对数（以 e 为底）',
+    'help.fn.LOG10': '以 10 为底的对数',
+    'help.fn.EXP': 'e 的 x 次幂',
+    'help.fn.POW': 'a 的 b 次幂',
+    'help.fn.ROUND': '四舍五入到 n 位小数（省略 n 时为整数）',
+    'help.fn.FLOOR': '向下取整',
+    'help.fn.CEIL': '向上取整',
+    'help.fn.SIGN': '符号：−1 / 0 / 1',
+    'help.fn.MOV': 'n 点滑动平均（窗口居中，两端窗口自动收窄）',
+    'help.fn.EMA': '指数滑动平均；alpha 是新值的权重（0–1）',
+    'help.fn.IF': '逐行判断：条件非 0 取前者，否则取后者',
+    // 悬停提示：约 1 秒后出现在指针位置，替代原生 title 的瞬时弹窗
+    'help.hover.openHelp': '打开公式与函数说明（Esc 关闭）',
+    'help.hover.expr': '表达式写法：Pos.1 * 2、MOV(Pos.2, 5)、[列名] * 2 — 点 ? 看全部函数',
+    'help.hover.name': '输出列名；一旦命名即锁定输出列数（契约）',
+    'help.hover.addColumn': '追加一个公式列',
+    'help.columns.hint': '点击插入 Pos.N；含 / 空格的列名请改用 [列名]',
+    'help.chip.insert': '插入 {pos}（列 {name}）',
   },
 
   en: {
@@ -227,6 +302,11 @@ const dictionaries = {
     'menu.cascade': 'Cascade',
     'menu.resetView': 'Reset View',
     'menu.closeAll': 'Close All Cards',
+    'menu.help': 'Help',
+    'menu.helpFormula': 'Formula & Function Reference…',
+    'menu.helpSyntax': 'Column References',
+    'menu.helpExamples': 'Examples',
+    'menu.helpErrors': 'Common Errors',
 
     'status.ready': 'Ready — right-click the empty area → Open Data Files, or drop data files here',
     'backend.offline': 'Compute backend unreachable — all numeric computation runs server-side; start the backend and retry',
@@ -416,6 +496,88 @@ const dictionaries = {
       'Column contract broken ({expected} locked, {actual} produced)',
     'menu.newFormula': 'New Formula Card…',
     'menu.newRegression': 'New Regression Card…',
+
+    // Help (formula / function reference): the menu entries, the card's "?" and the hover
+    // tooltips all read these same strings.
+    'help.title': 'Formulas & Functions',
+    'help.close': 'Close',
+    'help.section.syntax': 'Column references',
+    'help.section.functions': 'Function reference',
+    'help.section.examples': 'Examples',
+    'help.section.errors': 'Common errors',
+    'help.syntax.form': 'Form',
+    'help.syntax.meaning': 'Meaning',
+    'help.functions.note':
+      'Reducing functions collapse a column to one number and broadcast it per row; everything else computes row by row.',
+    'help.group.aggregate': 'Reducing (column → one number, broadcast per row)',
+    'help.group.math': 'Math',
+    'help.group.signal': 'Signal processing',
+    'help.group.conditional': 'Conditional',
+    'help.syntax.pos':
+      'The column position — always available; case-insensitive (pos.1 works too)',
+    'help.syntax.bare':
+      'Bare column name: valid when the name contains only letters, digits, _ or CJK characters',
+    'help.syntax.bracket':
+      'Square brackets quote any name (/, spaces, (, - …); everything up to ] is taken verbatim — full-width 【】/［］ also work',
+    'help.syntax.qualified':
+      'With more than one matrix input, prefix the port identity (A, B, C… or the port id shown in the Inputs zone); optional for a single input',
+    'help.syntax.fullwidth': 'Full-width punctuation is accepted as its ASCII equivalent',
+    'help.example.scale': 'Multiply the first column by 2',
+    'help.example.unit': 'Unit conversion (m → km and the like)',
+    'help.example.zscore': 'Standardise (z-score)',
+    'help.example.smooth': '5-point smoothing',
+    'help.example.bracket': 'Bracket form for a name containing /',
+    'help.example.positive': 'Keep positive values, zero the rest',
+    'help.error.unexpectedChar':
+      'Unrecognised character — usually a column name containing / or a space; use Pos.N or [column name] instead',
+    'help.error.unknownColumn':
+      'That column does not exist — click a name under the available columns to insert the right spelling',
+    'help.error.unknownFunction':
+      'The function name is misspelt — names in the function table are case-insensitive',
+    'help.error.badArgCount': 'Wrong number of arguments — POW takes 2, IF takes 3',
+    'help.error.expectedClose':
+      "Unbalanced parentheses — a closing ')' is missing after the function arguments (a full-width ） counts too)",
+    'help.error.columnContractViolation':
+      'The output width no longer matches the locked contract — restore the column count or extend the contract',
+    'help.fn.SUM': "Sum of the column's finite values",
+    'help.fn.AVG': 'Arithmetic mean (same as MEAN)',
+    'help.fn.MEAN': 'Arithmetic mean (same as AVG)',
+    'help.fn.MIN':
+      'One argument reduces the column to its minimum; with several arguments it is a row-wise minimum',
+    'help.fn.MAX':
+      'One argument reduces the column to its maximum; with several arguments it is a row-wise maximum',
+    'help.fn.MEDIAN': 'Median (the mean of the two middle values for an even count)',
+    'help.fn.STD': 'Sample standard deviation (ddof = 1)',
+    'help.fn.COUNT': 'Count of valid values (finite only; NaN and ±∞ are not counted)',
+    'help.fn.NAN':
+      'Count of missing values (NaN only — ±∞ is a different defect and is not counted)',
+    'help.fn.VAR': 'Sample variance (ddof = 1)',
+    'help.fn.SEM': 'Standard error = sd / √n (0 with fewer than two valid values)',
+    'help.fn.QUANTILE':
+      'Quantile (R-7 linear interpolation); q may be a constant or a column, computed per row',
+    'help.fn.ABS': 'Absolute value',
+    'help.fn.SQRT': 'Square root',
+    'help.fn.LOG': 'Natural log (base e — identical to LN)',
+    'help.fn.LN': 'Natural log (base e)',
+    'help.fn.LOG10': 'Base-10 logarithm',
+    'help.fn.EXP': 'e raised to x',
+    'help.fn.POW': 'a raised to the power b',
+    'help.fn.ROUND': 'Round to n decimals (an integer when n is omitted)',
+    'help.fn.FLOOR': 'Round down',
+    'help.fn.CEIL': 'Round up',
+    'help.fn.SIGN': 'Sign: −1, 0 or 1',
+    'help.fn.MOV': 'n-point moving average (centred window; it narrows at both ends)',
+    'help.fn.EMA': 'Exponential moving average; alpha is the weight of the new sample (0–1)',
+    'help.fn.IF': 'Row-wise: the first value when the condition is non-zero, otherwise the second',
+    // Hover tooltips: appear after ~1s at the pointer instead of the instant native title.
+    'help.hover.openHelp': 'Open the formula & function reference (Esc closes it)',
+    'help.hover.expr':
+      'Expression syntax: Pos.1 * 2, MOV(Pos.2, 5), [column name] * 2 — click ? for every function',
+    'help.hover.name': 'Output column name; naming it locks the output width (contract)',
+    'help.hover.addColumn': 'Append one formula column',
+    'help.columns.hint':
+      'Click to insert Pos.N; use [column name] for names containing / or spaces',
+    'help.chip.insert': 'Insert {pos} (column {name})',
   },
 } as const;
 
