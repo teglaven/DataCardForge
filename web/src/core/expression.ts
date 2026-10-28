@@ -142,6 +142,14 @@ const FUNCTIONS: Record<string, { minArgs: number; maxArgs: number }> = {
   MAX: { minArgs: 1, maxArgs: Infinity },
   MEDIAN: { minArgs: 1, maxArgs: 1 },
   STD: { minArgs: 1, maxArgs: 1 },
+  // Summary statistics (added for builtin:summary). COUNT/NAN/VAR/SEM reduce like the
+  // aggregations above; QUANTILE takes a second argument (the quantile, constant or
+  // column) and is therefore per-row — see its own branch below.
+  COUNT: { minArgs: 1, maxArgs: 1 },
+  NAN: { minArgs: 1, maxArgs: 1 },
+  VAR: { minArgs: 1, maxArgs: 1 },
+  SEM: { minArgs: 1, maxArgs: 1 },
+  QUANTILE: { minArgs: 2, maxArgs: 2 },
   // Element-wise math.
   ABS: { minArgs: 1, maxArgs: 1 },
   SQRT: { minArgs: 1, maxArgs: 1 },
@@ -161,8 +169,13 @@ const FUNCTIONS: Record<string, { minArgs: number; maxArgs: number }> = {
   IF: { minArgs: 3, maxArgs: 3 },        // IF(cond, trueVal, falseVal)
 };
 
-/** Aggregation functions that reduce a column to a scalar. */
-const AGGREGATIONS = new Set(['SUM', 'AVG', 'MEAN', 'MIN', 'MAX', 'MEDIAN', 'STD']);
+/**
+ * Aggregation functions that reduce a column to a scalar.
+ *
+ * QUANTILE is deliberately NOT here: it is the one aggregation whose result is per-row
+ * (its q may be a column), so it cannot share the "reduce once, broadcast" branch.
+ */
+const AGGREGATIONS = new Set(['SUM', 'AVG', 'MEAN', 'MIN', 'MAX', 'MEDIAN', 'STD', 'COUNT', 'NAN', 'VAR', 'SEM']);
 
 /**
  * Machine-readable reason for an expression failure.
@@ -441,13 +454,92 @@ function compileAST(node: ASTNode): Evaluator {
               const mean = n > 0 ? s / n : NaN;
               let ss = 0;
               for (let i = 0; i < len; i++) if (Number.isFinite(v[i])) ss += (v[i] - mean) ** 2;
-              scalar = n > 1 ? Math.sqrt(ss / (n - 1)) : 0;
+              // n = 0 has no spread to report → NaN (undefined), never 0. Only n = 1 is
+              // "0 by convention". Matches stats.ts (variance(n=0) = NaN ⇒ stdDev = NaN)
+              // and the summary catalog's `sd` row.
+              scalar = n > 1 ? Math.sqrt(ss / (n - 1)) : n === 1 ? 0 : NaN;
+              break;
+            }
+            case 'COUNT': {
+              // Finite values only: NaN and ±Infinity are not observations.
+              let c = 0;
+              for (let i = 0; i < len; i++) if (Number.isFinite(v[i])) c++;
+              scalar = c;
+              break;
+            }
+            case 'NAN': {
+              // Deliberately narrower than "non-finite": NaN ONLY (±Infinity is a
+              // different defect and is not folded into this number).
+              let c = 0;
+              for (let i = 0; i < len; i++) if (Number.isNaN(v[i])) c++;
+              scalar = c;
+              break;
+            }
+            case 'VAR': {
+              // Sample variance, the primitive stats.ts variance() uses (ddof = n-1).
+              let s = 0; let n = 0;
+              for (let i = 0; i < len; i++) if (Number.isFinite(v[i])) { s += v[i]; n++; }
+              if (n === 0) { scalar = NaN; break; }
+              if (n === 1) { scalar = 0; break; }
+              const mean = s / n;
+              let ss = 0;
+              for (let i = 0; i < len; i++) if (Number.isFinite(v[i])) ss += (v[i] - mean) ** 2;
+              scalar = ss / (n - 1);
+              break;
+            }
+            case 'SEM': {
+              // sd / sqrt(n); fewer than two observations cannot estimate it → 0.
+              let s = 0; let n = 0;
+              for (let i = 0; i < len; i++) if (Number.isFinite(v[i])) { s += v[i]; n++; }
+              if (n < 2) { scalar = 0; break; }
+              const mean = s / n;
+              let ss = 0;
+              for (let i = 0; i < len; i++) if (Number.isFinite(v[i])) ss += (v[i] - mean) ** 2;
+              scalar = Math.sqrt(ss / (n - 1)) / Math.sqrt(n);
               break;
             }
             default:
               scalar = NaN;
           }
           return new Array<number>(len).fill(scalar);
+        };
+      }
+
+      // QUANTILE(col, q) — R-7 (linear interpolation between closest ranks), the exact
+      // definition stats.ts:quantile() implements. NOT a scalar-broadcast aggregation: q
+      // may be a column, so the result is per-row. Out-of-range q clamps to [0,1] like the
+      // reference; a non-finite q yields NaN explicitly (stats.ts would compute
+      // data[NaN] === undefined — the guard is deliberate and is pinned by the fixtures).
+      if (name === 'QUANTILE') {
+        const valuesFn = argFns[0];
+        const quantileFn = argFns[1];
+        return (cols: number[][], len: number) => {
+          const values = valuesFn(cols, len);
+          const sorted = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+          const quantiles = quantileFn(cols, len);
+          const out = new Array<number>(len);
+          for (let i = 0; i < len; i++) {
+            const q = quantiles[i];
+            if (!Number.isFinite(q) || sorted.length === 0) {
+              out[i] = NaN;
+              continue;
+            }
+            const clamped = Math.min(1, Math.max(0, q));
+            if (sorted.length === 1) {
+              out[i] = sorted[0];
+              continue;
+            }
+            const position = (sorted.length - 1) * clamped;
+            const lower = Math.floor(position);
+            const upper = Math.ceil(position);
+            if (lower === upper) {
+              out[i] = sorted[lower];
+              continue;
+            }
+            const fraction = position - lower;
+            out[i] = sorted[lower] + (sorted[upper] - sorted[lower]) * fraction;
+          }
+          return out;
         };
       }
 

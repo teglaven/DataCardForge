@@ -170,6 +170,15 @@ const std::unordered_map<std::string, FunctionSpec>& functions() {
       {"EXP", {1, 1}},   {"POW", {2, 2}},    {"ROUND", {1, 2}}, {"FLOOR", {1, 1}},
       {"CEIL", {1, 1}},  {"SIGN", {1, 1}},   {"MOV", {2, 2}},  {"EMA", {2, 2}},
       {"IF", {3, 3}},
+      // Summary statistics (added for `builtin:summary`). Same contract as the ones
+      // above: reduce the column to a scalar, then broadcast. COUNT/NAN/VAR/SEM reduce
+      // like the others; QUANTILE takes a second argument (the quantile, constant or
+      // column) and therefore returns a PER-ROW vector — see its branch in compileAst.
+      {"COUNT", {1, 1}},
+      {"NAN", {1, 1}},
+      {"VAR", {1, 1}},
+      {"SEM", {1, 1}},
+      {"QUANTILE", {2, 2}},
       // Matrix-mode functions (only meaningful when evaluateMatrix is used; cell-mode
       // evaluate() will reject them as unknown — that's fine, they're matrix-only).
       {"TRANSPOSE", {1, 1}},
@@ -184,7 +193,11 @@ const std::unordered_map<std::string, FunctionSpec>& functions() {
 
 const std::unordered_set<std::string>& aggregationNames() {
   static const std::unordered_set<std::string> kAgg = {
-      "SUM", "AVG", "MEAN", "MIN", "MAX", "MEDIAN", "STD"};
+      "SUM", "AVG", "MEAN", "MIN", "MAX", "MEDIAN", "STD",
+      // Added with the summary capability. QUANTILE is deliberately NOT here: it is the
+      // one aggregation whose result is per-row (q may be a column), so it cannot share
+      // the "reduce once, broadcast" branch.
+      "COUNT", "NAN", "VAR", "SEM"};
   return kAgg;
 }
 
@@ -447,9 +460,93 @@ EvalFn compileAst(const NodePtr& node) {
             double ss = 0;
             for (double x : v)
               if (std::isfinite(x)) ss += (x - mean) * (x - mean);
-            scalar = n > 1 ? std::sqrt(ss / static_cast<double>(n - 1)) : 0.0;
+            // n = 0 has no spread to report → NaN (undefined), never 0. Only n = 1 is
+            // "0 by convention" (one sample cannot show spread). The statistical table
+            // and the frozen reference (stats.ts variance(n=0) = NaN ⇒ stdDev = NaN)
+            // both say so; the previous "0.0 for n ≤ 1" conflated the two cases.
+            scalar = n > 1 ? std::sqrt(ss / static_cast<double>(n - 1))
+                           : (n == 1 ? 0.0 : NAN);
+          } else if (name == "COUNT") {
+            // Finite values only: NaN and ±Infinity are NOT observations (the same rule
+            // every other aggregation here uses, and the one stats.ts finite() encodes).
+            scalar = static_cast<double>(countFinite(v));
+          } else if (name == "NAN") {
+            // Deliberately narrower than "non-finite": this counts NaN ONLY. ±Infinity is
+            // a different defect (1/0 vs 0/0) and is not silently folded into this number.
+            size_t n = 0;
+            for (double x : v)
+              if (std::isnan(x)) ++n;
+            scalar = static_cast<double>(n);
+          } else if (name == "VAR") {
+            // Sample variance, the primitive stats.ts variance() uses (ddof = n-1).
+            // n = 1 has no spread to estimate → 0 (not NaN); n = 0 → NaN (undefined).
+            size_t n = countFinite(v);
+            if (n == 0) {
+              scalar = NAN;
+            } else if (n == 1) {
+              scalar = 0.0;
+            } else {
+              double mean = sumFinite(v) / static_cast<double>(n);
+              double ss = 0;
+              for (double x : v)
+                if (std::isfinite(x)) ss += (x - mean) * (x - mean);
+              scalar = ss / static_cast<double>(n - 1);
+            }
+          } else if (name == "SEM") {
+            // Standard error of the mean, sd/sqrt(n). Fewer than two observations cannot
+            // estimate it at all → 0 (stats.ts standardError(), same choice).
+            size_t n = countFinite(v);
+            if (n < 2) {
+              scalar = 0.0;
+            } else {
+              double mean = sumFinite(v) / static_cast<double>(n);
+              double ss = 0;
+              for (double x : v)
+                if (std::isfinite(x)) ss += (x - mean) * (x - mean);
+              scalar = std::sqrt(ss / static_cast<double>(n - 1)) /
+                       std::sqrt(static_cast<double>(n));
+            }
           }
           return std::vector<double>(len, scalar);
+        };
+      }
+
+      // QUANTILE(col, q) — R-7 (linear interpolation between closest ranks), the exact
+      // definition the frozen reference stats.ts:quantile() implements. It is NOT a
+      // scalar-broadcast aggregation: q may be a column, so the result is evaluated per
+      // row. Out-of-range q clamps to [0,1] like the reference; a non-finite q yields NaN
+      // instead of indexing junk (the TS reference would evaluate data[NaN] → undefined,
+      // so its mirror must guard explicitly too — this case is in the xlayer fixtures).
+      if (name == "QUANTILE") {
+        EvalFn valuesFn = argFns[0];
+        EvalFn quantileFn = argFns[1];
+        return [valuesFn, quantileFn](const std::vector<std::vector<double>>& cols, size_t len) {
+          const std::vector<double> values = valuesFn(cols, len);
+          std::vector<double> sorted;
+          for (double x : values)
+            if (std::isfinite(x)) sorted.push_back(x);
+          std::sort(sorted.begin(), sorted.end());
+          const std::vector<double> quantiles = quantileFn(cols, len);
+          std::vector<double> out(len);
+          for (size_t i = 0; i < len; ++i) {
+            double q = quantiles[i];
+            if (!std::isfinite(q) || sorted.empty()) {
+              out[i] = NAN;
+              continue;
+            }
+            if (q < 0.0) q = 0.0;
+            if (q > 1.0) q = 1.0;
+            const double position = static_cast<double>(sorted.size() - 1) * q;
+            const size_t lower = static_cast<size_t>(std::floor(position));
+            const size_t upper = static_cast<size_t>(std::ceil(position));
+            if (lower == upper) {
+              out[i] = sorted[lower];
+              continue;
+            }
+            const double fraction = position - static_cast<double>(lower);
+            out[i] = sorted[lower] + (sorted[upper] - sorted[lower]) * fraction;
+          }
+          return out;
         };
       }
 
@@ -791,7 +888,36 @@ MatEvalFn compileAstMatrix(const NodePtr& node) {
             for (int64_t i = 0; i < e.rows(); ++i)
               for (int64_t j = 0; j < e.cols(); ++j)
                 if (std::isfinite(e(i,j))) ss += (e(i,j) - mean) * (e(i,j) - mean);
-            scalar = n > 1 ? std::sqrt(ss / (n - 1)) : 0.0;
+            scalar = n > 1 ? std::sqrt(ss / (n - 1)) : (n == 1 ? 0.0 : NAN);
+          } else if (name == "COUNT") {
+            int64_t n = 0;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j))) ++n;
+            scalar = static_cast<double>(n);
+          } else if (name == "NAN") {
+            int64_t n = 0;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isnan(e(i,j))) ++n;
+            scalar = static_cast<double>(n);
+          } else if (name == "VAR" || name == "SEM") {
+            double s = 0; int64_t n = 0;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j))) { s += e(i,j); ++n; }
+            double mean = n > 0 ? s / n : NAN;
+            double ss = 0;
+            for (int64_t i = 0; i < e.rows(); ++i)
+              for (int64_t j = 0; j < e.cols(); ++j)
+                if (std::isfinite(e(i,j))) ss += (e(i,j) - mean) * (e(i,j) - mean);
+            if (name == "VAR") {
+              scalar = n == 0 ? NAN : n == 1 ? 0.0 : ss / static_cast<double>(n - 1);
+            } else {
+              scalar = n < 2 ? 0.0
+                             : std::sqrt(ss / static_cast<double>(n - 1)) /
+                                   std::sqrt(static_cast<double>(n));
+            }
           }
           return MatVal(Eigen::MatrixXd::Constant(1, 1, scalar));
         };

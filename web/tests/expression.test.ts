@@ -236,4 +236,86 @@ describe('expression engine', () => {
       expect(result.every(Number.isFinite)).toBe(true);
     });
   });
+
+  /**
+   * The summary statistics. Values here are pinned by reasoning about the definition, not
+   * by asking the implementation: the cross-tier fixtures (xlayer/expression.v1.json) are
+   * the referee for C++ vs TS, so these tests must not simply record whatever comes out.
+   */
+  describe('summary statistics', () => {
+    it('COUNT counts finite values only', () => {
+      // 1 and 3 are finite; NaN and Infinity are not observations.
+      expect(evaluateExpression('COUNT(A)', cols({ A: [1, Number.NaN, 3, Infinity] }))).toEqual([
+        2, 2, 2, 2,
+      ]);
+      expect(evaluateExpression('COUNT(A)', cols({ A: [] }))).toEqual([0]);
+    });
+
+    it('NAN counts NaN only, not infinities', () => {
+      expect(
+        evaluateExpression('NAN(A)', cols({ A: [1, Number.NaN, Infinity, Number.NaN] })),
+      ).toEqual([2, 2, 2, 2]);
+      expect(evaluateExpression('NAN(A)', cols({ A: [] }))).toEqual([0]);
+    });
+
+    it('VAR is the sample variance (ddof = n-1)', () => {
+      // [1,2,3,4]: mean 2.5, ss = 2.25+0.25+0.25+2.25 = 5, var = 5/3.
+      expect(evaluateExpression('VAR(A)', cols({ A: [1, 2, 3, 4] }))[0]).toBeCloseTo(5 / 3, 15);
+      expect(evaluateExpression('VAR(A)', cols({ A: [5] }))).toEqual([0]); // n = 1 → 0
+      expect(evaluateExpression('VAR(A)', cols({ A: [] }))[0]).toBeNaN(); // n = 0 → undefined
+    });
+
+    it('STD of an empty column is NaN, not 0', () => {
+      expect(evaluateExpression('STD(A)', cols({ A: [5] }))).toEqual([0]); // n = 1 → 0
+      expect(evaluateExpression('STD(A)', cols({ A: [] }))[0]).toBeNaN(); // n = 0 → undefined
+    });
+
+    it('SEM is sd/sqrt(n) and 0 below two observations', () => {
+      const sd = Math.sqrt(5 / 3);
+      expect(evaluateExpression('SEM(A)', cols({ A: [1, 2, 3, 4] }))[0]).toBeCloseTo(sd / 2, 15);
+      expect(evaluateExpression('SEM(A)', cols({ A: [5] }))).toEqual([0]);
+      expect(evaluateExpression('SEM(A)', cols({ A: [] }))).toEqual([0]);
+    });
+
+    it('QUANTILE follows R-7 linear interpolation', () => {
+      // [1,2,3,4]: pos = 3q. q=0.25 → 0.75 → 1 + 0.75 = 1.75; q=0.5 → 1.5 → 2.5;
+      // q=0.75 → 2.25 → 3 + 0.25 = 3.25.
+      expect(evaluateExpression('QUANTILE(A, 0.25)', cols({ A: [1, 2, 3, 4] }))[0]).toBeCloseTo(1.75, 15);
+      expect(evaluateExpression('QUANTILE(A, 0.5)', cols({ A: [1, 2, 3, 4] }))[0]).toBeCloseTo(2.5, 15);
+      expect(evaluateExpression('QUANTILE(A, 0.75)', cols({ A: [1, 2, 3, 4] }))[0]).toBeCloseTo(3.25, 15);
+      // Odd count: the middle element is hit exactly.
+      expect(evaluateExpression('QUANTILE(A, 0.5)', cols({ A: [3, 1, 2] }))[0]).toBe(2);
+    });
+
+    it('QUANTILE clamps q out of range and returns NaN for a non-finite q', () => {
+      expect(evaluateExpression('QUANTILE(A, -1)', cols({ A: [3, 1, 2] }))[0]).toBe(1);
+      expect(evaluateExpression('QUANTILE(A, 2)', cols({ A: [3, 1, 2] }))[0]).toBe(3);
+      expect(evaluateExpression('QUANTILE(A, 0)', cols({ A: [3, 1, 2] }))[0]).toBe(1);
+      expect(evaluateExpression('QUANTILE(A, 1)', cols({ A: [3, 1, 2] }))[0]).toBe(3);
+      expect(
+        evaluateExpression('QUANTILE(A, B)', cols({ A: [1, 2, 3], B: [Number.NaN, Number.NaN, Number.NaN] }))[0],
+      ).toBeNaN();
+    });
+
+    it('QUANTILE takes q per row when q is a column', () => {
+      const result = evaluateExpression(
+        'QUANTILE(A, B)',
+        cols({ A: [1, 2, 3, 4], B: [0, 0.25, 0.5, 0.75] }),
+      );
+      expect(result[0]).toBeCloseTo(1, 15);
+      expect(result[1]).toBeCloseTo(1.75, 15);
+      expect(result[2]).toBeCloseTo(2.5, 15);
+      expect(result[3]).toBeCloseTo(3.25, 15);
+    });
+
+    it('QUANTILE ignores non-finite observations', () => {
+      // finite = [1,3,4] → sorted, q=0.5 → pos 1 → 3.
+      expect(
+        evaluateExpression('QUANTILE(A, 0.5)', cols({ A: [1, Number.NaN, 3, Infinity, 4] }))[0],
+      ).toBe(3);
+      expect(
+        evaluateExpression('QUANTILE(A, 0.5)', cols({ A: [Number.NaN, Number.NaN] }))[0],
+      ).toBeNaN();
+    });
+  });
 });
