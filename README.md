@@ -3,7 +3,7 @@
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages demo](https://img.shields.io/badge/demo-live%20(front%20end)-2ea44f)](https://teglaven.github.io/DataCardForge/)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-394%20unit%20%C2%B7%2065%20e2e-brightgreen)](web/tests)
+[![Tests](https://img.shields.io/badge/tests-489%20unit%20%C2%B7%2073%20e2e-brightgreen)](web/tests)
 
 **[English](README.md) | [中文](README.zh-CN.md)**
 
@@ -17,7 +17,7 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 
 **Author & provenance**: `teglaven` · GPL-3.0 · see [`PROVENANCE.md`](PROVENANCE.md) for the
 verifiable author identity, timeline and commit anchors.
-**Verified state** (last verified 2026-10-28): 449 frontend unit tests · 7 backend ctest cases
+**Verified state** (last verified 2026-10-28): 489 frontend unit tests · 7 backend ctest cases
 (3 opt-in) · end-to-end smoke checks — all green.
 **Not finished yet**: function cards are a work in progress; per-port connections were repaired on
 2026-10-28 and hover/edge-editing are still missing — both are spelled out under
@@ -105,7 +105,12 @@ The frontend speaks [protocol v1](docs/docs/architecture/backend-protocol-v1.md)
 
 The backend holds **authoritative copies** of all data, dependency graphs, and compute definitions. The browser keeps only revision-keyed read-only display caches.
 
-- **Expression engine**: full semantic port of the TS reference (`expression.ts`) — 38 cross-tier differential fixtures guarantee identical results. Supports arithmetic, comparisons, aggregations (SUM/AVG/MIN/MAX/MEDIAN/STD with NaN skipping and Bessel-corrected STD), element-wise math (ABS/SQRT/LOG/LN/LOG10/EXP/POW/ROUND/FLOOR/CEIL/SIGN), moving window (MOV/EMA), conditionals (IF)
+- **Expression engine**: full semantic port of the TS reference (`expression.ts`) — 81 expression fixtures + 14 matrix fixtures + randomized differential fuzz guarantee identical results. Supports arithmetic, comparisons, aggregations (SUM/AVG/MIN/MAX/MEDIAN/STD with NaN skipping and Bessel-corrected STD), element-wise math (ABS/SQRT/LOG/LN/LOG10/EXP/POW/ROUND/FLOOR/CEIL/SIGN), moving window (MOV/EMA), conditionals (IF)
+  - **Column references** (2026-10-28): `Pos.1` / `pos.1` (case-insensitive), bare annotations
+    (`时间_秒`), bracket-quoted verbatim names (`[地面速度_μm/s]` — the only spelling when a name
+    contains `/`, a space or parentheses), and port qualification for multi-input cards
+    (`A.pos.1`, `src.时间_秒`, `A.[…]`). Full-width punctuation (`（）`, `，`, `×`, `／`, `－`) is
+    accepted as its ASCII equivalent. See [the decision record](docs/docs/decisions/2026-10-28-expression-reference-syntax.md)
 - **Matrix-mode evaluation**: when any input variable is declared matrix-mode, `*` becomes matrix multiplication; additional functions: `TRANSPOSE`, `DET`, `INV`, `SOLVE`, `MMUL` (explicit matmul), `EMUL` (explicit element-wise multiply). Shape mismatches produce structured `shapeMismatch` errors — never silent garbage
 - **Dependency graph**: per-port edges, atomic cycle refusal (N edges either all register or none), result-matrix-aware cascade via `resultOwner_` map
 - **Node state machine**: dirty → computing → done | error, pushed via monotonic-seq event stream
@@ -177,6 +182,13 @@ What already works: creating a function card from a column or from the toolbar, 
 (one row per output), the three-pane layout (input ports / formula editor / result grid), chaining a
 function card into the next one, plotting a function card's output, single-column port binding
 (`mode: "cell"`) and the column-count contract with its violation escape hatches.
+
+**Closed on 2026-10-28**: how a column may be referenced (an annotated file used to have *no*
+addressable column name at all — even the documented `Pos.N` fallback was broken) and where the
+reference lives in the UI (Help menu / `?` on the card / a 1 s hover tooltip at the pointer /
+clickable column chips). A layout collapse that hid the formula row as soon as a card produced
+numbers was fixed at the same time. See the [log](docs/docs/log/2026-10-28.md) and the
+[syntax decision](docs/docs/decisions/2026-10-28-expression-reference-syntax.md).
 
 What is still missing, and why it is not "done":
 
@@ -262,7 +274,7 @@ npm test                  # unit tests (vitest, includes cross-tier fixtures)
 ### Tests
 
 ```bash
-# Frontend: typecheck + 394 unit tests (including 46 cross-tier differential fixtures)
+# Frontend: typecheck + 489 unit tests (including 81 cross-tier differential fixtures)
 cd web && npm run typecheck && npm test
 
 # Backend: 7 ctest cases (cross-tier fixtures, matrix operators, node registry, card fixtures; 3 further gates are opt-in and Skipped by default)
@@ -305,7 +317,7 @@ GitHub Pages on every push that touches `web/` — that is what serves the live 
 - [x] **Dependency cycle detection** → `DependencyGraph` refuses loops and deduplicates edges (2026-10-15)
 - [x] **Maximum-headroom principle adopted** → visible degradation contract (2026-10-15)
 - [x] **B-plan decided** → backend owns compute, browser is pure interaction (2026-10-17)
-- [x] **Cross-tier differential fixtures** → 46 expression cases, single JSON judge format (2026-10-17; extended 2026-10-21)
+- [x] **Cross-tier differential fixtures** → 81 expression cases, single JSON judge format (2026-10-17; extended 2026-10-21 and 2026-10-28)
 - [x] **Differential fuzz gate** → random TS↔C++ cross-check incl. error codes/positions, reproducible seeds (2026-10-21)
 - [x] **C++/Eigen compute backend skeleton** → expression engine port, node registry, HTTP API, protocol v1 (2026-10-17)
 - [x] **Frontend transport client** → backend handshake, matrix registration, event polling, visible offline banner (2026-10-17)
@@ -341,7 +353,7 @@ GitHub Pages on every push that touches `web/` — that is what serves the live 
 
 ## Acknowledgements
 
-This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class tooling, and earlier GitHub Copilot). Authored by the maintainer: the requirements, the architecture decisions in [`docs/docs/decisions/`](docs/docs/decisions/), the acceptance criteria and the test gates. The repository does not claim "it was all typed by hand" — it claims that **every feature statement above is reproduced by the suites listed under Tests** (394 unit / 7 ctest / 65 end-to-end checks). Ownership and timeline: [`PROVENANCE.md`](PROVENANCE.md).
+This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class tooling, and earlier GitHub Copilot). Authored by the maintainer: the requirements, the architecture decisions in [`docs/docs/decisions/`](docs/docs/decisions/), the acceptance criteria and the test gates. The repository does not claim "it was all typed by hand" — it claims that **every feature statement above is reproduced by the suites listed under Tests** (489 unit / 7 ctest / 73 end-to-end checks). Ownership and timeline: [`PROVENANCE.md`](PROVENANCE.md).
 
 ## License
 

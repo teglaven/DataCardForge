@@ -3,7 +3,7 @@
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages 演示](https://img.shields.io/badge/%E6%BC%94%E7%A4%BA-%E5%89%8D%E7%AB%AF%E5%9C%A8%E7%BA%BF-2ea44f)](https://teglaven.github.io/DataCardForge/)
 [![许可证](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-449%20unit%20%C2%B7%2065%20e2e-brightgreen)](web/tests)
+[![测试](https://img.shields.io/badge/tests-489%20unit%20%C2%B7%2073%20e2e-brightgreen)](web/tests)
 
 **[English](README.md) | [中文](README.zh-CN.md)**
 
@@ -16,7 +16,7 @@
 </p>
 
 **作者与权属**：`teglaven` · GPL-3.0 · 身份、时间线与提交锚点见 [`PROVENANCE.md`](PROVENANCE.md)。
-**当前实测状态**（2026-10-28 实测）：前端 449 个单元测试 · 后端 7 个 ctest（3 个 opt-in）· 端到端 65 项检查，全绿。
+**当前实测状态**（2026-10-28 实测）：前端 489 个单元测试（14 个 opt-in 跳过）· 后端 7 个 ctest（3 个 opt-in）· 端到端 73 项检查，全绿。
 **尚未完成**：函数卡是半成品；端口级连线已修复，hover/断线编辑仍在路上——两者都在
 [状态与已知缺口](#状态与已知缺口)里写清楚了。
 
@@ -100,7 +100,11 @@
 
 后端持有所有数据、依赖图和计算定义的**权威副本**。浏览器仅保留按 revision 键控的只读显示缓存。
 
-- **表达式引擎**：TS 参考实现的逐语义移植（`expression.ts`）——46 个跨层差分夹具 + 随机差分 fuzz（`DC_RUN_FUZZ=1`）保证结果一致。支持算术、比较、聚合（SUM/AVG/MIN/MAX/MEDIAN/STD，NaN 跳过 + Bessel 校正 STD）、逐元素数学函数（ABS/SQRT/LOG/LN/LOG10/EXP/POW/ROUND/FLOOR/CEIL/SIGN）、滑动窗口（MOV/EMA）、条件（IF）
+- **表达式引擎**：TS 参考实现的逐语义移植（`expression.ts`）——81 个表达式夹具 + 14 个矩阵夹具 + 随机差分 fuzz（`DC_RUN_FUZZ=1`）保证结果一致。支持算术、比较、聚合（SUM/AVG/MIN/MAX/MEDIAN/STD，NaN 跳过 + Bessel 校正 STD）、逐元素数学函数（ABS/SQRT/LOG/LN/LOG10/EXP/POW/ROUND/FLOOR/CEIL/SIGN）、滑动窗口（MOV/EMA）、条件（IF）
+  - **列引用写法**（2026-10-28）：`Pos.1`/`pos.1`（大小写不敏感）、裸注解名（`时间_秒`）、
+    方括号逐字引用（`[地面速度_μm/s]`，名字含 `/`、空格、括号时唯一写法）、多输入端口限定
+    （`A.pos.1`、`src.时间_秒`、`A.[…]`）；全角标点（`（）`/`，`/`×`/`／`/`－`）按 ASCII 等价物处理。
+    见[决策](docs/docs/decisions/2026-10-28-expression-reference-syntax.md)
 - **矩阵模式求值**：当任一输入变量声明为矩阵模式时，`*` 变为矩阵乘法；新增函数：`TRANSPOSE`、`DET`、`INV`、`SOLVE`、`MMUL`（显式矩阵乘）、`EMUL`（显式逐元素乘）。形状不匹配产生结构化 `shapeMismatch` 错误——绝不静默产出垃圾结果
 - **依赖图**：按端口的边、原子成环拒绝（N 条边要么全加要么全不加）、经 `resultOwner_` 映射的结果矩阵感知级联
 - **节点状态机**：dirty → computing → done | error，通过单调递增 seq 的事件流推送
@@ -148,6 +152,10 @@
   「新建回归卡…」即可。参数区按签名渲染：有 `formulas` 才是编辑器，没有就直说
 - **跨层裁判**：`web/tests/fixtures/cards/*.json` 同一份 JSON 由 TS 与 C++ 双边跑；
   `DC_RUN_INTEGRATION=1` 时还有一条真后端集成门禁
+- **说明就在界面里**（2026-10-28）：左上角**帮助**菜单与公式卡「计算公式」区标题上的 `?`
+  打开同一份说明（函数速查 / 列引用写法 / 示例 / 常见报错）；「可用列」是可点芯片，点一下
+  在光标处插入 `Pos.N`；悬停静止 1 s 就在**指针位置**给出提示（不用原生 `title`，快速划过不弹）。
+  说明内容与引擎函数表同源，测试断言两者的函数集合相等，说明书不会与引擎漂移
 
 ## 截图
 
@@ -185,6 +193,11 @@
 
 已经能用的：从列或工具栏新建函数卡、按输出行编辑表达式、三区布局（输入端口 / 公式区 / 结果表）、
 函数卡串接成链、函数卡结果可绘图、端口绑定单列（`mode: "cell"`）、列数契约及违约后的两条出路。
+
+**2026-10-28 收口的两件事**：列引用写法（此前带表头文件的列**一个名字都引用不了**，连 `Pos.N`
+退路都是坏的）与界面说明（帮助菜单 / 卡上 `?` / 悬停提示 / 可点列芯片）；顺带修好「一旦算出
+结果，公式区被结果网格挤成 11 px、表达式行消失」的布局塌陷。详见
+[日志](docs/docs/log/2026-10-28.md)与[语法决策](docs/docs/decisions/2026-10-28-expression-reference-syntax.md)。
 
 仍然缺的，也是它不能算「完成」的原因：
 
@@ -264,7 +277,7 @@ npm test                  # 单元测试（vitest，含跨层夹具）
 ### 测试
 
 ```bash
-# 前端：typecheck + 449 个单元测试（含 46 个跨层差分夹具）
+# 前端：typecheck + 489 个单元测试（含 81 个跨层差分夹具）
 cd web && npm run typecheck && npm test
 
 # 后端：7 个 ctest 用例（跨层夹具、矩阵算子、节点注册表、卡片夹具；另有 3 个按需门控，默认 Skipped）
@@ -304,7 +317,7 @@ GitHub Actions 在每次 push/PR 时运行三个 job：
 - [x] **依赖环检测** → `DependencyGraph` 拒绝成环并去除重复边（2026-10-15）
 - [x] **兜底原则确立** → 可见降级契约（2026-10-15）
 - [x] **B 方案拍板** → 后端持有计算，浏览器纯交互（2026-10-17）
-- [x] **跨层差分夹具** → 46 个表达式用例，单一 JSON 裁判格式（2026-10-17；2026-10-21 扩充）
+- [x] **跨层差分夹具** → 81 个表达式用例，单一 JSON 裁判格式（2026-10-17；2026-10-21、2026-10-28 扩充）
 - [x] **差分 fuzz 门禁** → 随机表达式 TS↔C++ 对拍（含错误码/位置），种子可复现（2026-10-21）
 - [x] **C++/Eigen 计算后端骨架** → 表达式引擎移植、节点注册表、HTTP API、协议 v1（2026-10-17）
 - [x] **前端传输客户端** → 后端握手、矩阵注册、事件轮询、可见离线横幅（2026-10-17）

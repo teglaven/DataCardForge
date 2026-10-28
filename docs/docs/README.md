@@ -8,12 +8,13 @@
 - 🧭 **项目演进史** (`history.md`) — 把决策/日志/踩坑/审计按因果链串成一条历史，含四个时代、四条螺旋线、教训清单与文档不一致盘点
   - [项目演进史（Data Workbench / DataCardForge）](history.md) ← **先读这篇再进各分册**
 - 📌 **决策记录** (`decisions/`) — 已经拍板、影响后续的方向性结论
-  - [端口级连线：边带 portId、端点落端口](decisions/2026-10-28-port-level-connections.md) ← **最新：连线恢复为完整的依赖可视化**
+  - [表达式列引用语法：名称可写、能带限定、全角可用](decisions/2026-10-28-expression-reference-syntax.md) ← **最新：公式卡对带表头文件恢复可用**
+  - [端口级连线：边带 portId、端点落端口](decisions/2026-10-28-port-level-connections.md) ← 连线恢复为完整的依赖可视化（同日）
   - [摘要（`builtin:summary`）v1：统计量目录、惰性求值、数字归后端](decisions/2026-10-27-summary-builtin.md) ← 第一个惰性签名 + 目录即行序
-  - [函数卡的三个契约（列数 · 参数归属 · 单列端口）](decisions/2026-10-27-card-contracts.md) ← **最新：函数卡实现期把三处含糊定死了**
+  - [函数卡的三个契约（列数 · 参数归属 · 单列端口）](decisions/2026-10-27-card-contracts.md) ← 函数卡实现期把三处含糊定死了
   - [卡片数据结构 v2（依赖升信封，函数卡=单节点 K 输出）](decisions/2026-10-26-card-schema-v2.md) ← **已实施**，函数卡的地基
   - [画布改为无边界平面（平移，不含缩放）](decisions/2026-10-21-infinite-canvas.md) ← **当前视图模型：工作流不再被一屏限制**
-  - [后端持有数据与计算（B 方案）](decisions/2026-10-17-backend-owns-compute.md) ← **最新分层裁定：浏览器纯交互，修订 T1 基线**
+  - [后端持有数据与计算（B 方案）](decisions/2026-10-17-backend-owns-compute.md) ← 当前分层裁定：浏览器纯交互，修订 T1 基线
   - [兜底原则（最大余量）](decisions/2026-10-15-max-headroom-principle.md) ← **核心架构原则**（分层表已被 10-17 决策修订，契约仍有效）
   - [彻底移除 Qt 实现](decisions/2026-10-15-qt-implementation-removed.md) ← **当前仓库形态**
   - [前端选型定为 Web](decisions/2026-10-14-frontend-web-chosen.md) ← **当前前端方案**
@@ -29,6 +30,7 @@
   - [ImPlot v1.1 API 大改](lessons/implot-v1.1-api.md)
   - [ImGui Docking 下 PushStyleColor 的坑](lessons/imgui-docking-pushstylecolor.md)
 - 📅 **开发日志** (`log/`) — 按日期记录进展
+  - [2026-10-28](log/2026-10-28.md)（用户报障两句 → 三个真缺陷：指针捕获吞 click · 带表头列没有可用的列名 · 公式区被结果表挤成 0）
   - [2026-10-27](log/2026-10-27.md)（函数卡从规格到能跑：v2 落地 · 重指向确认 · 列数契约 · 结果可绘图/可链式 · 回归签名反证通用性）
   - [2026-10-21](log/2026-10-21.md)（阶段 3：公式卡计算权威切到后端 · 差分 fuzz 门禁 · 画布改为无边界平面）
   - [2026-10-17](log/2026-10-17.md)（B 方案拍板 + 工具链核实 + 阶段 0：决策/协议/跨层夹具）

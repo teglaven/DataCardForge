@@ -70,6 +70,10 @@
 | 2026-10-17 | **B 方案拍板**：后端持有数据与计算，浏览器退化为纯交互界面 | 决策 | [decisions/2026-10-17-backend-owns-compute](decisions/2026-10-17-backend-owns-compute.md) |
 | 2026-10-17 | 后端协议 v1 草案（传输/资源/端点/二进制帧/错误/差分夹具） | 架构 | [architecture/backend-protocol-v1](architecture/backend-protocol-v1.md) |
 | 2026-10-17 | 工具链核实：g++ 15.2 / cmake 4.2 / ninja 1.13 / Eigen 3.4 **已预装** | 环境 | [decisions/2026-10-17-backend-owns-compute](decisions/2026-10-17-backend-owns-compute.md) |
+| 2026-10-28 | 端口级连线：依赖边携带 portId、端点落端口、方向箭头 | 修复 | [decisions/2026-10-28-port-level-connections](decisions/2026-10-28-port-level-connections.md) · [log/2026-10-28](log/2026-10-28.md) |
+| 2026-10-28 | **表达式列引用语法**：`Pos.N`/注解名/`[列名]`/端口限定 + 全角标点；公式卡对带表头文件恢复可用 | 决策 | [decisions/2026-10-28-expression-reference-syntax](decisions/2026-10-28-expression-reference-syntax.md) |
+| 2026-10-28 | 空状态「打开数据文件」按钮恢复：画布 `setPointerCapture` 吞掉了 click | 修复 | [log/2026-10-28](log/2026-10-28.md) |
+| 2026-10-28 | 公式卡帮助入口（帮助菜单 + `?` + 悬停 1 s 位置提示 + 可点列芯片） | 实现 | [log/2026-10-28](log/2026-10-28.md) |
 
 ---
 
@@ -255,6 +259,10 @@ C++/Qt 树曾作"行为参照"保留 → 发现它**成本 215 MB、还让主实
 | 4 | **图表库决策缺导航项** | [docs/README](../../README.md) | 导航未登记 `2026-10-14-chart-library-audit` | ✅ 已修（导航已登记） |
 | 5 | **architecture/ 的定位描述过时**：写"尚未拍板、需要继续论证的对比"，但 `backend-protocol-v1` 已是 v1 草案规范 | [docs/README L16](../../README.md#L16) | 拆为"规范"与"权衡"两类 | ✅ 已修（2026-10-21：导航拆为 📐 规范 / ⚖️ 权衡两类；协议文档状态行由"草案"改为"v1 规范"） |
 | 6 | **致谢署名待复核**：README 称本项目由 **GitHub Copilot** 辅助开发，但仓库 9 个提交**无任何 agent 署名 trailer**，作者串含 `DataCardForge Dev <dev@datacardforge.local>` / `DataCardForge audit <agent@local>` | [README.zh-CN L164](../../README.zh-CN.md#L164) · [README L167](../../README.md#L167) | 按实际使用的工具更新署名 | ✅ 已修（2026-10-21：中英 README 改为"AI 编程助手（DeepSeek Harness / Claude 等 agent 工具，以及早期的 GitHub Copilot）"） |
+
+> **2026-10-28 补充**：本节的时间线此前止于 2026-10-17，10-21（无边界画布）、10-26（schema v2）、
+> 10-27（卡片契约 / 摘要签名）三档决策未回填时间线，本次只补了 2026-10-28 的四行。
+> 回填时请以各决策文件头部的日期与状态为准。
 
 ---
 
