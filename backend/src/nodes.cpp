@@ -518,6 +518,34 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   std::string errorCode;
   std::string errorName;
   int64_t errorPosition = -1;
+  // `unexpectedChar` and friends name the offending thing in their message; the UI localises
+  // the message from `code` + `params`, so the value itself has to travel separately.
+  std::string errorDetail;
+  int64_t errorArgMin = -1;
+  int64_t errorArgMax = -1;
+  int64_t errorArgGot = -1;
+
+  // Qualified column references for a multi-input card: `A.pos.1`, `B.温度`,
+  // `A.[地面速度_μm/s]`. The letter follows the port declaration order (A, B, C …) and the
+  // port id also works (`src.pos.1`), so either spelling the input zone shows resolves.
+  std::vector<AliasRange> aliases;
+  {
+    int ordinal = 0;
+    for (size_t k = 0; k < bindings.size() && k < slices.size(); ++k) {
+      AliasRange range;
+      range.first = slices[k].firstColumn;
+      range.count = slices[k].columnCount;
+      if (ordinal < 26) {
+        range.alias = std::string(1, static_cast<char>('A' + ordinal));
+        aliases.push_back(range);
+      }
+      if (!bindings[k].varName.empty()) {
+        range.alias = bindings[k].varName;
+        aliases.push_back(range);
+      }
+      ++ordinal;
+    }
+  }
   const size_t rowLength = length == 0 ? 1 : length;
   try {
     if (!signatureId.empty()) {
@@ -609,7 +637,7 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
             Column col;
             col.posName = "Pos." + std::to_string(i + 1);
             col.annotation = name;
-            col.data = ExprEngine::evaluate(expression, names, data, rowLength);
+            col.data = ExprEngine::evaluate(expression, names, data, rowLength, aliases);
             columns.push_back(std::move(col));
           }
         }
@@ -648,7 +676,7 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
         errorName = signatureId;
       }
     } else {
-      std::vector<double> values = ExprEngine::evaluate(formula, names, data, rowLength);
+      std::vector<double> values = ExprEngine::evaluate(formula, names, data, rowLength, aliases);
       Column out;
       out.posName = "Pos.1";
       out.annotation = "";
@@ -658,6 +686,10 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   } catch (const ExpressionError& e) {
     errorCode = e.code;
     errorPosition = e.position;
+    errorDetail = e.detail;
+    errorArgMin = e.argMin;
+    errorArgMax = e.argMax;
+    errorArgGot = e.argGot;
   } catch (const ShapeError& e) {
     // Matrix-mode shape failures are structured too (never a silent garbage matrix).
     errorCode = e.code;
@@ -704,6 +736,33 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   if (!errorCode.empty()) {
     Json params_out = Json::object();
     if (errorPosition >= 0) params_out.set("position", Json(errorPosition));
+    // Structured identity of the offending token: the UI localises the sentence from
+    // `code` + these params, so without them a Chinese UI printed a literal "{char}"
+    // (or "{name}") at the user. Key names mirror the TS reference engine's params.
+    if (!errorDetail.empty()) {
+      if (errorCode == "unexpectedChar") {
+        params_out.set("char", Json(errorDetail));
+      } else if (errorCode == "unexpectedToken" || errorCode == "trailingToken") {
+        params_out.set("token", Json(errorDetail));
+      } else {
+        params_out.set("name", Json(errorDetail));
+      }
+    }
+    if (errorArgMin >= 0) {
+      const bool variadic = errorArgMax == INT32_MAX;
+      params_out.set("min", Json(errorArgMin));
+      params_out.set("max", Json(variadic ? Json(std::string("∞")) : Json(errorArgMax)));
+      // `expected` is what the message interpolates; a range keeps its range.
+      if (variadic) {
+        params_out.set("expected", Json(std::to_string(errorArgMin) + "–∞"));
+      } else if (errorArgMin == errorArgMax) {
+        params_out.set("expected", Json(errorArgMin));
+      } else {
+        params_out.set("expected",
+                       Json(std::to_string(errorArgMin) + "–" + std::to_string(errorArgMax)));
+      }
+      params_out.set("got", Json(errorArgGot));
+    }
     if (!errorName.empty()) params_out.set("name", Json(errorName));
     if (contractExpected >= 0) {
       params_out.set("expected", Json(contractExpected));

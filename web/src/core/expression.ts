@@ -40,12 +40,71 @@ interface Token {
   type: TokenType;
   value: string;
   pos: number;
+  /** `[名字]` produced this token: always a column reference, never a function call. */
+  quoted?: boolean;
 }
 
 // ── Tokenizer ──────────────────────────────────────────────────────────
 
 const OPERATORS = new Set(['+', '-', '*', '/', '^', '%']);
 const COMPARES = ['>=', '<=', '==', '!=', '>', '<'];
+
+/**
+ * Full-width punctuation a Chinese IME produces, and the ASCII operator it stands for.
+ *
+ * Mirrored verbatim in `backend/src/expression.cpp` — the two engines must classify every
+ * character the same way or the differential fixtures fail. Mapping is applied per token
+ * rather than by rewriting the input, so a bracketed name that legitimately contains a
+ * full-width glyph (`[温度（℃）]`) keeps it verbatim.
+ */
+const FULL_WIDTH: Record<string, string> = {
+  '（': '(', '）': ')', '，': ',', '、': ',', '＋': '+', '－': '-', '−': '-',
+  '＊': '*', '×': '*', '／': '/', '÷': '/', '％': '%', '＾': '^', '＝': '=',
+  '＞': '>', '＜': '<', '≠': '!=', '　': ' ',
+};
+
+const OPEN_BRACKETS = ['[', '［', '【'];
+const CLOSE_BRACKETS = [']', '］', '】'];
+
+function fullWidthAt(input: string, i: number): string | null {
+  const ch = input[i];
+  return Object.prototype.hasOwnProperty.call(FULL_WIDTH, ch) ? FULL_WIDTH[ch] : null;
+}
+
+function isBracketOpenAt(input: string, i: number): boolean {
+  return OPEN_BRACKETS.includes(input[i]);
+}
+
+function trimName(name: string): string {
+  return name.replace(/^[\s\u3000]+|[\s\u3000]+$/g, '');
+}
+
+/**
+ * Read a bracketed column name starting at the opener.
+ *
+ * The content is data, not grammar — that is what makes `[地面速度_μm/s]`, `[温度（℃）]`
+ * addressable at all.
+ */
+function scanBracket(
+  input: string,
+  i: number,
+): { inner: string; next: number; openPos: number } | null {
+  if (!isBracketOpenAt(input, i)) return null;
+  const openPos = i;
+  let j = i + 1;
+  while (j < input.length) {
+    if (CLOSE_BRACKETS.includes(input[j])) {
+      return { inner: input.slice(i + 1, j), next: j + 1, openPos };
+    }
+    j++;
+  }
+  return null;
+}
+
+/** Any non-ASCII character is a name character (CJK / μ / ° annotations). */
+function isNonAscii(ch: string): boolean {
+  return ch.length > 0 && ch.charCodeAt(0) >= 0x80;
+}
 
 function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
@@ -54,7 +113,7 @@ function tokenize(input: string): Token[] {
   while (i < input.length) {
     const ch = input[i];
 
-    // Skip whitespace.
+    // Skip whitespace (\s already covers U+3000).
     if (/\s/.test(ch)) { i++; continue; }
 
     // Number literal: digits, optional dot, optional exponent.
@@ -70,11 +129,92 @@ function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Identifier: letter, underscore, digit, dot (for Pos.N names).
-    if (/[a-zA-Z_]/.test(ch)) {
+    // Bracket-quoted column name: `[地面速度_μm/s]`. The content is data, not grammar.
+    if (isBracketOpenAt(input, i)) {
+      const scanned = scanBracket(input, i);
+      if (!scanned) {
+        throw new ExpressionError(
+          `Expected ']' to close the column name`,
+          i,
+          'expectedClose',
+          { name: '[' },
+        );
+      }
+      tokens.push({ type: 'ident', value: trimName(scanned.inner), pos: i, quoted: true });
+      i = scanned.next;
+      continue;
+    }
+
+    // Full-width punctuation stands in for its ASCII operator (（） ， × ／ － …). This has
+    // to be classified before the identifier rule, because every full-width glyph is also
+    // a non-ASCII byte and would otherwise be swallowed into a name.
+    {
+      const ascii = fullWidthAt(input, i);
+      if (ascii !== null) {
+        const pos = i;
+        if (ascii === '(') tokens.push({ type: 'lparen', value: '(', pos });
+        else if (ascii === ')') tokens.push({ type: 'rparen', value: ')', pos });
+        else if (ascii === ',') tokens.push({ type: 'comma', value: ',', pos });
+        else if (ascii === '>' || ascii === '<' || ascii === '!=') {
+          tokens.push({ type: 'compare', value: ascii, pos });
+        } else if (ascii.length === 1 && OPERATORS.has(ascii)) {
+          tokens.push({ type: 'op', value: ascii, pos });
+        } else {
+          throw new ExpressionError(
+            `Unexpected character '${ch}' at position ${pos}`,
+            pos,
+            'unexpectedChar',
+            { char: ch, position: pos },
+          );
+        }
+        i++;
+        continue;
+      }
+    }
+
+    // Identifier: letter, underscore, digit, dot (for Pos.N names), or any non-ASCII
+    // character — an annotated column is referred to by the spelling its card advertises
+    // ("时间_秒"). Structural punctuation and a bracket opener end the run.
+    if (/[a-zA-Z_]/.test(ch) || isNonAscii(ch)) {
       const start = i;
-      while (i < input.length && /[a-zA-Z0-9_.]/.test(input[i])) i++;
-      tokens.push({ type: 'ident', value: input.slice(start, i), pos: start });
+      while (i < input.length) {
+        const c = input[i];
+        if (fullWidthAt(input, i) !== null || isBracketOpenAt(input, i)) break;
+        if (!/[a-zA-Z0-9_.]/.test(c) && !isNonAscii(c)) break;
+        i++;
+      }
+      let ident = input.slice(start, i);
+      // Hard stop against a stall: a branch that consumes nothing must never spin.
+      if (ident === '') {
+        throw new ExpressionError(
+          `Unexpected character '${ch}' at position ${i}`,
+          i,
+          'unexpectedChar',
+          { char: ch, position: i },
+        );
+      }
+      // `A.[名字]` / `src.[名字]`: the alias prefix and the quoted column are one name.
+      if (i < input.length && isBracketOpenAt(input, i) && ident.endsWith('.')) {
+        ident = ident.slice(0, -1);
+        const scanned = scanBracket(input, i);
+        if (!scanned) {
+          throw new ExpressionError(
+            `Expected ']' to close the column name`,
+            i,
+            'expectedClose',
+            { name: '[' },
+          );
+        }
+        tokens.push({
+          type: 'ident',
+          value: `${ident}.${trimName(scanned.inner)}`,
+          pos: start,
+          quoted: true,
+        });
+        i = scanned.next;
+        continue;
+      }
+      tokens.push({ type: 'ident', value: ident, pos: start });
       continue;
     }
 
@@ -133,7 +273,7 @@ const PRECEDENCE: Record<string, number> = {
 const RIGHT_ASSOC = new Set(['^']);
 
 /** Built-in functions and their minimum/maximum argument counts. */
-const FUNCTIONS: Record<string, { minArgs: number; maxArgs: number }> = {
+export const FUNCTIONS: Record<string, { minArgs: number; maxArgs: number }> = {
   // Aggregations (reduce a column to a scalar, then broadcast).
   SUM: { minArgs: 1, maxArgs: 1 },
   AVG: { minArgs: 1, maxArgs: 1 },
@@ -260,8 +400,8 @@ function parse(tokens: Token[], ctx: CompileContext): ASTNode {
       advance();
       const name = token.value;
 
-      // Function call?
-      if (peek().type === 'lparen') {
+      // Function call? Not for a bracketed name — `[SUM](…)` is a column named SUM.
+      if (!token.quoted && peek().type === 'lparen') {
         const upper = name.toUpperCase();
         if (!(upper in FUNCTIONS)) {
           throw new ExpressionError(`Unknown function '${name}'`, token.pos, 'unknownFunction', {
@@ -668,16 +808,68 @@ export interface CompiledExpression {
  * @param columnNames - Ordered list of available column names (used for name→index mapping).
  * @returns A compiled expression that can be evaluated against column data.
  */
-export function compile(expression: string, columnNames: string[]): CompiledExpression {
+/**
+ * One input port's slice of the flat column list — mirrors `AliasRange` in
+ * `backend/src/expression.h`. A card with several tables needs `A.pos.1` / `B.温度` to say
+ * which table a column belongs to.
+ */
+export interface AliasRange {
+  alias: string;
+  first: number;
+  count: number;
+}
+
+/**
+ * Every spelling a column answers to (first = its display label).
+ *
+ * An annotated column's display label is "Pos.1 时间_秒", so registering only that string
+ * made the column unreachable by any name: the annotation did not tokenise before the
+ * Unicode identifier rule and `Pos.1` missed because the position name had been glued to
+ * the annotation. Both spellings are what the card advertises, so both resolve.
+ */
+export function keysForColumn(label: string): string[] {
+  const lower = label.toLowerCase();
+  const keys = [lower];
+  const space = lower.indexOf(' ');
+  if (lower.startsWith('pos.')) {
+    const posName = space < 0 ? lower : lower.slice(0, space);
+    keys.push(posName); // "pos.1"
+    if (posName.length > 4) keys.push(posName.slice(4)); // its number: "1"
+    if (space >= 0 && space + 1 < lower.length) keys.push(lower.slice(space + 1)); // annotation
+  } else if (space >= 0 && space + 1 < lower.length) {
+    keys.push(lower.slice(space + 1));
+  }
+  return keys;
+}
+
+export function compile(
+  expression: string,
+  columnNames: string[],
+  aliases: AliasRange[] = [],
+): CompiledExpression {
   const columns = new Map<string, number>();
   const references: string[] = [];
 
+  const keysByColumn: string[][] = [];
   for (let i = 0; i < columnNames.length; i++) {
     const name = columnNames[i];
+    keysByColumn.push(keysForColumn(name));
+    // The full label keeps last-wins (duplicates resolve to the last one, as before);
+    // every alias is additive and first-wins, so an earlier column is never shadowed.
     columns.set(name.toLowerCase(), i);
-    // Also register without the "Pos." prefix for convenience.
-    if (name.startsWith('Pos.')) {
-      columns.set(name.slice(4).toLowerCase(), i);
+    for (let k = 1; k < keysByColumn[i].length; k++) {
+      if (!columns.has(keysByColumn[i][k])) columns.set(keysByColumn[i][k], i);
+    }
+  }
+  // Qualified references (`A.pos.1`, `A.时间_秒`, `A.[地面速度_μm/s]`).
+  for (const range of aliases) {
+    if (!range.alias) continue;
+    const prefix = `${range.alias.toLowerCase()}.`;
+    const end = Math.min(columnNames.length, range.first + range.count);
+    for (let i = range.first; i < end; i++) {
+      for (const key of keysByColumn[i]) {
+        if (!columns.has(prefix + key)) columns.set(prefix + key, i);
+      }
     }
   }
 

@@ -71,6 +71,16 @@
     { "name": "err-bad-arg-count", "columns": [{ "name": "A", "data": [1] }, { "name": "B", "data": [1] }], "expression": "IF(A, B)", "error": { "code": "badArgCount" } },
     { "name": "err-unexpected-char", "columns": [{ "name": "A", "data": [1] }], "expression": "A @ B", "error": { "code": "unexpectedChar", "position": 2 } },
     { "name": "err-trailing-token", "columns": [{ "name": "A", "data": [1] }], "expression": "A A", "error": { "code": "trailingToken" } },
-    { "name": "err-unclosed-paren", "columns": [{ "name": "A", "data": [1] }], "expression": "(A + 1", "error": { "code": "expectedClose" } }
+    { "name": "err-unclosed-paren", "columns": [{ "name": "A", "data": [1] }], "expression": "(A + 1", "error": { "code": "expectedClose" } },
+    {"name": "annotated-pos-name", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "Pos.1 + Pos.2", "expect": [11, 22], "tol": 0},
+    {"name": "annotated-pos-name-case-insensitive", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "pOs.2 / 2", "expect": [5, 10], "tol": 0},
+    {"name": "annotated-bare-annotation", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "时间_秒 * 2", "expect": [2, 4], "tol": 0},
+    {"name": "bracketed-symbol-name", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "[地面速度_μm/s] / 2", "expect": [5, 10], "tol": 0},
+    {"name": "bracketed-padded-and-pos", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "[ Pos.1 ] + 1", "expect": [2, 3], "tol": 0},
+    {"name": "bracketed-fullwidth-brackets", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "【地面速度_μm/s】／2", "expect": [5, 10], "tol": 0},
+    {"name": "fullwidth-punctuation", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "（时间_秒 ＋ 1）× 2", "expect": [4, 6], "tol": 0},
+    {"name": "fullwidth-comma-in-call", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "IF(时间_秒 > 1， 1， 0)", "expect": [0, 1], "tol": 0},
+    {"name": "err-unknown-column-cjk", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "找不到的列 * 2", "error": {"code": "unknownColumn"}},
+    {"name": "err-unclosed-bracket", "columns": [{"name": "Pos.1 时间_秒", "data": [1, 2]}, {"name": "Pos.2 地面速度_μm/s", "data": [10, 20]}], "expression": "[Pos.1", "error": {"code": "expectedClose", "position": 0}}
   ]
 }

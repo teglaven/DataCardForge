@@ -318,4 +318,137 @@ describe('expression engine', () => {
       ).toBeNaN();
     });
   });
+  /**
+   * Annotated tables used to be unaddressable by every spelling: the display label is
+   * "Pos.1 时间_秒", the annotation did not tokenise (ASCII-only identifiers), and `Pos.1`
+   * missed because the position name had been glued to the annotation. These pin both
+   * spellings plus the bracketed form for names containing reserved symbols.
+   */
+  describe('column reference spellings', () => {
+    const annotated = cols({
+      'Pos.1 时间_秒': [1, 2],
+      'Pos.2 地面速度_μm/s': [10, 20],
+    });
+
+    it('resolves the position name of an annotated column', () => {
+      expect(evaluateExpression('Pos.1 + Pos.2', annotated)).toEqual([11, 22]);
+    });
+
+    it('resolves position names case-insensitively', () => {
+      expect(evaluateExpression('pOs.1 * 2', annotated)).toEqual([2, 4]);
+    });
+
+    it('keeps numerals as numbers, not column numbers', () => {
+      // The number spelling of Pos.N is unreachable by design: `1` is a literal, which is
+      // why the position name is the only stable numeric handle. Locked here so the
+      // alias table is never "fixed" into shadowing literals.
+      expect(evaluateExpression('1 + 1', annotated)).toEqual([2, 2]);
+    });
+
+    it('resolves a CJK annotation by its own spelling', () => {
+      expect(evaluateExpression('时间_秒 * 2', annotated)).toEqual([2, 4]);
+    });
+
+    it('resolves a bracketed name verbatim, including "/" and "μ"', () => {
+      expect(evaluateExpression('[地面速度_μm/s] / 2', annotated)).toEqual([5, 10]);
+      expect(evaluateExpression('[ Pos.1 ] + 1', annotated)).toEqual([2, 3]);
+    });
+
+    it('accepts full-width brackets and punctuation', () => {
+      expect(evaluateExpression('【地面速度_μm/s】／2', annotated)).toEqual([5, 10]);
+      expect(evaluateExpression('（时间_秒 ＋ 1）× 2', annotated)).toEqual([4, 6]);
+      expect(evaluateExpression('IF(时间_秒 > 1， 1， 0)', annotated)).toEqual([0, 1]);
+    });
+
+    it('treats a bracketed name as a column, never a function call', () => {
+      const named = cols({ 'Pos.1 SUM': [4, 5] });
+      expect(evaluateExpression('[SUM] * 2', named)).toEqual([8, 10]);
+    });
+
+    it('names the offending token on an unknown column', () => {
+      try {
+        evaluateExpression('Pos.9 * 2', annotated);
+        throw new Error('expected a throw');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ExpressionError);
+        const e = error as ExpressionError;
+        expect(e.code).toBe('unknownColumn');
+        expect(e.params.name).toBe('Pos.9');
+      }
+    });
+  });
+
+  /**
+   * Multi-input cards qualify a reference with the port: `A.pos.1`, `src.温度`,
+   * `A.[地面速度_μm/s]`. The letter follows the port declaration order; the port id works
+   * too, and both are case-insensitive.
+   */
+  describe('qualified references', () => {
+    const names = ['Pos.1 时间_秒', 'Pos.2 地面速度_μm/s'];
+    const data = [
+      [1, 2],
+      [10, 20],
+    ];
+    const aliases = [
+      { alias: 'A', first: 0, count: 2 },
+      { alias: 'src', first: 0, count: 2 },
+    ];
+
+    const run = (expression: string) => compile(expression, names, aliases).evaluate(data, 2);
+
+    it('resolves a qualified position name', () => {
+      expect(run('A.pos.2 / 2')).toEqual([5, 10]);
+      expect(run('a.POS.1 + 1')).toEqual([2, 3]);
+    });
+
+    it('resolves a qualified annotation', () => {
+      expect(run('A.时间_秒 * 2')).toEqual([2, 4]);
+    });
+
+    it('resolves a qualified bracketed name', () => {
+      expect(run('A.[地面速度_μm/s] * 2')).toEqual([20, 40]);
+      expect(run('A.【地面速度_μm/s】 * 2')).toEqual([20, 40]);
+    });
+
+    it('also accepts the port id as the qualifier', () => {
+      expect(run('src.时间_秒 * 3')).toEqual([3, 6]);
+    });
+
+    it('keeps unqualified references working alongside qualified ones', () => {
+      expect(run('时间_秒 + A.时间_秒')).toEqual([2, 4]);
+    });
+
+    it('reports an unknown qualifier as an unknown column', () => {
+      try {
+        run('C.pos.1');
+        throw new Error('expected a throw');
+      } catch (error) {
+        expect((error as ExpressionError).code).toBe('unknownColumn');
+      }
+    });
+  });
+
+  describe('structured error params', () => {
+    it('reports the offending character of a namespace', () => {
+      try {
+        evaluateExpression('A ^ :', cols({ A: [1] }));
+        throw new Error('expected a throw');
+      } catch (error) {
+        const e = error as ExpressionError;
+        expect(e.code).toBe('unexpectedChar');
+        expect(e.params).toMatchObject({ char: ':', position: 4 });
+      }
+    });
+
+    it('reports the declared arity of a bad call', () => {
+      try {
+        evaluateExpression('IF(A, 1)', cols({ A: [1] }));
+        throw new Error('expected a throw');
+      } catch (error) {
+        const e = error as ExpressionError;
+        expect(e.code).toBe('badArgCount');
+        expect(e.params).toMatchObject({ name: 'IF', min: 3, max: 3, got: 2 });
+      }
+    });
+  });
 });

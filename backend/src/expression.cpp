@@ -22,6 +22,8 @@ struct Token {
   Tok type;
   std::string value;
   int64_t pos;
+  // `[名字]` produced this token: it is always a column reference, never a function call.
+  bool quoted = false;
 };
 
 std::string toLower(std::string s) {
@@ -37,10 +39,146 @@ std::string toUpper(std::string s) {
 }
 
 bool isDigit(char c) { return c >= '0' && c <= '9'; }
+
+// Identifiers are UTF-8 byte runs, and every byte >= 0x80 counts as a name byte. That is
+// what makes an annotated column addressable by the spelling the card advertises
+// ("时间_秒", "地面速度_μm/s" when bracketed) without pulling a Unicode tables dependency
+// into either engine: the ranges are structural punctuation and are carved out below.
 bool isIdentStart(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+  const unsigned char u = static_cast<unsigned char>(c);
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || u >= 0x80;
 }
 bool isIdentChar(char c) { return isIdentStart(c) || isDigit(c) || c == '.'; }
+
+// ── full-width / CJK punctuation ───────────────────────────────────────
+//
+// A Chinese IME produces （） ，× ／ － for what the grammar needs as () , * / - . Rather
+// than rewriting the whole expression up front (which would corrupt names that legitimately
+// contain full-width glyphs — `[温度（℃）]` must keep its parentheses), each glyph is
+// mapped at the point the tokenizer classifies it.
+struct FullWidthGlyph {
+  const char* glyph;
+  const char* ascii;
+};
+
+const FullWidthGlyph kFullWidth[] = {
+    {"（", "("}, {"）", ")"}, {"，", ","}, {"、", ","}, {"＋", "+"}, {"－", "-"},
+    {"−", "-"}, {"＊", "*"}, {"×", "*"}, {"／", "/"}, {"÷", "/"}, {"％", "%"},
+    {"＾", "^"}, {"＝", "="}, {"＞", ">"}, {"＜", "<"}, {"≠", "!="},
+    {"　", " "},  // U+3000 ideographic space
+};
+
+// Byte length of the UTF-8 sequence starting at `i` (1 for ASCII and for malformed bytes).
+size_t utf8Length(const std::string& in, size_t i) {
+  const unsigned char c = static_cast<unsigned char>(in[i]);
+  if (c < 0x80) return 1;
+  if ((c & 0xE0) == 0xC0) return 2;
+  if ((c & 0xF0) == 0xE0) return 3;
+  if ((c & 0xF8) == 0xF0) return 4;
+  return 1;
+}
+
+// When `in[i..]` starts with a full-width glyph, consume it and report its ASCII meaning.
+bool matchFullWidth(const std::string& in, size_t i, size_t* len, std::string* ascii) {
+  for (const auto& entry : kFullWidth) {
+    const std::string glyph(entry.glyph);
+    if (in.compare(i, glyph.size(), glyph) == 0) {
+      *len = glyph.size();
+      *ascii = entry.ascii;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isStructuralAt(const std::string& in, size_t i) {
+  size_t len = 0;
+  std::string ascii;
+  return matchFullWidth(in, i, &len, &ascii);
+}
+
+// Character (code point) index of a byte offset. Error positions cross the wire as "第 N 个
+// 字符" and the TS engine counts UTF-16 units, so counting only non-continuation bytes is
+// what keeps the two engines reporting the same position for mixed ASCII/CJK input.
+int64_t codePointIndex(const std::string& in, size_t byteIndex) {
+  int64_t count = 0;
+  for (size_t i = 0; i < byteIndex && i < in.size(); ++i) {
+    if ((static_cast<unsigned char>(in[i]) & 0xC0) != 0x80) ++count;
+  }
+  return count;
+}
+
+const char* const kOpenBrackets[] = {"[", "［", "【"};
+const char* const kCloseBrackets[] = {"]", "］", "】"};
+
+bool isBracketOpen(const std::string& in, size_t i) {
+  for (const char* open : kOpenBrackets) {
+    if (in.compare(i, std::string(open).size(), open) == 0) return true;
+  }
+  return false;
+}
+
+std::string trimName(std::string s) {
+  auto stripFront = [&s]() {
+    while (!s.empty()) {
+      if (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n') {
+        s.erase(0, 1);
+      } else if (s.compare(0, 3, "　") == 0) {
+        s.erase(0, 3);
+      } else {
+        break;
+      }
+    }
+  };
+  auto stripBack = [&s]() {
+    while (!s.empty()) {
+      const char last = s.back();
+      if (last == ' ' || last == '\t' || last == '\r' || last == '\n') {
+        s.pop_back();
+      } else if (s.size() >= 3 && s.compare(s.size() - 3, 3, "　") == 0) {
+        s.erase(s.size() - 3);
+      } else {
+        break;
+      }
+    }
+  };
+  stripFront();
+  stripBack();
+  return s;
+}
+
+/**
+ * Scan a bracketed column name starting at `i` (which points at the opener).
+ *
+ * Everything up to the closer is taken verbatim — that is the entire point: `/`, spaces,
+ * parentheses and full-width glyphs inside a name are data, not operators.
+ */
+bool scanBracket(const std::string& in, size_t* i, std::string* inner, int64_t* openPos) {
+  size_t len = 0;
+  for (const char* open : kOpenBrackets) {
+    const std::string glyph(open);
+    if (in.compare(*i, glyph.size(), glyph) == 0) {
+      len = glyph.size();
+      break;
+    }
+  }
+  if (len == 0) return false;
+  *openPos = codePointIndex(in, *i);
+  const size_t contentStart = *i + len;
+  size_t j = contentStart;
+  while (j < in.size()) {
+    for (const char* close : kCloseBrackets) {
+      const std::string glyph(close);
+      if (in.compare(j, glyph.size(), glyph) == 0) {
+        inner->assign(in, contentStart, j - contentStart);
+        *i = j + glyph.size();
+        return true;
+      }
+    }
+    j += utf8Length(in, j);
+  }
+  return false;  // unclosed: the caller reports "expectedClose"
+}
 
 // JS `Math.round`, which the TS reference uses for ROUND: half rounds toward +Infinity,
 // whereas std::round rounds half away from zero (Math.round(-1.5) = -1 but
@@ -85,10 +223,20 @@ inline double jsPow(double base, double exp) {
 std::vector<Token> tokenize(const std::string& input) {
   static const std::string kOps = "+-*/^%";
   static const std::vector<std::string> kCompares = {">=", "<=", "==", "!=", ">", "<"};
+  // Positions cross the wire as a character index ("第 N 个字符"); the TS engine counts
+  // UTF-16 units, this engine counts UTF-8 code points, and the two agree for everything
+  // in the BMP — which is every identifier this grammar accepts.
+  auto at = [&input](size_t byteIndex) { return codePointIndex(input, byteIndex); };
+
   std::vector<Token> tokens;
   size_t i = 0;
   while (i < input.size()) {
     char ch = input[i];
+    {
+      size_t wsLen = 0;
+      std::string wsAscii;
+      if (matchFullWidth(input, i, &wsLen, &wsAscii) && wsAscii == " ") { i += wsLen; continue; }
+    }
     if (std::isspace(static_cast<unsigned char>(ch))) { ++i; continue; }
     if (isDigit(ch) || (ch == '.' && i + 1 < input.size() && isDigit(input[i + 1]))) {
       size_t start = i;
@@ -98,19 +246,76 @@ std::vector<Token> tokenize(const std::string& input) {
         if (i < input.size() && (input[i] == '+' || input[i] == '-')) ++i;
         while (i < input.size() && isDigit(input[i])) ++i;
       }
-      tokens.push_back({Tok::Number, input.substr(start, i - start), static_cast<int64_t>(start)});
+      tokens.push_back({Tok::Number, input.substr(start, i - start), at(start)});
       continue;
+    }
+    // Bracket-quoted column name: `[地面速度_μm/s]`. The content is data, not grammar.
+    if (isBracketOpen(input, i)) {
+      std::string inner;
+      int64_t openPos = 0;
+      if (!scanBracket(input, &i, &inner, &openPos)) {
+        throw ExpressionError("Expected ']' to close the column name", openPos, "expectedClose",
+                              "[");
+      }
+      Token tok{Tok::Ident, trimName(inner), openPos, true};
+      tokens.push_back(std::move(tok));
+      continue;
+    }
+    // Full-width punctuation stands in for its ASCII operator (（） ， × ／ － …).
+    {
+      size_t fwLen = 0;
+      std::string fwAscii;
+      if (matchFullWidth(input, i, &fwLen, &fwAscii)) {
+        const int64_t pos = at(i);
+        if (fwAscii == "(") tokens.push_back({Tok::LParen, "(", pos});
+        else if (fwAscii == ")") tokens.push_back({Tok::RParen, ")", pos});
+        else if (fwAscii == ",") tokens.push_back({Tok::Comma, ",", pos});
+        else if (fwAscii == ">" || fwAscii == "<") tokens.push_back({Tok::Compare, fwAscii, pos});
+        else if (fwAscii == "!=") tokens.push_back({Tok::Compare, "!=", pos});
+        else if (fwAscii.size() == 1 && kOps.find(fwAscii[0]) != std::string::npos)
+          tokens.push_back({Tok::Op, fwAscii, pos});
+        else
+          throw ExpressionError("Unexpected character '" + std::string(input, i, fwLen) +
+                                    "' at position " + std::to_string(pos),
+                                pos, "unexpectedChar", std::string(input, i, fwLen));
+        i += fwLen;
+        continue;
+      }
     }
     if (isIdentStart(ch)) {
       size_t start = i;
-      while (i < input.size() && isIdentChar(input[i])) ++i;
-      tokens.push_back({Tok::Ident, input.substr(start, i - start), static_cast<int64_t>(start)});
+      while (i < input.size() && isIdentChar(input[i]) && !isStructuralAt(input, i) &&
+             !isBracketOpen(input, i)) ++i;
+      std::string ident = input.substr(start, i - start);
+      // Hard stop against a stall: an identifier branch that consumes nothing must never
+      // loop forever (that is what the full-width-ordering bug above used to do).
+      if (ident.empty()) {
+        const std::string bad(input, i, utf8Length(input, i));
+        throw ExpressionError("Unexpected character '" + bad + "' at position " +
+                                  std::to_string(at(i)),
+                              at(i), "unexpectedChar", bad);
+      }
+      // `A.[名字]` / `src.[名字]`: a qualified bracket reference is one name, so the alias
+      // prefix and the quoted column are spliced here rather than in the parser.
+      if (i < input.size() && isBracketOpen(input, i) && !ident.empty() && ident.back() == '.') {
+        ident.pop_back();
+        std::string inner;
+        int64_t openPos = 0;
+        if (!scanBracket(input, &i, &inner, &openPos)) {
+          throw ExpressionError("Expected ']' to close the column name", openPos, "expectedClose",
+                                "[");
+        }
+        Token tok{Tok::Ident, ident + "." + trimName(inner), at(start), true};
+        tokens.push_back(std::move(tok));
+        continue;
+      }
+      tokens.push_back({Tok::Ident, ident, at(start)});
       continue;
     }
     bool matched = false;
     for (const auto& two : kCompares) {
       if (input.compare(i, 2, two) == 0) {
-        tokens.push_back({Tok::Compare, two, static_cast<int64_t>(i)});
+        tokens.push_back({Tok::Compare, two, at(i)});
         i += 2;
         matched = true;
         break;
@@ -118,23 +323,26 @@ std::vector<Token> tokenize(const std::string& input) {
     }
     if (matched) continue;
     if (ch == '>' || ch == '<') {
-      tokens.push_back({Tok::Compare, std::string(1, ch), static_cast<int64_t>(i)});
+      tokens.push_back({Tok::Compare, std::string(1, ch), at(i)});
       ++i;
       continue;
     }
     if (kOps.find(ch) != std::string::npos) {
-      tokens.push_back({Tok::Op, std::string(1, ch), static_cast<int64_t>(i)});
+      tokens.push_back({Tok::Op, std::string(1, ch), at(i)});
       ++i;
       continue;
     }
-    if (ch == '(') { tokens.push_back({Tok::LParen, "(", static_cast<int64_t>(i)}); ++i; continue; }
-    if (ch == ')') { tokens.push_back({Tok::RParen, ")", static_cast<int64_t>(i)}); ++i; continue; }
-    if (ch == ',') { tokens.push_back({Tok::Comma, ",", static_cast<int64_t>(i)}); ++i; continue; }
-    throw ExpressionError("Unexpected character '" + std::string(1, ch) + "' at position " +
-                              std::to_string(i),
-                          static_cast<int64_t>(i), "unexpectedChar");
+    if (ch == '(') { tokens.push_back({Tok::LParen, "(", at(i)}); ++i; continue; }
+    if (ch == ')') { tokens.push_back({Tok::RParen, ")", at(i)}); ++i; continue; }
+    if (ch == ',') { tokens.push_back({Tok::Comma, ",", at(i)}); ++i; continue; }
+    // Report the whole code point, not one byte of it: a rejected full-width glyph has to
+    // read as the character the user typed.
+    const std::string bad(input, i, utf8Length(input, i));
+    throw ExpressionError("Unexpected character '" + bad + "' at position " +
+                              std::to_string(at(i)),
+                          at(i), "unexpectedChar", bad);
   }
-  tokens.push_back({Tok::Eof, "", static_cast<int64_t>(input.size())});
+  tokens.push_back({Tok::Eof, "", at(input.size())});
   return tokens;
 }
 
@@ -264,12 +472,14 @@ struct Parser {
     if (t.type == Tok::Ident) {
       advance();
       const std::string name = t.value;
-      if (peek().type == Tok::LParen) {
+      // A bracketed name is data: `[SUM](…)` is not a call, it is a column named SUM.
+      if (!t.quoted && peek().type == Tok::LParen) {
         std::string upper = toUpper(name);
         const auto& fns = functions();
         auto fit = fns.find(upper);
         if (fit == fns.end()) {
-          throw ExpressionError("Unknown function '" + name + "'", t.pos, "unknownFunction");
+          throw ExpressionError("Unknown function '" + name + "'", t.pos, "unknownFunction",
+                                name);
         }
         advance();  // consume '('
         std::vector<NodePtr> args;
@@ -293,9 +503,15 @@ struct Parser {
           std::string range = fit->second.minArgs == fit->second.maxArgs
                                   ? std::to_string(fit->second.minArgs)
                                   : std::to_string(fit->second.minArgs) + "–" + maxStr;
-          throw ExpressionError(name + "() expects " + range + " argument(s), got " +
-                                    std::to_string(got),
-                                t.pos, "badArgCount");
+          ExpressionError err(name + "() expects " + range + " argument(s), got " +
+                                  std::to_string(got),
+                              t.pos, "badArgCount", name);
+          // Carry the declared arity so the UI can say "「IF」需要 3 个参数，实际给了 2 个"
+          // instead of a bare "argument count" — the range is kept as a range.
+          err.argMin = fit->second.minArgs;
+          err.argMax = fit->second.maxArgs;
+          err.argGot = got;
+          throw err;
         }
         auto n = std::make_shared<Node>();
         n->kind = NodeKind::Call;
@@ -305,7 +521,7 @@ struct Parser {
       }
       auto cit = columns.find(toLower(name));
       if (cit == columns.end()) {
-        throw ExpressionError("Unknown column '" + name + "'", t.pos, "unknownColumn");
+        throw ExpressionError("Unknown column '" + name + "'", t.pos, "unknownColumn", name);
       }
       auto n = std::make_shared<Node>();
       n->kind = NodeKind::Column;
@@ -323,7 +539,7 @@ struct Parser {
       return expr;
     }
     std::string shown = t.value.empty() ? tokName(t.type) : t.value;
-    throw ExpressionError("Unexpected token '" + shown + "'", t.pos, "unexpectedToken");
+    throw ExpressionError("Unexpected token '" + shown + "'", t.pos, "unexpectedToken", shown);
   }
 
   static std::string tokName(Tok ty) {
@@ -345,7 +561,7 @@ NodePtr parseAst(const std::vector<Token>& tokens,
   NodePtr ast = p.parseExpression();
   if (p.peek().type != Tok::Eof) {
     throw ExpressionError("Unexpected token '" + p.peek().value + "' after expression",
-                          p.peek().pos, "trailingToken");
+                          p.peek().pos, "trailingToken", p.peek().value);
   }
   return ast;
 }
@@ -670,23 +886,51 @@ EvalFn compileAst(const NodePtr& node) {
   return nullptr;
 }
 
-std::unordered_map<std::string, int> buildColumnMap(const std::vector<std::string>& names) {
+// Every spelling a column answers to, in preference order (first = its display label).
+//
+// The display label of an annotated column is "Pos.1 时间_秒", so before this a table whose
+// columns had headers was addressable by NO name at all: the bare annotation did not
+// tokenise (`时间_秒` was "Unexpected character"), and `Pos.1` missed because the position
+// name had been concatenated with the annotation into one key. The card advertises both
+// spellings, so both have to resolve.
+std::vector<std::string> keysForColumn(const std::string& label) {
+  const std::string lower = toLower(label);
+  std::vector<std::string> keys{lower};
+  const size_t space = lower.find(' ');
+  if (lower.rfind("pos.", 0) == 0) {
+    const std::string posName = space == std::string::npos ? lower : lower.substr(0, space);
+    keys.push_back(posName);  // "pos.1" — the name the input zone prints
+    if (posName.size() > 4) keys.push_back(posName.substr(4));  // its number: "1"
+    if (space != std::string::npos && space + 1 < lower.size())
+      keys.push_back(lower.substr(space + 1));  // bare annotation
+  } else if (space != std::string::npos && space + 1 < lower.size()) {
+    keys.push_back(lower.substr(space + 1));
+  }
+  return keys;
+}
+
+std::unordered_map<std::string, int> buildColumnMap(const std::vector<std::string>& names,
+                                                   const std::vector<AliasRange>& aliases = {}) {
   std::unordered_map<std::string, int> map;
+  std::vector<std::vector<std::string>> keysByColumn(names.size());
   for (size_t i = 0; i < names.size(); ++i) {
+    keysByColumn[i] = keysForColumn(names[i]);
+    // The full label keeps last-wins (duplicate labels resolve to the last one, as before);
+    // every alias is additive and first-wins, so an earlier column is never shadowed.
     map[toLower(names[i])] = static_cast<int>(i);
-    if (names[i].rfind("Pos.", 0) == 0) {
-      // "Pos.N" is additionally addressable by its number ("1", "2").
-      map[toLower(names[i].substr(4))] = static_cast<int>(i);
-      // A labelled column also registers under its bare annotation: the display label is
-      // "Pos.1 A", but formulas refer to it as `A` — the same convention the TS reference
-      // engine and the old browser evaluator used. Without this, an annotated multi-column
-      // table was unaddressable by name (the whole "Pos.1 A" became one key containing a
-      // space). Additive only: never overwrites an existing key, so first-wins ordering and
-      // every previously resolvable formula are unchanged.
-      const size_t space = names[i].find(' ');
-      if (space != std::string::npos && space + 1 < names[i].size()) {
-        const std::string anno = toLower(names[i].substr(space + 1));
-        if (!anno.empty() && map.find(anno) == map.end()) map[anno] = static_cast<int>(i);
+    for (size_t k = 1; k < keysByColumn[i].size(); ++k) {
+      map.emplace(keysByColumn[i][k], static_cast<int>(i));
+    }
+  }
+  // Qualified references (`A.pos.1`, `A.时间_秒`, `A.[地面速度_μm/s]`) — a card with more
+  // than one table input needs to say which table a column belongs to.
+  for (const AliasRange& range : aliases) {
+    if (range.alias.empty()) continue;
+    const std::string prefix = toLower(range.alias) + ".";
+    const size_t end = std::min(names.size(), range.first + range.count);
+    for (size_t i = range.first; i < end && i < keysByColumn.size(); ++i) {
+      for (const std::string& key : keysByColumn[i]) {
+        map.emplace(prefix + key, static_cast<int>(i));
       }
     }
   }
@@ -717,9 +961,10 @@ void collectRefs(const NodePtr& node, std::vector<std::string>* out) {
 std::vector<double> ExprEngine::evaluate(const std::string& expression,
                                          const std::vector<std::string>& columnNames,
                                          const std::vector<std::vector<double>>& columns,
-                                         size_t length) {
+                                         size_t length,
+                                         const std::vector<AliasRange>& aliases) {
   auto tokens = tokenize(expression);
-  auto colMap = buildColumnMap(columnNames);
+  auto colMap = buildColumnMap(columnNames, aliases);
   NodePtr ast = parseAst(tokens, colMap);
   EvalFn fn = compileAst(ast);
   return fn(columns, length);

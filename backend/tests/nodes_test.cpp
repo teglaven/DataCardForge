@@ -437,6 +437,96 @@ int main() {
   CHECK(std::isnan(emptyTable.column(0).data[3]));   // sd: n = 0 ⇒ NaN, not 0
   CHECK(emptyTable.column(0).data[11] == 0);    // sem: n < 2 ⇒ 0
 
+  // ── a table whose columns have Chinese headers must be usable by its own labels ──
+  // Regression for the card that could not compute ANYTHING on an annotated file: the
+  // annotation did not tokenise and `Pos.1` missed because the position name had been
+  // glued to the annotation. Both spellings, the bracketed form and the port-qualified
+  // form are exercised through the real node path (gatherInputs → engine → params).
+  Column t0;
+  t0.posName = "Pos.1";
+  t0.annotation = "时间_秒";
+  t0.data = {0, 1};
+  Column t1;
+  t1.posName = "Pos.2";
+  t1.annotation = "地面速度_μm/s";
+  t1.data = {10, 20};
+  int64_t annotated = store.insert(Matrix({t0, t1}));
+
+  PortBinding annotatedSrc;
+  annotatedSrc.portId = "src";
+  annotatedSrc.varName = "src";
+  annotatedSrc.mode = "matrix";
+  annotatedSrc.sourceMatrixId = annotated;
+
+  auto runFormula = [&](const std::string& formula) {
+    auto created = nodes.create({annotatedSrc}, formula);
+    if (created.nodeId <= 0) return std::vector<double>{};
+    nodes.computeNow(created.nodeId);
+    return columnOf(store, nodes.get(created.nodeId) ? nodes.get(created.nodeId)->resultMatrixId() : -1);
+  };
+
+  CHECK(runFormula("时间_秒 * 2") == std::vector<double>({0, 2}));
+  CHECK(runFormula("Pos.1 * 2") == std::vector<double>({0, 2}));
+  CHECK(runFormula("pos.1 + 1") == std::vector<double>({1, 2}));
+  CHECK(runFormula("[地面速度_μm/s] / 2") == std::vector<double>({5, 10}));
+  CHECK(runFormula("【地面速度_μm/s】／2") == std::vector<double>({5, 10}));
+  CHECK(runFormula("（时间_秒 ＋ 1）× 2") == std::vector<double>({2, 4}));
+  // Qualified by the declaration letter and by the port id.
+  CHECK(runFormula("A.pos.2 / 2") == std::vector<double>({5, 10}));
+  CHECK(runFormula("src.[地面速度_μm/s] / 2") == std::vector<double>({5, 10}));
+
+  // The error the user actually saw: a name that cannot be spelled bare must come back as
+  // a structured, actionable error — the offending column/char travels in `params`, so the
+  // localised message can name it instead of printing a literal "{name}".
+  // The formula card itself goes through `builtin:expression-columns`, not the v1 path —
+  // the two evaluation sites must both see the alias ranges, or `A.pos.1` works in a unit
+  // test but fails in the card the user is looking at (that is exactly how this slipped).
+  {
+    Json params = Json::object();
+    Json formulas = Json::array();
+    Json row = Json::object();
+    row.set("name", Json(std::string("qualified")));
+    row.set("expression", Json(std::string("A.pos.1 * 2 + src.pos.2")));
+    formulas.push(row);
+    params.set("formulas", std::move(formulas));
+    auto qualified = nodes.createV2(kSigExpressionColumns, {annotatedSrc}, params);
+    CHECK(qualified.nodeId > 0);
+    nodes.computeNow(qualified.nodeId);
+    auto qualifiedNode = nodes.get(qualified.nodeId);
+    CHECK(qualifiedNode && qualifiedNode->state == NodeState::Done);
+    // A.pos.1 * 2 + src.pos.2 → [0*2+10, 1*2+20]
+    CHECK(columnOf(store, qualifiedNode ? qualifiedNode->resultMatrixId() : -1) ==
+          std::vector<double>({10, 22}));
+  }
+
+  auto bad = nodes.create({annotatedSrc}, "地面速度_μm/s * 2");
+  CHECK(bad.nodeId > 0);
+  nodes.computeNow(bad.nodeId);
+  auto badNode = nodes.get(bad.nodeId);
+  CHECK(badNode && badNode->state == NodeState::Error);
+  CHECK(badNode && badNode->errorCode == "unknownColumn");
+  CHECK(badNode && badNode->errorParams["name"].isString());
+  CHECK(badNode && badNode->errorParams["name"].asString() == "地面速度_μm");
+  CHECK(badNode && badNode->errorParams["position"].asNumber() == 0);
+
+  auto badChar = nodes.create({annotatedSrc}, "时间_秒 @ 2");
+  CHECK(badChar.nodeId > 0);
+  nodes.computeNow(badChar.nodeId);
+  auto badCharNode = nodes.get(badChar.nodeId);
+  CHECK(badCharNode && badCharNode->state == NodeState::Error);
+  CHECK(badCharNode && badCharNode->errorCode == "unexpectedChar");
+  CHECK(badCharNode && badCharNode->errorParams["char"].asString() == "@");
+  CHECK(badCharNode && badCharNode->errorParams["position"].asNumber() == 5);
+
+  auto badArity = nodes.create({annotatedSrc}, "IF(时间_秒, 1)");
+  CHECK(badArity.nodeId > 0);
+  nodes.computeNow(badArity.nodeId);
+  auto badArityNode = nodes.get(badArity.nodeId);
+  CHECK(badArityNode && badArityNode->errorCode == "badArgCount");
+  CHECK(badArityNode && badArityNode->errorParams["name"].asString() == "IF");
+  CHECK(badArityNode && badArityNode->errorParams["expected"].asNumber() == 3);
+  CHECK(badArityNode && badArityNode->errorParams["got"].asNumber() == 2);
+
   std::printf("%s: node_registry (%d failures)\n", failures == 0 ? "PASS" : "FAILED", failures);
   return failures == 0 ? 0 : 1;
 }
