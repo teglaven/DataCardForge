@@ -58,7 +58,10 @@
    `char` / `name` / `token` 与 `min` / `max` / `expected` / `got`，界面据此本地化，
    不再打印占位符。位置改为**码点计数**（TS 侧是 UTF-16 单元，BMP 内一致），
    中英混排时报错位置才对得上。
-6. **差分裁判扩充**：`web/tests/fixtures/xlayer/expression.v1.json` 增加中文列名、
+6. **默认表达式必须可拼写**：新建公式卡的默认 `名称 × 2` 里，名称用给用户看的注解，
+   表达式里的引用只有在能拼写时才用注解，否则退到 `Pos.N`（`workspaceStore.ts`
+   `formulaReference`）。否则默认公式就是一次演示失败的示范。
+7. **差分裁判扩充**：`web/tests/fixtures/xlayer/expression.v1.json` 增加中文列名、
    带表头 `Pos.N`、方括号、全角标点与两个错误用例；vitest 与 ctest 跑同一份 JSON。
 
 ## 已知取舍（明确不做）

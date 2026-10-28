@@ -791,6 +791,24 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
     }
   });
 
+  it('generates a default expression the engine can actually read', async () => {
+    // An annotated column whose name contains `/` cannot be written bare (`/` is
+    // division): the default formula used to be the prettiest spelling and therefore an
+    // immediate error on exactly the files this workbench is for.
+    const stub = stubBackend({ nodeResult: [[2, 4, 6]] });
+    try {
+      const srcId = await loadSource([[10], [20], [30]], ['地面速度_μm/s']);
+      store().addFormulaCard(srcId);
+      await flush();
+      const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(JSON.parse(creates[0].body!).params.formulas).toEqual([
+        { name: '地面速度_μm/s × 2', expression: 'Pos.1 * 2' },
+      ]);
+    } finally {
+      stub.restore();
+    }
+  });
+
   it('pulls the done result through the window endpoint into the display cache', async () => {
     const stub = stubBackend({ nodeResult: [[2, 4, 6]], nodeNames: ['Pos.1 doubled'] });
     try {

@@ -431,6 +431,29 @@ function sourceColumnLabel(column: { posName: string; annotation: string }): str
   return column.annotation !== '' ? column.annotation : column.posName;
 }
 
+/**
+ * Characters the expression grammar treats as structure, mirrored from the tokenizer
+ * (`backend/src/expression.cpp` / `core/expression.ts`). A name containing one of these is
+ * only reachable through `[列名]`.
+ */
+const STRUCTURAL_IN_NAME = /[\s+\-*/^%<>=!,()[\]（）［］【】，、×÷＋－＊／％＾＝＞＜≠　]/;
+
+/**
+ * The spelling a generated default formula should use for a column.
+ *
+ * The friendly annotation is preferred — it is what the user reads in the table — but only
+ * when the tokenizer can actually read it back. `地面速度_μm/s` cannot (`/` is division), and
+ * a numeric-looking label would be parsed as a literal, so those fall back to `Pos.N`,
+ * which always resolves (`buildColumnMap` registers it for every column).
+ */
+function formulaReference(column: { posName: string; annotation: string }): string {
+  const label = sourceColumnLabel(column);
+  if (label === '' || STRUCTURAL_IN_NAME.test(label) || /^[\d.]+$/.test(label)) {
+    return column.posName;
+  }
+  return label;
+}
+
 
 
 /**
@@ -1554,7 +1577,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // the raw posName: `Pos.1 * 2` fails on a table whose first column is annotated `A`.
       const firstColLabel =
         sourceMatrix.columnCount() > 0 ? sourceColumnLabel(sourceMatrix.column(0)) : 'A';
-      const formulas = [{ name: `${firstColLabel} × 2`, expression: `${firstColLabel} * 2` }];
+      // The label is what the user reads; the reference is what the engine can parse. They
+      // differ for names containing `/` or spaces — the default must be a working formula,
+      // not a demonstration of the failure.
+      const firstColReference =
+        sourceMatrix.columnCount() > 0 ? formulaReference(sourceMatrix.column(0)) : 'A';
+      const formulas = [{ name: `${firstColLabel} × 2`, expression: `${firstColReference} * 2` }];
 
       // The display cache starts EMPTY. It is filled only once the backend reports the node
       // `done` and we pull its result window — the browser computes nothing
