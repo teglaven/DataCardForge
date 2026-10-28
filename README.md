@@ -17,10 +17,10 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 
 **Author & provenance**: `teglaven` · GPL-3.0 · see [`PROVENANCE.md`](PROVENANCE.md) for the
 verifiable author identity, timeline and commit anchors.
-**Verified state** (last verified 2026-10-27): 394 frontend unit tests · 7 backend ctest cases
-(3 opt-in) · 65 end-to-end smoke checks — all green.
-**Not finished yet**: function cards are a work in progress and the per-port logical-connection hints
-are being repaired after the schema v2 refactor — both are spelled out under
+**Verified state** (last verified 2026-10-28): 449 frontend unit tests · 7 backend ctest cases
+(3 opt-in) · end-to-end smoke checks — all green.
+**Not finished yet**: function cards are a work in progress; per-port connections were repaired on
+2026-10-28 and hover/edge-editing are still missing — both are spelled out under
 [Status & known gaps](#status--known-gaps).
 
 ## Try it
@@ -115,12 +115,13 @@ The backend holds **authoritative copies** of all data, dependency graphs, and c
 > Both the TS reference and C++ engine must pass the same JSON — CI enforces this.
 
 ### Connection Visualization (ConnectionLayer)
-- Red = source table selected; blue = target chart selected; gray = neither selected
-- Highlighted lines are thick and **on top** (above the cards); normal lines are thin and gray, below the cards (dual layers)
-- Lines track in real time when cards move, resize **or when the table scrolls** (driven by a layout version counter, not a polling timer) — scrolling is what moves a column header, so it invalidates anchors just like a drag does
-- When a column scrolls out of the viewport → the line snaps to the left / right edge
-- When a column is visible → its header is framed with a semi-transparent box in the current color
+- **One line per dependency edge**: table → function card, function card → function card, and table/function → chart (after schema v2 a function card is a graph node too)
+- Endpoints land on a **port** when the edge names one and the card renders it (`portId` is the identity, never the position); otherwise they fall back to the card edge that faces the other card
+- Red = source card selected; blue = target card selected; gray = neither; every line carries an arrowhead at its target
+- Selecting a card labels its lines with the `portId`s they carry (multi-port edges fold into `+N`)
+- Lines track in real time when cards move or resize (driven by a layout version counter, not a polling timer); **table scrolling no longer moves them**
 - The layer is `pointer-events: none`, so it never steals input or affects layout (the **connection subordination** principle holds by construction)
+- `non-scaling-stroke` keeps the on-screen weight constant across the 10%–300% zoom range
 
 ### UI / Interaction
 - Consistent theme with automatic light/dark adaptation
@@ -168,7 +169,7 @@ gated by tests, while the card-graph layer is still being closed out.
 | Data cards, virtualised table, 9 chart types, exports, i18n, workspace persistence | **Done**, covered by unit + end-to-end gates |
 | Compute backend (expression engine, matrix operators, dependency graph, scheduling) | **Done** for the two shipped signatures (`builtin:expr`, `builtin:linear-regression`) |
 | **Function cards** | **Half-finished (WIP)** — see below |
-| **Logical-connection hints** | **Broken by the schema v2 refactor, repair pending** — see below |
+| **Port-level connections** | **Repaired 2026-10-28** (port ids on edges + port anchors + direction arrows) — see below |
 
 ### Function cards are still a work in progress
 
@@ -184,8 +185,6 @@ What is still missing, and why it is not "done":
   card states its inputs in words instead of rendering controls.
 - **Output selector (K > 1)** — the card model carries one display cache, so a signature with several
   outputs can only show output 0's table.
-- **Port anchors** — `portId` exists in the data model, but connection endpoints are still card-level,
-  so a port cannot be pointed at individually.
 - Interaction polish (layout, spacing, states) around the three panes.
 
 The data model and the contracts are settled (see
@@ -193,17 +192,17 @@ The data model and the contracts are settled (see
 [`2026-10-26-card-schema-v2.md`](docs/docs/decisions/2026-10-26-card-schema-v2.md)); what is missing is
 UI on top of it. Treat the function card as **API-stable, UX-incomplete**.
 
-### Logical-connection hints need repair after the refactor
+### Port-level connections (repaired 2026-10-28)
 
-The **per-port logical connection** hint is currently out of order. Connections are drawn at card
-level (one line per card-to-card dependency, with the "this table still feeds a chart" blink when a
-close is refused), and the card-level path is tested; the per-port layer — which port feeds which
-port, and what each connection means — lost its wiring when card schema v2 reshaped dependencies into
-an envelope and moved bindings onto ports. `portId` is in the model, the geometry and interaction are
-not.
+Schema v2 moved dependencies into the envelope and bindings onto ports, and the connection layer fell
+back to card-level: neither geometry nor interaction could see a `portId`. Dependency edges now
+**carry their port ids**, function cards register their input ports and output rows as anchors, and
+endpoints resolve in two steps — port first, then the card edge that faces the other card. Selecting a
+card labels its lines with the port identity.
 
-Consequence for users: connection behaviour you can trust is the card-level one; anything that would
-explain a link *at port granularity* should be treated as under repair, not as a bug report.
+Still missing: hover/selection of a single line, deleting a line (disconnecting means editing data and
+wants an undo path — tracked separately) and dragging a new line. See the
+[decision record](docs/docs/decisions/2026-10-28-port-level-connections.md).
 
 ## Tech Stack
 
@@ -319,11 +318,11 @@ GitHub Pages on every push that touches `web/` — that is what serves the live 
 - [x] **Whole-workbench zoom** → wheel zoom anchored on the cursor, 10%–300%, cards/fonts/charts/connections scale together (2026-10-21)
 - [ ] **Canvas minimap / zoom shortcuts**: overview and keyboard zoom (the entry point is clear: reuse resetView's fit maths)
 - [ ] **VirtualTable windowed data source**: large matrices fetched by visible-row window, not loaded whole
-- [ ] **Port anchors**: per-port connection endpoints in `cardMetrics` + `ConnectionLayer`
-- [ ] **Per-port logical-connection hints** (regressed by the schema v2 refactor — see [Status & known gaps](#status--known-gaps))
+- [x] **Port anchors**: per-port connection endpoints in `cardMetrics` + `ConnectionLayer` (2026-10-28)
+- [x] **Per-port logical-connection hints** (repaired 2026-10-28 — see [Status & known gaps](#status--known-gaps))
 - [x] **Four-state status lamps** (2026-10-27): driven by node state events (gray/yellow/green/red)
 - [ ] Data **editing** capability (non-file-backed cards, double-click edit + formula evaluation)
-- [ ] Connection arrows / red-blue bidirectional highlight
+- [x] Connection arrows pointing at the target (2026-10-28); bidirectional highlight still open
 - [ ] **Card beautification**: unify card styling, spacing, colors, and layout
 
 ## Long-term Roadmap
