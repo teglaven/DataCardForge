@@ -1338,6 +1338,9 @@ body {
      exactly when the user had something to look at. Overflow stays reachable by scroll. */
   flex: 0 0 auto;
   max-height: 45%;
+  /* Never smaller than two rows of expression input: a card resized by hand must keep the
+     editor usable, and the result grid is the pane that can afford to scroll instead. */
+  min-height: 58px;
   overflow-y: auto;
   padding: 5px 6px;
   border-bottom: 1px solid var(--border);
