@@ -181,20 +181,24 @@ export function FormulaCard({
    * The chip index *is* the column order — `sourceColumnNames` is built from the matrix's
    * own column list — so `Pos.${index + 1}` is exactly that column.
    *
-   * The insertion target is whichever expression input has focus; with none focused the
-   * first row is used, so a click still does something visible instead of nothing.
+   * The insertion target is whichever expression input has focus. With none focused the
+   * first row is used and its whole text is REPLACED: appending at the end turned the one
+   * affordance that exists to teach `Pos.N` into a red card (`时间_秒 * 2Pos.2` — "表达式
+   * 结束后多出「Pos.2」"). A click on a column chip with nothing focused means "use this
+   * column", not "glue this onto whatever was there".
    */
   const insertPositionRef = (reference: string): void => {
     const inputs = expressionRefs.current;
-    const target =
-      inputs.find((element) => element !== null && element === document.activeElement) ??
-      inputs.find((element) => element !== null);
+    const focused = inputs.find(
+      (element) => element !== null && element === document.activeElement,
+    );
+    const target = focused ?? inputs.find((element) => element !== null);
     if (!target) return;
     const row = inputs.indexOf(target);
     // Read the selection BEFORE touching the draft; React replaces the input's value on
     // commit, which discards the caret position.
-    const start = target.selectionStart ?? target.value.length;
-    const end = target.selectionEnd ?? start;
+    const start = focused ? (target.selectionStart ?? target.value.length) : 0;
+    const end = focused ? (target.selectionEnd ?? start) : target.value.length;
     setDraft((rows) =>
       rows.map((item, index) =>
         index === row

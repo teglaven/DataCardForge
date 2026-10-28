@@ -442,13 +442,16 @@ const STRUCTURAL_IN_NAME = /[\s+\-*/^%<>=!,()[\]（）［］【】，、×÷＋�
  * The spelling a generated default formula should use for a column.
  *
  * The friendly annotation is preferred — it is what the user reads in the table — but only
- * when the tokenizer can actually read it back. `地面速度_μm/s` cannot (`/` is division), and
- * a numeric-looking label would be parsed as a literal, so those fall back to `Pos.N`,
- * which always resolves (`buildColumnMap` registers it for every column).
+ * when the tokenizer can actually read it back. `地面速度_μm/s` cannot (`/` is division),
+ * and a label that *starts* with a digit or `.` cannot either: the tokenizer opens a number
+ * literal there, so `2号测点` reads as `2` followed by a stray identifier. Both fall back to
+ * `Pos.N`, which always resolves (`buildColumnMap` registers it for every column).
  */
 function formulaReference(column: { posName: string; annotation: string }): string {
   const label = sourceColumnLabel(column);
-  if (label === '' || STRUCTURAL_IN_NAME.test(label) || /^[\d.]+$/.test(label)) {
+  // A leading digit/dot is the lexer's rule (number literals win), not just a fully numeric
+  // label: "2号测点" is unspellable bare while "2" alone is merely a literal.
+  if (label === '' || STRUCTURAL_IN_NAME.test(label) || /^[\d.]/.test(label)) {
     return column.posName;
   }
   return label;

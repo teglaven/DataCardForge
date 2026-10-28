@@ -286,6 +286,26 @@ describe('available-column chips', () => {
     expect(expr.value).toBe('IF(Pos.1 > 0, 1, 0)Pos.2');
   });
 
+  it('replaces the expression when no input is focused', async () => {
+    // With nothing focused the chip means "use this column": appending produced
+    // `时间_秒 * 2Pos.2` and a red card, from the control that exists to teach `Pos.N`.
+    const card = makeCard({ params: { formulas: [{ name: 'out', expression: '时间_秒 * 2' }] } });
+    const host = await mountFormulaCard(card, ['时间_秒', 'snr_dB']);
+    const expr = host.querySelector<HTMLInputElement>('.formula-card__expr')!;
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    await act(async () => {
+      expr.blur();
+    });
+    const chips = [...host.querySelectorAll<HTMLButtonElement>('.formula-card__col-chip')];
+    await act(async () => {
+      chips[1].click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(expr.value).toBe('Pos.2');
+  });
+
   it('prints the reference it inserts, and lists every column', async () => {
     // Printing only the annotation taught nothing about what a click inserts, and the
     // 6-chip cap left columns 7+ of a 10-column table with no way to learn their number.

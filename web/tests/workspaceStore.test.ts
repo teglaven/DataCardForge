@@ -809,6 +809,23 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
     }
   });
 
+  it('falls back to Pos.N for an annotation that starts with a digit', async () => {
+    // The lexer opens a number literal at a leading digit, so `2号测点 * 2` is not a column
+    // reference at all — the default must not demonstrate that failure.
+    const stub = stubBackend({ nodeResult: [[2, 4, 6]] });
+    try {
+      const srcId = await loadSource([[10], [20], [30]], ['2号测点']);
+      store().addFormulaCard(srcId);
+      await flush();
+      const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(JSON.parse(creates[0].body!).params.formulas).toEqual([
+        { name: '2号测点 × 2', expression: 'Pos.1 * 2' },
+      ]);
+    } finally {
+      stub.restore();
+    }
+  });
+
   it('pulls the done result through the window endpoint into the display cache', async () => {
     const stub = stubBackend({ nodeResult: [[2, 4, 6]], nodeNames: ['Pos.1 doubled'] });
     try {
