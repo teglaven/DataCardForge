@@ -34,6 +34,12 @@ struct FunctionSignature {
   std::string displayName;
   std::vector<SignaturePort> inputs;
   std::vector<SignatureOutput> outputs;
+  // Whether a node evaluates at creation (the v2 behaviour every existing signature
+  // keeps) or only when the client explicitly asks, via POST /api/nodes/{id}/compute.
+  // "When does it run" is a property of the capability, not of one card: the client
+  // reads it from /api/signatures (`compute: "auto" | "explicit"`) and renders a
+  // compute action instead of assuming the numbers exist.
+  bool explicitCompute = false;
 };
 
 // Registry lookups. The returned pointers are valid for the process lifetime.
@@ -43,5 +49,13 @@ std::vector<const FunctionSignature*> allSignatures();
 // Well-known built-in ids.
 extern const char* const kSigExpressionColumns;
 extern const char* const kSigLinearRegression;
+extern const char* const kSigSummary;
+
+// The summary statistic catalog. Its ORDER is the output row order of `builtin:summary`,
+// and its ids are stable identities — never renamed, never reused, the same rule as
+// portId/outputId. `params.stats` selects a SUBSET of this catalog; it never reorders it
+// (row identity must not depend on the order a user typed). Row count is data (like the
+// column count of an expression table); K stays 1.
+const std::vector<std::string>& summaryStatCatalog();
 
 }  // namespace dc

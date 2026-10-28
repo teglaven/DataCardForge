@@ -8,6 +8,7 @@
 #include "expression.h"
 #include "matrix_value.h"  // ShapeError (matrix-mode failures)
 #include "signature.h"
+#include "summary.h"
 
 namespace dc {
 
@@ -19,6 +20,16 @@ const char* nodeName(NodeState s) {
     case NodeState::Error: return "error";
   }
   return "dirty";
+}
+
+const char* dirtyReasonName(DirtyReason r) {
+  switch (r) {
+    case DirtyReason::None: return "none";
+    case DirtyReason::NotRequested: return "notRequested";
+    case DirtyReason::UpstreamChanged: return "upstreamChanged";
+    case DirtyReason::DefinitionChanged: return "definitionChanged";
+  }
+  return "none";
 }
 
 void EventBus::publish(Json event) {
@@ -88,6 +99,15 @@ bool NodeRegistry::wouldCycle(int64_t dependentId, int64_t dependsOnId,
 }
 
 namespace {
+
+// Does this node's signature say "evaluate only when explicitly asked"?
+// Unknown signatures (should not exist past creation) are treated as eager, which is the
+// safe direction: computing a node that did not want to be computed is visible, while
+// silently never computing one is not.
+bool wantsExplicitCompute(const ComputeNode& node) {
+  const FunctionSignature* sig = findSignature(node.signatureId);
+  return sig != nullptr && sig->explicitCompute;
+}
 
 // Shared creation body. REQUIRES the registry lock to be held (create/createV2 take it).
 // `nOutputs` comes from the signature (K), never from the data.
@@ -204,8 +224,18 @@ NodeRegistry::CreateResult NodeRegistry::createV2(const std::string& signatureId
   }
 
   int64_t nodeId = nextNodeId_++;
-  return createLocked(&nodes_, &dependents_, &dependencies_, &resultOwner_, store_, nodeId,
-                      signatureId, inputs, "", params, sig->outputs.size());
+  CreateResult created = createLocked(&nodes_, &dependents_, &dependencies_, &resultOwner_,
+                                      store_, nodeId, signatureId, inputs, "", params,
+                                      sig->outputs.size());
+  // `explicitCompute` signatures are born "not requested": the result matrices exist (K is
+  // fixed by the signature) but hold no numbers until the client asks. Saying so here —
+  // rather than in the HTTP layer — keeps the status honest for every caller, fixtures
+  // included.
+  if (sig->explicitCompute && created.nodeId >= 0) {
+    auto it = nodes_.find(created.nodeId);
+    if (it != nodes_.end()) it->second.dirtyReason = DirtyReason::NotRequested;
+  }
+  return created;
 }
 
 bool NodeRegistry::updateParams(int64_t nodeId, const Json& params) {
@@ -214,6 +244,7 @@ bool NodeRegistry::updateParams(int64_t nodeId, const Json& params) {
   if (it == nodes_.end()) return false;
   it->second.params = params;
   it->second.state = NodeState::Dirty;
+  it->second.dirtyReason = DirtyReason::DefinitionChanged;
   ++it->second.definitionVersion;
   return true;
 }
@@ -257,6 +288,7 @@ bool NodeRegistry::update(int64_t nodeId, const std::string* formula,
   }
   if (formula) it->second.formula = *formula;
   it->second.state = NodeState::Dirty;
+  it->second.dirtyReason = DirtyReason::DefinitionChanged;
   ++it->second.definitionVersion;
   return true;
 }
@@ -432,6 +464,7 @@ void NodeRegistry::failNodeLocked(int64_t nodeId, const std::string& code, Json 
   if (it == nodes_.end()) return;
   ComputeNode& node = it->second;
   node.state = NodeState::Error;
+  node.dirtyReason = DirtyReason::None;
   node.errorCode = code;
   node.errorParams = std::move(params);
   // Drop the previous results: an erroring node must not keep serving the numbers from
@@ -581,6 +614,35 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
           }
         }
         if (errorCode.empty()) outputs.push_back(std::move(columns));
+      } else if (signatureId == kSigSummary) {
+        // builtin:summary — rows = the statistic catalog (signature.h), columns = the
+        // input variables. The maths all lives in the expression engine (summary.cpp only
+        // maps catalog ids to expressions), so there is exactly ONE definition of "sample
+        // standard deviation" in the process.
+        //
+        // `slices[0]` is the port's column range. Column labels arrive flattened
+        // ("Pos.1 A"), so they are split again: the output column inherits the source
+        // column's posName+annotation verbatim. That is what keeps an un-annotated column
+        // named "Pos.7" instead of inventing "A" / "AB" — invented labels run out of
+        // meaning long before they run out of letters.
+        std::vector<Column> inputColumns;
+        if (!slices.empty()) {
+          const PortSlice& slice = slices[0];
+          for (size_t i = 0; i < slice.columnCount; ++i) {
+            Column source;
+            Matrix::labelParsed(names[slice.firstColumn + i], &source.posName,
+                                &source.annotation);
+            source.data = data[slice.firstColumn + i];
+            inputColumns.push_back(std::move(source));
+          }
+        }
+        SummaryResult table = evaluateSummary(inputColumns, params);
+        if (!table.errorCode.empty()) {
+          errorCode = table.errorCode;
+          errorName = table.errorName;
+        } else {
+          outputs.push_back(std::move(table.columns));
+        }
       } else {
         errorCode = "unknownSignature";
         errorName = signatureId;
@@ -634,6 +696,7 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
     // The definition changed while we were computing: do not publish numbers that no
     // longer describe this node. Leave it dirty so the update's own recompute runs.
     node.state = NodeState::Dirty;
+    node.dirtyReason = DirtyReason::DefinitionChanged;
     bus_->publish(Json::object({{"nodeId", Json(nodeId)},
                                 {"state", Json(std::string("dirty"))}}));
     return;
@@ -660,6 +723,7 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   for (size_t i = 0; i < outputs.size(); ++i)
     store_->replace(node.resultMatrixIds[i], std::move(outputs[i]));
   node.state = NodeState::Done;
+  node.dirtyReason = DirtyReason::None;
   node.errorCode.clear();
   Json done = Json::object({{"nodeId", Json(nodeId)},
                             {"state", Json(std::string("done"))},
@@ -672,40 +736,114 @@ void NodeRegistry::evaluateNode(int64_t nodeId) {
   bus_->publish(std::move(done));
 }
 
-void NodeRegistry::recomputeSubtree(int64_t nodeId) {
-  // Collect the transitive dependents first (under the lock), then evaluate in
-  // topological order outside the registry lock sections that call back in.
+std::vector<int64_t> NodeRegistry::collectSubtree(int64_t nodeId, bool includeSelf) const {
+  // BFS over `dependents_` (edges point source->dependent, so this order is already
+  // dependency-first). The node's result matrices are mid-edges: whoever binds any of
+  // them depends on this node — K outputs ⇒ K keys.
   std::vector<int64_t> order;
-  {
-    std::lock_guard<std::mutex> lock(mu_);
-    std::set<int64_t> visited;
-    std::queue<int64_t> q;
-    q.push(nodeId);
-    while (!q.empty()) {
-      int64_t cur = q.front();
-      q.pop();
-      if (!visited.insert(cur).second) continue;
-      order.push_back(cur);
-      auto it = dependents_.find(cur);
-      if (it != dependents_.end())
-        for (int64_t d : it->second) q.push(d);
-      // The node's result matrices are mid-edges: whoever binds any of them depends on
-      // this node. K outputs ⇒ K keys.
-      auto nit = nodes_.find(cur);
-      if (nit != nodes_.end()) {
-        for (int64_t resultId : nit->second.resultMatrixIds) {
-          auto rit = dependents_.find(matrixKey(resultId));
-          if (rit != dependents_.end())
-            for (int64_t d : rit->second) q.push(d);
-        }
+  std::lock_guard<std::mutex> lock(mu_);
+  std::set<int64_t> visited;
+  std::queue<int64_t> q;
+  q.push(nodeId);
+  while (!q.empty()) {
+    int64_t cur = q.front();
+    q.pop();
+    if (!visited.insert(cur).second) continue;
+    if (cur != nodeId || includeSelf) order.push_back(cur);
+    auto it = dependents_.find(cur);
+    if (it != dependents_.end())
+      for (int64_t d : it->second) q.push(d);
+    auto nit = nodes_.find(cur);
+    if (nit != nodes_.end()) {
+      for (int64_t resultId : nit->second.resultMatrixIds) {
+        auto rit = dependents_.find(matrixKey(resultId));
+        if (rit != dependents_.end())
+          for (int64_t d : rit->second) q.push(d);
       }
     }
   }
-  // Topo order via BFS above is already dependency-first because edges point
-  // source->dependent; evaluate each node in turn. evaluateNode() takes the lock in short
-  // bursts itself, so this loop holds no lock at all — a slow node cannot freeze the
-  // registry (docs/decisions/2026-10-15-max-headroom-principle.md).
-  for (int64_t id : order) evaluateNode(id);
+  return order;
+}
+
+void NodeRegistry::markStaleLocked(int64_t nodeId, DirtyReason reason) {
+  auto it = nodes_.find(nodeId);
+  if (it == nodes_.end()) return;
+  ComputeNode& node = it->second;
+  // A user-facing cause outranks an upstream event: "you never asked me to compute" and
+  // "you just edited my parameters" stay true after some matrix upstream changed too, and
+  // overwriting them would hide the action the user actually needs to take.
+  const bool keepUserCause = node.state == NodeState::Dirty &&
+                             (node.dirtyReason == DirtyReason::NotRequested ||
+                              node.dirtyReason == DirtyReason::DefinitionChanged);
+  if (!keepUserCause) node.dirtyReason = reason;
+  const bool wasDirty = node.state == NodeState::Dirty;
+  node.state = NodeState::Dirty;
+  node.errorCode.clear();
+  node.errorParams = Json::object();
+  // Drop the previous numbers. "dirty" must mean "the values stored here do not describe
+  // the current inputs" — the same rule the error path already enforces, for the same
+  // audit finding (downstream cards reading stale numbers while showing a live state).
+  bool hadNumbers = false;
+  for (int64_t resultId : node.resultMatrixIds) {
+    Matrix existing;
+    if (store_->snapshot(resultId, &existing) && existing.columnCount() > 0) hadNumbers = true;
+    store_->replace(resultId, {});
+  }
+  if (!wasDirty || hadNumbers) {
+    Json event = Json::object({{"nodeId", Json(nodeId)},
+                               {"state", Json(std::string("dirty"))},
+                               {"reason", Json(std::string(dirtyReasonName(node.dirtyReason)))}});
+    bus_->publish(std::move(event));
+  }
+}
+
+void NodeRegistry::evaluateInOrder(const std::vector<int64_t>& order) {
+  // Nodes whose upstream is pending are marked, not evaluated: their input is not broken,
+  // it is simply not computed yet, and reporting a data error for that would be a lie the
+  // user cannot act on.
+  std::set<int64_t> blocked;
+  for (int64_t id : order) {
+    if (blocked.count(id)) {
+      std::lock_guard<std::mutex> lock(mu_);
+      markStaleLocked(id, DirtyReason::UpstreamChanged);
+      continue;
+    }
+    bool lazy = false;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      auto it = nodes_.find(id);
+      if (it == nodes_.end()) continue;
+      lazy = wantsExplicitCompute(it->second);
+    }
+    if (lazy) {
+      {
+        std::lock_guard<std::mutex> lock(mu_);
+        markStaleLocked(id, DirtyReason::UpstreamChanged);
+      }
+      for (int64_t dependent : collectSubtree(id, false)) blocked.insert(dependent);
+      continue;
+    }
+    evaluateNode(id);
+  }
+}
+
+void NodeRegistry::recomputeSubtree(int64_t nodeId) {
+  // The loop holds no lock: evaluateNode() takes it in short bursts itself, so a slow node
+  // cannot freeze the registry (docs/decisions/2026-10-15-max-headroom-principle.md).
+  evaluateInOrder(collectSubtree(nodeId, true));
+}
+
+void NodeRegistry::computeNow(int64_t nodeId) {
+  // An explicit request erases the "not requested" marker; the evaluation itself runs the
+  // usual phases (computing → done/error) under the usual definition-version guard.
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = nodes_.find(nodeId);
+    if (it == nodes_.end()) return;
+    it->second.dirtyReason = DirtyReason::None;
+  }
+  evaluateNode(nodeId);
+  evaluateInOrder(collectSubtree(nodeId, false));
 }
 
 void NodeRegistry::onMatrixChanged(int64_t matrixId) {

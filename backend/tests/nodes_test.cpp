@@ -8,6 +8,7 @@
 #include "expression.h"
 #include "matrix_store.h"
 #include "nodes.h"
+#include "signature.h"
 
 using namespace dc;
 
@@ -333,6 +334,108 @@ int main() {
   CHECK(store.snapshot(afterEdit->resultMatrixIds[0], &edited));
   CHECK(edited.columnCount() == 1);
   CHECK(edited.column(0).data == std::vector<double>({3, 6, 9, 12}));
+
+  // ── builtin:summary — lazy evaluation, and a dirty state that cannot be mistaken for
+  // "up to date". Three things are asserted here and nowhere else cheaply: creation does
+  // NOT compute, an upstream change drops the numbers instead of serving them, and the
+  // two dirty causes are distinguishable.
+  Column sa;
+  sa.posName = "Pos.1";
+  sa.annotation = "A";
+  sa.data = {1, 2, 3, 4};
+  Column sb;  // un-annotated on purpose: its display label must stay "Pos.2"
+  sb.posName = "Pos.2";
+  sb.annotation = "";
+  sb.data = {10, 20, 30, 40};
+  int64_t summarySource = store.insert(Matrix({sa, sb}));
+
+  PortBinding summarySrc;
+  summarySrc.portId = "src";
+  summarySrc.varName = "src";
+  summarySrc.mode = "matrix";
+  summarySrc.sourceMatrixId = summarySource;
+  auto summaryNode = nodes.createV2("builtin:summary", {summarySrc}, Json::object());
+  CHECK(summaryNode.nodeId > 0);
+
+  // Creation registers the edges but spends no compute: the signature says explicit.
+  nodes.recomputeSubtree(summaryNode.nodeId);
+  auto lazy = nodes.get(summaryNode.nodeId);
+  CHECK(lazy && lazy->state == NodeState::Dirty);
+  CHECK(lazy && lazy->dirtyReason == DirtyReason::NotRequested);
+  Matrix emptyResult;
+  CHECK(lazy && store.snapshot(lazy->resultMatrixIds[0], &emptyResult));
+  CHECK(emptyResult.columnCount() == 0);  // no numbers, not even zeros
+
+  // Explicit request: now it computes, and the shape is fixed by the signature + catalog.
+  nodes.computeNow(summaryNode.nodeId);
+  auto computed = nodes.get(summaryNode.nodeId);
+  CHECK(computed && computed->state == NodeState::Done);
+  CHECK(computed && computed->dirtyReason == DirtyReason::None);
+  Matrix table;
+  CHECK(computed && store.snapshot(computed->resultMatrixIds[0], &table));
+  CHECK(table.columnCount() == 2);
+  CHECK(table.column(0).annotation == "A");
+  // The output column's posName is the SOURCE column's posName: that is what keeps an
+  // un-annotated variable displayable as "Pos.2" instead of an invented letter.
+  CHECK(table.column(0).posName == "Pos.1");
+  CHECK(table.column(1).posName == "Pos.2");
+  CHECK(table.column(1).annotation.empty());
+  CHECK(table.column(0).data.size() == summaryStatCatalog().size());
+  CHECK(table.column(1).data.size() == summaryStatCatalog().size());
+  CHECK(table.column(0).data[0] == 4);      // n
+  CHECK(table.column(0).data[1] == 0);      // nan
+  CHECK(table.column(0).data[2] == 2.5);    // mean
+  CHECK(std::fabs(table.column(0).data[9] - 4.0) < 1e-12);   // max
+  CHECK(std::fabs(table.column(1).data[2] - 25.0) < 1e-12);  // mean of Pos.2
+
+  // Upstream change: back to dirty/upstreamChanged, and the old numbers are gone.
+  std::vector<CellPatch> patches = {{0, 0, 100.0}};
+  int64_t revision = 0;
+  CHECK(store.patchCells(summarySource, patches, &revision));
+  nodes.onMatrixChanged(summarySource);
+  auto stale = nodes.get(summaryNode.nodeId);
+  CHECK(stale && stale->state == NodeState::Dirty);
+  CHECK(stale && stale->dirtyReason == DirtyReason::UpstreamChanged);
+  Matrix clearedByUpstream;
+  CHECK(stale && store.snapshot(stale->resultMatrixIds[0], &clearedByUpstream));
+  CHECK(clearedByUpstream.columnCount() == 0);
+
+  // A second explicit request recovers with the new data.
+  nodes.computeNow(summaryNode.nodeId);
+  auto recovered = nodes.get(summaryNode.nodeId);
+  CHECK(recovered && recovered->state == NodeState::Done);
+  Matrix refreshed;
+  CHECK(recovered && store.snapshot(recovered->resultMatrixIds[0], &refreshed));
+  CHECK(refreshed.columnCount() == 2);
+  CHECK(refreshed.column(0).data[1] == 0);                  // nan unchanged
+  CHECK(std::fabs(refreshed.column(0).data[2] - 27.25) < 1e-12);  // (100+2+3+4)/4
+
+  // An EMPTY column (0 rows, a shape the HTTP layer really can register) still yields the
+  // whole catalog: n=0, nan=0, sem=0, everything else NaN. "Return 0 and move on" is the
+  // failure this block exists to catch.
+  Column emptyCol;
+  emptyCol.posName = "Pos.7";
+  emptyCol.annotation = "";
+  int64_t emptySource = store.insert(Matrix({emptyCol}));
+  PortBinding emptySrc;
+  emptySrc.portId = "src";
+  emptySrc.varName = "src";
+  emptySrc.mode = "matrix";
+  emptySrc.sourceMatrixId = emptySource;
+  auto emptyNode = nodes.createV2("builtin:summary", {emptySrc}, Json::object());
+  CHECK(emptyNode.nodeId > 0);
+  nodes.computeNow(emptyNode.nodeId);
+  auto emptyDone = nodes.get(emptyNode.nodeId);
+  CHECK(emptyDone && emptyDone->state == NodeState::Done);
+  Matrix emptyTable;
+  CHECK(emptyDone && store.snapshot(emptyDone->resultMatrixIds[0], &emptyTable));
+  CHECK(emptyTable.columnCount() == 1);
+  CHECK(emptyTable.column(0).posName == "Pos.7");
+  CHECK(emptyTable.column(0).data.size() == summaryStatCatalog().size());
+  CHECK(emptyTable.column(0).data[0] == 0);     // n
+  CHECK(emptyTable.column(0).data[1] == 0);     // nan
+  CHECK(std::isnan(emptyTable.column(0).data[3]));   // sd: n = 0 ⇒ NaN, not 0
+  CHECK(emptyTable.column(0).data[11] == 0);    // sem: n < 2 ⇒ 0
 
   std::printf("%s: node_registry (%d failures)\n", failures == 0 ? "PASS" : "FAILED", failures);
   return failures == 0 ? 0 : 1;

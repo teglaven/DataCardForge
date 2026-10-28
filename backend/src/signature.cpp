@@ -6,6 +6,19 @@ namespace dc {
 
 const char* const kSigExpressionColumns = "builtin:expression-columns";
 const char* const kSigLinearRegression = "builtin:linear-regression";
+const char* const kSigSummary = "builtin:summary";
+
+// The statistic catalog. Order == output row order. Ids are stable identities: renaming
+// one would silently re-label every stored summary card, so they are frozen here exactly
+// as published (docs/decisions/2026-10-27-summary-builtin.md).
+//
+// Kept as one table so the registry, the evaluator (summary.cpp) and the fixtures all
+// read the same order instead of each carrying a copy of "the twelve".
+const std::vector<std::string>& summaryStatCatalog() {
+  static const std::vector<std::string> kCatalog = {
+      "n", "nan", "mean", "sd", "var", "min", "q1", "median", "q3", "max", "iqr", "sem"};
+  return kCatalog;
+}
 
 namespace {
 
@@ -51,14 +64,36 @@ const FunctionSignature& linearRegression() {
 
 }  // namespace
 
+// `builtin:summary` — the statistic table. One matrix port in, one table out whose rows
+// are the catalog entries and whose columns are the input variables.
+//
+// It is the first signature with `explicitCompute`: creating it does NOT compute. That is
+// a property of the capability (a summary over a wide table is the expensive one), and it
+// is what makes "not requested yet" distinguishable from "upstream changed" — see
+// docs/decisions/2026-10-27-summary-builtin.md §lazy.
+const FunctionSignature& summary() {
+  static const FunctionSignature kSig = [] {
+    FunctionSignature s;
+    s.id = kSigSummary;
+    s.version = 1;
+    s.displayName = "summary";
+    s.inputs = {{"src", "source table", true}};
+    s.outputs = {{"result"}};
+    s.explicitCompute = true;
+    return s;
+  }();
+  return kSig;
+}
+
 const FunctionSignature* findSignature(const std::string& id) {
   if (id == kSigExpressionColumns) return &expressionColumns();
   if (id == kSigLinearRegression) return &linearRegression();
+  if (id == kSigSummary) return &summary();
   return nullptr;
 }
 
 std::vector<const FunctionSignature*> allSignatures() {
-  return {&expressionColumns(), &linearRegression()};
+  return {&expressionColumns(), &linearRegression(), &summary()};
 }
 
 }  // namespace dc

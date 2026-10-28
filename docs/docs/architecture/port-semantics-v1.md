@@ -53,6 +53,8 @@
     deterministic: "同输入+同参数 ⇒ 同输出。差分夹具的前提",
     cancellable: "是否支持协作式取消",
     progress: "是否上报进度",
+    compute: "auto | explicit —— 创建即算，还是只在 POST /api/nodes/{id}/compute 时算。
+              摘要是第一个 explicit 签名（口径与状态机见 decisions/2026-10-27-summary-builtin.md）",
     nanPolicy: "propagate | drop | error —— 每个函数必须声明 NaN 语义（max-headroom 决策的要求）"
   }
 }

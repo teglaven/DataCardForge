@@ -22,7 +22,14 @@ namespace dc {
 
 enum class NodeState { Dirty, Computing, Done, Error };
 
+// Why a node sits in `Dirty`. The four states are the light contract (grey / yellow /
+// green / red). "Never asked to compute" and "upstream changed" are both grey, and the
+// client has to tell them apart — a fifth state would fork the light semantics for every
+// consumer, so the cause travels as an additive field (`reason`) instead.
+enum class DirtyReason { None, NotRequested, UpstreamChanged, DefinitionChanged };
+
 const char* nodeName(NodeState s);
+const char* dirtyReasonName(DirtyReason r);
 
 // v2 port binding (docs/decisions/2026-10-26-card-schema-v2.md, port-semantics-v1.md).
 //
@@ -55,6 +62,9 @@ struct ComputeNode {
   // Output 0, which is also what the legacy protocol field `resultMatrixId` reports.
   int64_t resultMatrixId() const { return resultMatrixIds.empty() ? -1 : resultMatrixIds[0]; }
   NodeState state = NodeState::Dirty;
+  // Meaningful while state == Dirty. Never overwrites a user-facing cause (see
+  // markStaleLocked): "not requested yet" stays true until the client asks to compute.
+  DirtyReason dirtyReason = DirtyReason::None;
   std::string errorCode;            // structured code when state == Error
   Json errorParams = Json::object();
   // Bumped by every definition change (inputs / formula / params). Evaluation runs
@@ -120,7 +130,17 @@ class NodeRegistry {
   // Recompute `nodeId` now, then transitively refresh every dependent in topological
   // order (coalesced: one change triggers each downstream node at most once).
   // Publishes computing/done/error events for every touched node.
+  //
+  // Signatures declared `explicitCompute` (builtin:summary) are NOT evaluated here: they
+  // are marked dirty with a reason and their previous results are dropped, because a
+  // summary exists exactly so that the user decides when to pay for it. Their dependents
+  // are marked dirty too — an empty upstream is "not ready yet", never a data error.
   void recomputeSubtree(int64_t nodeId);
+
+  // Explicit evaluation request (the only trigger for `explicitCompute` signatures,
+  // POST /api/nodes/{id}/compute): evaluate this node — bypassing the laziness rule —
+  // then refresh its dependents with the normal rules.
+  void computeNow(int64_t nodeId);
 
   // Called when a stored matrix changed (file switch / edit): mark + recompute all
   // nodes reading it, transitively.
@@ -143,6 +163,16 @@ class NodeRegistry {
   // then commit the result. Looking the node up by id in each phase also removes the old
   // dangling-pointer window (the node may be deleted between phases).
   void evaluateNode(int64_t nodeId);
+  // Node ids in dependency-first order: `nodeId` itself (when includeSelf) followed by
+  // everything reachable through `dependents_`. Takes mu_ itself.
+  std::vector<int64_t> collectSubtree(int64_t nodeId, bool includeSelf) const;
+  // Walk `order` (dependency-first) and evaluate each node, applying the laziness rule:
+  // an `explicitCompute` node is marked stale instead of evaluated, and its dependents
+  // are marked stale without evaluation (their input is pending, not broken).
+  void evaluateInOrder(const std::vector<int64_t>& order);
+  // REQUIRES mu_: mark the node dirty with a reason and drop its previous result, so
+  // "dirty" always means "the numbers stored here do not describe the current inputs".
+  void markStaleLocked(int64_t nodeId, DirtyReason reason);
   // Transition to Error, clear the stale result, publish the error event.
   // REQUIRES mu_ to be held by the caller.
   void failNodeLocked(int64_t nodeId, const std::string& code, Json params);
