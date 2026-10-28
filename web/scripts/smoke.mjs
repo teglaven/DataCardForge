@@ -3,7 +3,8 @@
  *
  * Boots the built bundle in headless Chromium and exercises the primary user journey
  * the Qt frontend supported:
- *   1. empty workspace renders the entry point
+ *   1. empty workspace renders the entry point, and its「打开数据文件…」button really opens
+ *      the file picker and loads the chosen file
  *   2. loading a 10 000-row measurement file creates a table card
  *   3. the virtualized table renders only a window of rows
  *   4. right-clicking a column header offers "draw line chart"
@@ -18,9 +19,11 @@
  *  11. SVG / PNG / PDF exports download real, valid files
  *  12. no uncaught runtime errors
  *
- * Files are delivered through the real drag-and-drop path rather than the file picker:
- * a headless browser auto-cancels the native open dialog, and a synthetic drop also
- * exercises a genuine code path (`CardCanvas` onDrop → `ingestFiles`).
+ * The bulk of the journey delivers files through the real drag-and-drop path
+ * (`CardCanvas` onDrop → `ingestFiles`). The empty-state button is exercised once through
+ * `page.waitForEvent('filechooser')`, which intercepts the dialog before Chromium would
+ * auto-cancel it — that press used to be swallowed by the canvas pan and shipped a dead
+ * button, so it needs its own end-to-end check.
  *
  * Usage: node scripts/smoke.mjs [baseUrl]
  * Env: LD_LIBRARY_PATH / FONTCONFIG_PATH / PLAYWRIGHT_BROWSERS_PATH as needed.
@@ -98,6 +101,28 @@ try {
   await page.waitForSelector('.app', { timeout: 15_000 });
   check('app shell mounts', (await page.locator('.app').count()) === 1);
   check('empty state is offered', await page.locator('.empty-state').isVisible());
+
+  // ── 1b. the empty-state button opens the picker and loads the file ──
+  // This is the only path through a native dialog, and it went untested until now: the
+  // canvas used to capture the pointer on that press, which retargeted the button's click
+  // to the canvas, so the picker never opened. `waitForEvent('filechooser')` also stops
+  // Chromium from auto-cancelling the dialog, so the click itself is safe to make.
+  const chooserPromise = page.waitForEvent('filechooser', { timeout: 20_000 }).catch(() => null);
+  await page.locator('.empty-state__button').click();
+  const chooser = await chooserPromise;
+  check('empty-state button opens a file chooser', chooser !== null);
+  if (chooser) {
+    await chooser.setFiles(sampleA);
+    await page.waitForSelector('.card--matrix', { timeout: 25_000 });
+    check(
+      'the picker path loads a table card',
+      (await page.locator('.card--matrix').count()) === 1,
+    );
+    // Tear it down again: step 2 drops the same file and asserts exactly one card.
+    await page.locator('.card--matrix .card__close').first().click();
+    await page.waitForSelector('.empty-state__button', { timeout: 15_000 });
+    check('the picker card closes again', (await page.locator('.card--matrix').count()) === 0);
+  }
 
   const title = await page.title();
   check('document title is localised', title.includes('Data Workbench'), title);
@@ -539,6 +564,51 @@ try {
       `${width}×${height}`,
     );
   }
+
+  // ── 11b. a formula card on a real table ─────────────────────────────
+  // Both defects this covers were invisible to the rest of the suite: an annotated table
+  // had no column name that resolved at all (the formula card was a dead end on any file
+  // with a header), and once it did compute, the result grid's flex basis squeezed the
+  // formula zone to ~11 px so the expression row vanished exactly when there was a number
+  // to look at. No other check creates a formula card.
+  await page.locator('.vtable__colhead').first().click({ button: 'right' });
+  await page.waitForSelector('.context-menu', { timeout: 5_000 });
+  await page
+    .locator('.context-menu__item')
+    .filter({ hasText: /New Formula Card|新建公式卡/ })
+    .first()
+    .click();
+  await page.waitForSelector('.card--formula', { timeout: 15_000 });
+  const exprInput = page.locator('.formula-card__expr').first();
+  await exprInput.waitFor({ timeout: 10_000 });
+  await page.waitForTimeout(1_500);
+  const exprBox = await exprInput.boundingBox();
+  check(
+    'formula zone keeps its expression row visible beside the result grid',
+    Boolean(exprBox && exprBox.height >= 12 && exprBox.width > 40),
+    JSON.stringify(exprBox),
+  );
+  const formulaErrors = await page.locator('.formula-card__error').allInnerTexts();
+  check(
+    'formula card computes without a definition error',
+    formulaErrors.length === 0,
+    formulaErrors.join(' | '),
+  );
+  const formulaBadge = (await page.locator('.card--formula .card__badge').first().innerText()).trim();
+  check(
+    'formula card produced a result column',
+    /\d+\s*columns?/i.test(formulaBadge) && !/\b0\s*columns?/i.test(formulaBadge),
+    formulaBadge,
+  );
+  // `Pos.N` is the documented spelling when a column name cannot be typed (it contains
+  // "/" or spaces), so it has to compute end to end.
+  await exprInput.click();
+  await exprInput.fill('Pos.1 * 2');
+  await page.waitForTimeout(1_500);
+  const posErrors = await page.locator('.formula-card__error').allInnerTexts();
+  check('a Pos.N reference computes', posErrors.length === 0, posErrors.join(' | '));
+  await page.locator('.card--formula .card__close').first().click();
+  await page.waitForTimeout(400);
 
   // ── 12. no runtime errors ───────────────────────────────────────────
   const realErrors = consoleErrors.filter(
