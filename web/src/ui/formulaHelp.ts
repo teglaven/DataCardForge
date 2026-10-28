@@ -108,6 +108,7 @@ export const HELP_SYNTAX_ROWS: HelpSyntaxRow[] = [
   { form: 'Pos.1, Pos.2, …', descriptionKey: 'help.syntax.pos' },
   { form: '时间_秒, snr_dB', descriptionKey: 'help.syntax.bare' },
   { form: '[地面速度_μm/s]', descriptionKey: 'help.syntax.bracket' },
+  { form: '[2号测点]', descriptionKey: 'help.syntax.leadingDigit' },
   { form: 'A.pos.1, A.[地面速度_μm/s]', descriptionKey: 'help.syntax.qualified' },
   { form: '（ ） ， × ＊ ＋ － ／ ％ 【 】 ［ ］', descriptionKey: 'help.syntax.fullwidth' },
 ];

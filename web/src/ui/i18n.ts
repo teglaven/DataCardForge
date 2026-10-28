@@ -227,13 +227,18 @@ const dictionaries = {
     'help.section.errors': '常见报错',
     'help.syntax.form': '写法',
     'help.syntax.meaning': '含义',
-    'help.functions.note': '聚合类先把整列压成一个数，再逐行展开；其余函数逐行计算。',
+    'help.functions.note':
+      '聚合类先把整列压成一个数，再逐行展开；其余函数逐行计算。矩阵卡模式另有 TRANSPOSE/DET/INV/SOLVE/MMUL/EMUL（公式卡里不可用，故未列出）。',
+    'formula.bracketHint':
+      '名字含 / 、空格、括号或以数字开头时这样写：[列名]；也可以点左侧「可用列」插入 Pos.N',
     'help.group.aggregate': '聚合（整列 → 一个数，再逐行展开）',
     'help.group.math': '数学',
     'help.group.signal': '信号处理',
     'help.group.conditional': '条件',
     'help.syntax.pos': '位置名：列的固定编号，始终可用；大小写不敏感（pos.1 亦可）',
-    'help.syntax.bare': '裸列名：列名只含字母、数字、_ 或中文时可直接写',
+    'help.syntax.bare': '裸列名：列名只含字母、数字、_ 或中文（且不以数字开头）时可直接写',
+    'help.syntax.leadingDigit':
+      '名字以数字开头（2号测点）也必须方括号：裸写会被读成数字 2 加一个游离标识符',
     'help.syntax.bracket':
       '方括号引用任意列名（含 /、空格、(、- 等）；读到 ] 为止原样取用，全角【】/［］亦可',
     'help.syntax.qualified':
@@ -246,9 +251,11 @@ const dictionaries = {
     'help.example.bracket': '列名含 / 时用方括号',
     'help.example.positive': '只保留正值，其余置 0',
     'help.error.unexpectedChar':
-      '有无法识别的字符 — 多半是列名里有 /、空格等符号，请改用 Pos.N 或 [列名]',
-    'help.error.unknownColumn': '列名不存在 — 点「可用列」里的列名插入正确写法',
-    'help.error.unknownFunction': '函数名拼错 — 函数表里的名字都不区分大小写',
+      '有无法识别的字符 — 多半是列名里有 / 、空格等符号，请改用 Pos.N 或 [列名]',
+    'help.error.unknownColumn':
+      '列名不存在 — 名字含 / 空格、或以数字开头时是写不出来的（`地面速度_μm/s` 会被读成 `地面速度_μm` 除以 `s`），请写成 [列名]，或点「可用列」里的列名插入 Pos.N',
+    'help.error.unknownFunction':
+      '函数名拼错 — 函数表里的名字都不区分大小写。若你写的是列名而它带括号，会被当成函数调用：请改写 [列名]',
     'help.error.badArgCount': '参数个数不对 — 例如 POW 要 2 个、IF 要 3 个',
     'help.error.expectedClose': '括号不配对 — 函数参数后面漏了右括号（全角 ） 也算）',
     'help.error.columnContractViolation':
@@ -508,7 +515,9 @@ const dictionaries = {
     'help.syntax.form': 'Form',
     'help.syntax.meaning': 'Meaning',
     'help.functions.note':
-      'Reducing functions collapse a column to one number and broadcast it per row; everything else computes row by row.',
+      'Reducing functions collapse a column to one number and broadcast it per row; everything else computes row by row. Matrix-card mode also has TRANSPOSE/DET/INV/SOLVE/MMUL/EMUL (not usable in a formula card, so not listed here).',
+    'formula.bracketHint':
+      'A name containing /, a space, a parenthesis, or starting with a digit must be written [column name] — or click an available-column chip to insert its Pos.N',
     'help.group.aggregate': 'Reducing (column → one number, broadcast per row)',
     'help.group.math': 'Math',
     'help.group.signal': 'Signal processing',
@@ -516,7 +525,9 @@ const dictionaries = {
     'help.syntax.pos':
       'The column position — always available; case-insensitive (pos.1 works too)',
     'help.syntax.bare':
-      'Bare column name: valid when the name contains only letters, digits, _ or CJK characters',
+      'Bare column name: valid when the name contains only letters, digits, _ or CJK characters and does not start with a digit',
+    'help.syntax.leadingDigit':
+      'A name starting with a digit (2号测点) still needs brackets: bare, it reads as the number 2 followed by a stray identifier',
     'help.syntax.bracket':
       'Square brackets quote any name (/, spaces, (, - …); everything up to ] is taken verbatim — full-width 【】/［］ also work',
     'help.syntax.qualified':
@@ -531,9 +542,9 @@ const dictionaries = {
     'help.error.unexpectedChar':
       'Unrecognised character — usually a column name containing / or a space; use Pos.N or [column name] instead',
     'help.error.unknownColumn':
-      'That column does not exist — click a name under the available columns to insert the right spelling',
+      'That column does not exist — a name containing / or a space, or starting with a digit, cannot be written bare (`地面速度_μm/s` reads as `地面速度_μm` divided by `s`); write [column name] or click an available-column chip to insert Pos.N',
     'help.error.unknownFunction':
-      'The function name is misspelt — names in the function table are case-insensitive',
+      'The function name is misspelt — names in the function table are case-insensitive. If you meant a column whose name contains a parenthesis, it was read as a call: write [column name]',
     'help.error.badArgCount': 'Wrong number of arguments — POW takes 2, IF takes 3',
     'help.error.expectedClose':
       "Unbalanced parentheses — a closing ')' is missing after the function arguments (a full-width ） counts too)",

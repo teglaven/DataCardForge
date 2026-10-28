@@ -477,6 +477,13 @@ export function FormulaCard({
                   {error.message}
                 </p>
               ) : null}
+              {error && needsBracketHint(error.code) ? (
+                // The message alone leaves the user stuck: `地面速度_μm/s` comes back as
+                // 未知列名「地面速度_μm」 — a name that visibly exists in the table. The way
+                // out (brackets, or the chips) belongs next to the message, not only in the
+                // help dialog behind `?`.
+                <p className="formula-card__error-hint">{t('formula.bracketHint')}</p>
+              ) : null}
               {invalidated ? (
                 <p className="formula-card__stale">{t('formula.staleUpstream')}</p>
               ) : null}
@@ -734,6 +741,16 @@ export function FormulaCard({
 }
 
 /** Collapse the exact-arity phrasing and pass through the backend's structured params. */
+/**
+ * Errors that are usually a spelling problem rather than a wrong idea: the tokenizer stops
+ * at the first reserved character, so the reported name looks truncated and "real" — and a
+ * name containing a parenthesis (`温度（℃）`) is read as a function call, which surfaces as
+ * `unknownFunction` naming a "function" the user never meant to call.
+ */
+function needsBracketHint(code: string): boolean {
+  return code === 'unknownColumn' || code === 'unexpectedChar' || code === 'unknownFunction';
+}
+
 function normaliseErrorParams(params?: Record<string, unknown>): Record<string, string | number> {
   const out: Record<string, string | number> = {};
   for (const [k, v] of Object.entries(params ?? {})) {

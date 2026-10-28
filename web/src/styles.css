@@ -1432,6 +1432,14 @@ body {
 }
 
 /* Upstream died: this card's own definition is fine, so it is dimmed rather than red. */
+/* The way out of a spelling error, quieter than the error itself. */
+.formula-card__error-hint {
+  margin: 1px 0 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
 .formula-card__stale {
   margin: 2px 0 0;
   font-size: 11px;

@@ -155,6 +155,11 @@ describe('formula help catalogue', () => {
     const documented = HELP_FUNCTION_GROUPS.flatMap((group) =>
       group.items.map((item) => item.name),
     ).sort();
+    // The oracle is `FUNCTIONS` in core/expression.ts — the TS reference the C++ engine is
+    // diffed against, i.e. the *cell-mode* set. The C++ `functions()` additionally holds the
+    // matrix-mode-only names (TRANSPOSE/DET/INV/SOLVE/MMUL/EMUL); cell mode rejects them, so
+    // advertising them here would teach the user functions their card cannot call. The
+    // dialog's function note says so explicitly, which is what keeps this claim honest.
     // Equality in both directions: a missing entry means undocumented help, an extra one
     // means the help teaches a function the engine will reject.
     expect(documented).toEqual(Object.keys(FUNCTIONS).sort());
@@ -185,6 +190,18 @@ describe('help dialog', () => {
     const target = document.querySelector('.help-dialog__section--target');
     expect(target?.getAttribute('data-section')).toBe('errors');
     expect(store().helpSection).toBe('errors');
+  });
+
+  it('states the limits the reference has: leading digits and matrix-only functions', async () => {
+    // The user's own failure was `地面速度_μm/s`, and an equally common lab header starts with
+    // a digit (`2号测点`). Both are unspellable bare, so the syntax table must say it, and the
+    // function note must admit the matrix-mode names it deliberately omits.
+    await mountMenuAndDialog();
+    await openMenu('帮助');
+    await clickMenuItem('公式与函数说明');
+    const text = document.querySelector('.help-dialog')!.textContent ?? '';
+    expect(text).toContain('[2号测点]');
+    expect(text).toContain('TRANSPOSE');
   });
 
   it('opens from the formula card’s "?" at the function section', async () => {
