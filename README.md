@@ -3,7 +3,7 @@
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages demo](https://img.shields.io/badge/demo-live%20(front%20end)-2ea44f)](https://teglaven.github.io/DataCardForge/)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-489%20unit%20%C2%B7%2073%20e2e-brightgreen)](web/tests)
+[![Tests](https://img.shields.io/badge/tests-493%20unit%20%C2%B7%2079%20e2e-brightgreen)](web/tests)
 
 **[English](README.md) | [中文](README.zh-CN.md)**
 
@@ -189,6 +189,12 @@ reference lives in the UI (Help menu / `?` on the card / a 1 s hover tooltip at 
 clickable column chips). A layout collapse that hid the formula row as soon as a card produced
 numbers was fixed at the same time. See the [log](docs/docs/log/2026-10-28.md) and the
 [syntax decision](docs/docs/decisions/2026-10-28-expression-reference-syntax.md).
+
+A file switch still never re-points a function card silently (schema v2), so the card shows a
+**pending** offer instead — and that offer is now a flashing yellow gradient box. It used to be a
+pale accent-coloured panel and users read it as decoration rather than as "answer me". Only the
+gradient position and the outer glow animate (the text never blinks), and
+`prefers-reduced-motion` keeps the yellow and the ring while dropping the motion.
 
 What is still missing, and why it is not "done":
 

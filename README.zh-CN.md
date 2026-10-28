@@ -3,7 +3,7 @@
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages 演示](https://img.shields.io/badge/%E6%BC%94%E7%A4%BA-%E5%89%8D%E7%AB%AF%E5%9C%A8%E7%BA%BF-2ea44f)](https://teglaven.github.io/DataCardForge/)
 [![许可证](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-489%20unit%20%C2%B7%2073%20e2e-brightgreen)](web/tests)
+[![测试](https://img.shields.io/badge/tests-493%20unit%20%C2%B7%2079%20e2e-brightgreen)](web/tests)
 
 **[English](README.md) | [中文](README.zh-CN.md)**
 
@@ -141,7 +141,9 @@
 - **一节点 K 输出**：签名（`FunctionSignature`）声明端口与输出数；`builtin:expression-columns`
   用一个节点算出一张宽表，取代 v1 的「每公式列一个节点、重复求值」
 - **输入是显式矩阵**：切数据卡里的文件不再静默改变函数卡的输入；改用**卡片级待处理提示**
-  + 列差异预览 + 一次确认（含批量），确认才写图
+  + 列差异预览 + 一次确认（含批量），确认才写图。提示框是**黄底渐变 + 闪烁**（原先的淡蓝底
+  和选中态同色，用户当成装饰扫过去了）：只有渐变位置与外侧光晕在动，文字不闪，
+  开启「减少动态效果」时停闪、黄底与光环保留
 - **列数契约**：命名输出列即锁宽度；上游宽度漂移由后端 `columnContractViolation` 断流并清空
   旧结果（下游呈「失效」），自编辑走「扩展契约 / 解除锁定」
 - **结果可再流动**：右键函数卡结果列头 → 建图或「新建公式卡…」。函数卡的输出是普通矩阵，
