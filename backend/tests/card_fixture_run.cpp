@@ -111,7 +111,52 @@ int64_t buildCard(const Json& c, Fixture* f, std::string* err) {
     return -1;
   }
   f->nodes.recomputeSubtree(created.nodeId);
+  // A signature with `explicitCompute` (builtin:summary) is deliberately left dirty here:
+  // whether the fixture computes is the case's own `trigger` decision, never the runner's
+  // guess. Guessing would quietly turn "创建后不算" into an untested claim.
   return created.nodeId;
+}
+
+// The state the case says the card must be in right after creation, before any trigger.
+// This is how the lazy contract gets a referee at the card layer rather than only in the
+// integration test (which needs a live backend).
+bool checkAfterCreate(const Json& c, Fixture* f, int64_t nodeId) {
+  const Json& want = c["afterCreate"];
+  if (!want.isObject()) return true;
+  const auto node = f->nodes.get(nodeId);
+  if (!node) {
+    std::printf("FAIL %-40s node vanished\n", f->name.c_str());
+    return false;
+  }
+  if (want["state"].isString()) {
+    const std::string wantState = want["state"].asString();
+    if (wantState != nodeName(node->state)) {
+      std::printf("FAIL %-40s after create: state %s, want %s\n", f->name.c_str(),
+                  nodeName(node->state), wantState.c_str());
+      return false;
+    }
+  }
+  if (want["reason"].isString()) {
+    const std::string wantReason = want["reason"].asString();
+    if (wantReason != dirtyReasonName(node->dirtyReason)) {
+      std::printf("FAIL %-40s after create: reason %s, want %s\n", f->name.c_str(),
+                  dirtyReasonName(node->dirtyReason), wantReason.c_str());
+      return false;
+    }
+  }
+  // A "not requested" node must not be hiding numbers behind the label either.
+  const Json* emptyFlag = want.find("empty");
+  if (emptyFlag && emptyFlag->kind() == Json::Kind::Bool && emptyFlag->asBool()) {
+    for (int64_t resultId : node->resultMatrixIds) {
+      Matrix m;
+      if (f->store.snapshot(resultId, &m) && m.columnCount() != 0) {
+        std::printf("FAIL %-40s after create: expected an empty result, got %zu columns\n",
+                    f->name.c_str(), m.columnCount());
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 bool checkOutputs(const Json& c, Fixture* f, int64_t nodeId) {
@@ -238,13 +283,23 @@ int runFile(const std::string& path) {
       if (nodeId < 0) {
         std::printf("FAIL %-40s could not build the card: %s\n", name.c_str(), buildErr.c_str());
         ok = false;
-      } else if (c["expectError"].isObject()) {
-        ok = checkError(c, &fixture, nodeId);
-      } else if (c["expect"].isObject()) {
-        ok = checkOutputs(c, &fixture, nodeId);
       } else {
-        std::printf("FAIL %-40s neither expect nor expectError\n", name.c_str());
-        ok = false;
+        bool statusOk = checkAfterCreate(c, &fixture, nodeId);
+        // The explicit trigger is part of the case, not of the card: a fixture that forgot
+        // it would test the "not computed" state, which is exactly what `afterCreate` says.
+        if (c["trigger"].isString() && c["trigger"].asString() == "compute") {
+          fixture.nodes.computeNow(nodeId);
+        }
+        if (!statusOk) {
+          ok = false;
+        } else if (c["expectError"].isObject()) {
+          ok = checkError(c, &fixture, nodeId);
+        } else if (c["expect"].isObject()) {
+          ok = checkOutputs(c, &fixture, nodeId);
+        } else {
+          std::printf("FAIL %-40s neither expect nor expectError\n", name.c_str());
+          ok = false;
+        }
       }
     }
 

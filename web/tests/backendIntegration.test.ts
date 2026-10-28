@@ -264,4 +264,111 @@ describe.skipIf(!enabled)('live backend integration', () => {
     expect(registered.cards).toHaveLength(1);
     expect(registered.cards[0].inputs).toEqual([]);
   });
+
+  describe('summary (lazy signature)', () => {
+    let sourceMatrixId = 0;
+    let nodeId = 0;
+    let resultMatrixId = 0;
+
+    it('does not compute on creation: dirty, notRequested, empty result matrix', async () => {
+      const registered = await client.registerMatrix('it-summary', [
+        { posName: 'Pos.1', annotation: 'A', data: [1, 2, 3, 4] },
+        { posName: 'Pos.2', annotation: 'B', data: [10, 20, 30, 40] },
+      ]);
+      expect(registered.ok).toBe(true);
+      sourceMatrixId = registered.matrixId!;
+      createdMatrices.push(sourceMatrixId);
+
+      const created = await client.createNode(
+        [{ portId: 'src', varName: 'src', mode: 'matrix', sourceMatrixId: sourceMatrixId }],
+        { signatureId: 'builtin:summary', params: {} },
+      );
+      expect(created.ok).toBe(true);
+      nodeId = created.nodeId!;
+      createdNodes.push(nodeId);
+      expect(created.state).toBe('dirty');
+      expect(created.reason).toBe('notRequested');
+      expect(created.resultMatrixIds).toHaveLength(1);
+      resultMatrixId = created.resultMatrixIds![0];
+      createdMatrices.push(resultMatrixId);
+
+      // The result matrix exists but is empty: 0 columns, no stale numbers.
+      const frame = await client.window(resultMatrixId, 0, 10);
+      expect(frame.ok).toBe(true);
+      expect(frame.columns).toBe(0);
+    });
+
+    it('computes on explicit trigger: 12 statistics rows × input variable columns', async () => {
+      const triggered = await client.computeNode(nodeId);
+      expect(triggered.ok).toBe(true);
+      expect(triggered.state).toBe('done');
+      expect(triggered.resultMatrixIds).toEqual([resultMatrixId]);
+
+      const status = await client.getNode(nodeId);
+      expect(status?.state).toBe('done');
+
+      const frame = await client.window(resultMatrixId, 0, 20);
+      expect(frame.ok).toBe(true);
+      expect(frame.rows).toBe(12);
+      expect(frame.columns).toBe(2);
+      expect(frame.names).toEqual(['Pos.1 A', 'Pos.2 B']);
+
+      // Rows are the fixed 12 statistics (n, nan, mean, sd, var, min, q1, median, q3,
+      // max, iqr, sem); columns are the input variables; data is column-major.
+      const a = frame.data![0];
+      const b = frame.data![1];
+      expect(a[0]).toBe(4); // n
+      expect(a[1]).toBe(0); // nan
+      expect(a[2]).toBeCloseTo(2.5, 9); // mean
+      expect(a[3]).toBeCloseTo(1.2909944487358056, 9); // sd
+      expect(a[4]).toBeCloseTo(1.6666666666666667, 9); // var
+      expect(a[5]).toBe(1); // min
+      expect(a[6]).toBeCloseTo(1.75, 9); // q1
+      expect(a[7]).toBeCloseTo(2.5, 9); // median
+      expect(a[8]).toBeCloseTo(3.25, 9); // q3
+      expect(a[9]).toBe(4); // max
+      expect(a[10]).toBeCloseTo(1.5, 9); // iqr
+      expect(a[11]).toBeCloseTo(0.6454972243679028, 9); // sem
+      expect(b[0]).toBe(4); // n
+      expect(b[1]).toBe(0); // nan
+      expect(b[2]).toBe(25); // mean
+      expect(b[3]).toBeCloseTo(12.909944487358056, 9); // sd
+      expect(b[4]).toBeCloseTo(166.66666666666666, 9); // var
+      expect(b[5]).toBe(10); // min
+      expect(b[6]).toBeCloseTo(17.5, 9); // q1
+      expect(b[7]).toBe(25); // median
+      expect(b[8]).toBeCloseTo(32.5, 9); // q3
+      expect(b[9]).toBe(40); // max
+      expect(b[10]).toBe(15); // iqr
+      expect(b[11]).toBeCloseTo(6.454972243679028, 9); // sem
+    });
+
+    it('goes dirty with reason upstreamChanged and clears the result when the upstream matrix changes', async () => {
+      const patched = await client.patchCells(sourceMatrixId, [{ row: 0, col: 0, value: 100 }]);
+      expect(patched.ok).toBe(true);
+
+      const status = await client.getNode(nodeId);
+      expect(status?.state).toBe('dirty');
+      expect(status?.reason).toBe('upstreamChanged');
+
+      // Never silently serve the old matrix: 0 columns.
+      const frame = await client.window(resultMatrixId, 0, 20);
+      expect(frame.ok).toBe(true);
+      expect(frame.columns).toBe(0);
+    });
+
+    it('computes again and picks up the changed upstream values', async () => {
+      const triggered = await client.computeNode(nodeId);
+      expect(triggered.ok).toBe(true);
+      expect(triggered.state).toBe('done');
+
+      const frame = await client.window(resultMatrixId, 0, 20);
+      expect(frame.ok).toBe(true);
+      const a = frame.data![0];
+      expect(a[0]).toBe(4); // n
+      expect(a[2]).toBeCloseTo(27.25, 9); // mean = (100+2+3+4)/4
+      expect(a[5]).toBe(2); // min
+      expect(a[9]).toBe(100); // max
+    });
+  });
 });

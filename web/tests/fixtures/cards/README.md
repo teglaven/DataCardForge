@@ -38,6 +38,25 @@
 
 `expect` 与 `expectError` 二选一。错误用例还会被要求：结果矩阵必须为空（不许留着上一轮的数）。
 
+### 惰性签名（`builtin:summary`）的两个额外字段
+
+| 字段 | 含义 | 谁读它 |
+|---|---|---|
+| `afterCreate` | 创建之后、任何触发之前的期望状态：`{state, reason?, empty?}`。`empty:true` 还要求结果矩阵没有任何列 | C++（真跑 `NodeRegistry`）；TS 只校验"惰性用例必须声明 `afterCreate.reason = notRequested`" |
+| `trigger` | 创建之后做的那一次显式动作，目前只有 `"compute"`（= `POST /api/nodes/{id}/compute`） | C++ 调 `computeNow()`；TS 校验惰性用例必须声明它 |
+
+```jsonc
+"afterCreate": { "state": "dirty", "reason": "notRequested", "empty": true },
+"trigger": "compute",
+"expect": { "outputs": [{ "outputId": "result", "columns": [
+  { "name": "A", "data": [ /* 12 个统计量，顺序 = 目录顺序 */ ] }
+] }] }
+```
+
+摘要的 `name` 是该输出列的 annotation，**原样继承源列**：有表头的源列是 `A`，无表头的源列
+是空字符串（显示时回落到 `Pos.N`）。行恒为统计量目录（`n, nan, mean, sd, var, min, q1,
+median, q3, max, iqr, sem`），列恒为输入变量——这两条都是**数据的形状**，K 始终是 1。
+
 ## 加用例时的纪律
 
 1. **先想清楚这个用例在守哪条规则**——端口身份、K 由签名定、参数与数据分离、列数契约、

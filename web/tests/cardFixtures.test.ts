@@ -39,6 +39,10 @@ interface FixtureCase {
     columns: Array<{ posName: string; annotation: string; data: Array<number | string> }>;
   }>;
   card: FixtureCard;
+  /** Which explicit action the case takes after creation (`builtin:summary` is lazy). */
+  trigger?: 'compute';
+  /** The state the card must be in right after creation, before any trigger. */
+  afterCreate?: { state?: string; reason?: string; empty?: boolean };
   expect?: { outputs: Array<{ outputId: string; columns: FixtureColumn[] }> };
   expectError?: { code: string; params?: Record<string, unknown> };
 }
@@ -55,12 +59,22 @@ const here = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'cards');
 const DECLARED_PORTS: Record<string, string[]> = {
   'builtin:expression-columns': ['src'],
   'builtin:linear-regression': ['x', 'y'],
+  'builtin:summary': ['src'],
 };
 
 /** Output column names each signature promises (order matters; names are its contract). */
 const DECLARED_OUTPUT_COLUMNS: Record<string, string[]> = {
   'builtin:linear-regression': ['slope', 'intercept', 'r', 'r2', 'n'],
 };
+
+/**
+ * The statistic catalog: row order == the backend's `summaryStatCatalog()`. Duplicated
+ * here on purpose — the TS side is the half that reads the fixture, and a fixture whose
+ * row count disagrees with the published catalog is a broken judge, not a test.
+ */
+const SUMMARY_CATALOG = [
+  'n', 'nan', 'mean', 'sd', 'var', 'min', 'q1', 'median', 'q3', 'max', 'iqr', 'sem',
+] as const;
 
 function loadCases(file: string): FixtureCase[] {
   return (JSON.parse(readFileSync(join(here, file), 'utf8')) as { cases: FixtureCase[] }).cases;
@@ -131,7 +145,30 @@ for (const file of ['function-card.v2.json']) {
           expect(outputs).toHaveLength(1);
           const columns = outputs[0].columns;
           const sourceRows = c.matrices[0]?.columns[0]?.data.length ?? 0;
-          if (c.card.signatureId === 'builtin:expression-columns') {
+          if (c.card.signatureId === 'builtin:summary') {
+            // Rows are the catalog (its order is fixed by the backend table), columns are
+            // the input variables. A fixture that let the data decide either would be a
+            // broken judge for both sides.
+            expect(columns).toHaveLength(c.matrices[0].columns.length);
+            for (const column of columns) {
+              expect(column.data).toHaveLength(SUMMARY_CATALOG.length);
+            }
+            const nValue = Number(columns[0].data[SUMMARY_CATALOG.indexOf('n')]);
+            expect(Number.isInteger(nValue)).toBe(true);
+            expect(nValue).toBeGreaterThanOrEqual(0);
+            expect(nValue).toBeLessThanOrEqual(sourceRows);
+            // Output annotation is the source column's annotation, verbatim — including
+            // the empty one. (The display label falls back to the source's posName, but
+            // that half of the identity is not on the wire; the C++ runner has no
+            // row/label channel for it, so only the annotation is comparable here.)
+            columns.forEach((column, index) => {
+              expect(column.name).toBe(c.matrices[0].columns[index].annotation);
+            });
+            // A lazy signature is only tested if the case says both how it starts and
+            // what computes it.
+            expect(c.afterCreate?.reason).toBe('notRequested');
+            expect(c.trigger).toBe('compute');
+          } else if (c.card.signatureId === 'builtin:expression-columns') {
             // One expression ⇒ one column, in declaration order, as tall as the input.
             expect(columns).toHaveLength(formulas.length);
             for (const column of columns) expect(column.data).toHaveLength(sourceRows);
