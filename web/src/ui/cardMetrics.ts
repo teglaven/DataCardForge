@@ -178,15 +178,93 @@ export function cardRect(id: number): Rect | null {
   return toCanvas(metrics.root.getBoundingClientRect(), canvasRect());
 }
 
-/** Anchor at the top-centre of a card — used for the chart end of a line. */
-export function cardTopAnchor(id: number): { x: number; y: number } | null {
+/**
+ * Which side of a card a line leaves from or enters into.
+ *
+ * A line is not just two points: the side decides the bezier's control points *and* the
+ * direction of the arrowhead. Sending every wire out of the top edge made a card that
+ * sits below its source bend the line back over itself; a port on the left column and an
+ * output on the right column now leave/enter horizontally, which is what the layout
+ * already looked like.
+ */
+export type AnchorSide = 'top' | 'bottom' | 'left' | 'right';
+
+export interface Anchor {
+  x: number;
+  y: number;
+  side: AnchorSide;
+}
+
+/** Port anchors registered by the cards that actually render ports (2026-10-28). */
+const ports = new Map<number, Map<string, { element: HTMLElement; side: AnchorSide }>>();
+
+/**
+ * Register one rendered port element as a line endpoint.
+ *
+ * `portId` — not its position — is the identity (port-semantics-v1 §已锁定 1). Cards call
+ * this from a ref callback; the layer resolves `portAnchor(cardId, portId)` and only falls
+ * back to a card anchor when the card renders no port for that id (matrix cards have no
+ * ports, chart cards name their sources by column id).
+ */
+export function registerPort(
+  cardId: number,
+  portId: string,
+  element: HTMLElement,
+  side: AnchorSide = 'left',
+): void {
+  let cardPorts = ports.get(cardId);
+  if (!cardPorts) {
+    cardPorts = new Map();
+    ports.set(cardId, cardPorts);
+  }
+  cardPorts.set(portId, { element, side });
+  invalidateLayout();
+}
+
+export function unregisterPort(cardId: number, portId: string): void {
+  const cardPorts = ports.get(cardId);
+  if (!cardPorts || !cardPorts.delete(portId)) return;
+  if (cardPorts.size === 0) ports.delete(cardId);
+  invalidateLayout();
+}
+
+/** Centre of the registered port element, in plane coordinates. */
+export function portAnchor(cardId: number, portId: string): Anchor | null {
+  const entry = ports.get(cardId)?.get(portId);
+  if (!entry) return null;
+  const r = entry.element.getBoundingClientRect();
+  const origin = canvasRect();
+  return {
+    x: (r.left + r.width / 2 - origin.left) / worldScale,
+    y: (r.top + r.height / 2 - origin.top) / worldScale,
+    side: entry.side,
+  };
+}
+
+/** Anchor on one side of a card: top/bottom mid-point, or left/right mid-height. */
+export function cardAnchor(id: number, side: AnchorSide = 'top'): Anchor | null {
   const rect = cardRect(id);
   if (!rect) return null;
-  return { x: rect.left + rect.width / 2, y: rect.top };
+  switch (side) {
+    case 'top':
+      return { x: rect.left + rect.width / 2, y: rect.top, side };
+    case 'bottom':
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height, side };
+    case 'left':
+      return { x: rect.left, y: rect.top + rect.height / 2, side };
+    case 'right':
+      return { x: rect.left + rect.width, y: rect.top + rect.height / 2, side };
+  }
+}
+
+/** Anchor at the top-centre of a card — the card-level fallback this layer used to use. */
+export function cardTopAnchor(id: number): Anchor | null {
+  return cardAnchor(id, 'top');
 }
 
 /** Reset everything — used when the whole workspace is replaced. */
 export function resetMetrics(): void {
   cards.clear();
+  ports.clear();
   invalidateLayout();
 }

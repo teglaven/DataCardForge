@@ -185,6 +185,15 @@ try {
     `${lineCount} lines`,
   );
 
+  // Every line is a wire plus exactly one arrowhead on its target anchor (2026-10-28).
+  const wireCount = await page.locator('.connection-layer .connection__wire').count();
+  const arrowCount = await page.locator('.connection-layer .connection__arrow').count();
+  check(
+    'each connection carries one wire and one arrowhead',
+    wireCount === lineCount && arrowCount === lineCount,
+    `${wireCount} wires / ${arrowCount} arrows / ${lineCount} lines`,
+  );
+
   const blueStroke = await page
     .locator('.connection-layer .connection--fg path')
     .first()

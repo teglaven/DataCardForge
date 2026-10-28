@@ -249,9 +249,25 @@ body {
   z-index: auto;
 }
 
-.connection path {
+.connection__wire {
   fill: none;
   stroke-linecap: round;
+  /* Keep the wire the same weight on screen at every zoom. The view range is 10%–300%;
+     a 1.5 plane-px stroke scaled to 10% is 0.15 screen px, i.e. invisible. */
+  vector-effect: non-scaling-stroke;
+}
+
+/* The arrowhead is geometry, not a stroked line: it must keep its fill. */
+.connection__arrow {
+  stroke: none;
+}
+
+.connection__label {
+  font-family: var(--mono);
+  letter-spacing: 0.02em;
+  /* Lines are a background visualization: the label must never become a hit target. */
+  pointer-events: none;
+  user-select: none;
 }
 
 .connection--bg {

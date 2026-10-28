@@ -5,35 +5,37 @@
  * background visualization of data dependencies, they never intercept pointer
  * events, and they never take part in card layout.
  *
- * Lines anchor to the **top-centre of each card** (card-level, not column-level),
- * and the source of truth for which cards are connected is the store's
- * DependencyGraph: exactly one line per dependency edge whose dependent side is
- * a chart card. Attaching a second column of the *same* matrix card to a chart
- * therefore draws no extra line, and table scroll position no longer moves anything.
+ * As of 2026-10-28 the layer draws **every** dependency edge, not only the ones whose
+ * dependent side is a chart card: schema v2 made function cards first-class graph nodes
+ * (`inputs[]` on the envelope), so a chain `table → function → chart` is two edges and
+ * therefore two lines. Endpoints resolve to a **port** when the edge names one and the
+ * card renders it (`portAnchor`, keyed by `portId`, never by position); otherwise they
+ * fall back to the card edge that faces the other card. A pair of cards is still exactly
+ * one line — a chart reading three columns of one table keeps one line and lists its
+ * ports on the label.
  *
  * Layering reproduces the Qt two-overlay scheme with a single SVG using two groups:
  *   - `bg` group: thin grey lines for unselected cards, painted under the highlight
  *   - `fg` group: thick red/blue lines for the active card, painted on top
  *
- * Colours and geometry constants are carried over verbatim from the Qt version:
- *   grey  rgb(160,160,160), red rgb(200,50,50), blue rgb(40,120,220).
- *   Bezier control points are (from.x, from.y - 30) and (to.x, to.y - 80).
+ * Colours are carried over from the Qt version, with the grey lifted to meet contrast:
+ *   red rgb(200,50,50) for the selected source, blue rgb(40,120,220) for the selected
+ *   dependent, grey rgb(107,114,128) when nothing is selected.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
-  cardTopAnchor,
+  cardAnchor,
   cardRect,
+  portAnchor,
   subscribeLayout,
   getLayoutVersion,
+  type Anchor,
   type Rect,
 } from './cardMetrics.ts';
 import type { DependencyGraph } from '../core/DependencyGraph.ts';
-import { isChartCard, type CardModel } from './types.ts';
+import { isFormulaCard, type CardModel } from './types.ts';
 
-// The grey was rgb(160,160,160), which measures 2.27:1 against the canvas and 2.61:1
-// against a card surface — below the 3:1 non-text threshold — so an idle connection was
-// nearly invisible. 107/114/128 keeps the same neutral hue at ~4.6:1 on white.
 const COLOR_GREY = 'rgb(107, 114, 128)';
 const COLOR_RED = 'rgb(200, 50, 50)';
 const COLOR_BLUE = 'rgb(40, 120, 220)';
@@ -42,25 +44,39 @@ const COLOR_BLUE = 'rgb(40, 120, 220)';
 const BLINK_INTERVAL_MS = 200;
 const BLINK_TICKS = 6;
 
+/**
+ * Output port that produced the matrix an edge hands over.
+ *
+ * The envelope names the *matrix* (`target.matrixId`), so a card with K outputs has to be
+ * resolved back to one output id. `displayMatrixId` is the matrix the UI shows (output 0)
+ * while `outputs[].resultMatrixId` is the server-side id — two different id spaces — so a
+ * single-output card answers directly and K > 1 stays card-level instead of guessing.
+ */
+function sourceOutputId(card: CardModel | undefined, matrixId: number): string | null {
+  if (!card || !isFormulaCard(card)) return null;
+  const match = card.outputs.find((output) => output.resultMatrixId === matrixId);
+  if (match) return match.outputId;
+  if (card.outputs.length === 1) return card.outputs[0].outputId;
+  if (card.displayMatrixId === matrixId) return card.outputs[0]?.outputId ?? null;
+  return null;
+}
+
 export interface Connection {
   key: string;
-  from: { x: number; y: number };
-  to: { x: number; y: number };
-  matrixCardId: number;
-  chartCardId: number;
+  from: Anchor;
+  to: Anchor;
+  /** Target-side port ids carried by this edge, for the on-line label. */
+  ports: string[];
+  dependsOn: number;
+  dependent: number;
   color: string;
   highlighted: boolean;
 }
 
 /**
  * Recompute every connection endpoint whenever the layout could have changed.
- * Subscribes to the layout version counter (bumped by drag/resize/scroll) plus
- * window resize, and coalesces redraws into one animation frame.
- *
- * The store's DependencyGraph is the source of truth: one line per dependency
- * edge whose dependent side is a chart card, anchored at the top-centre of each
- * card. The graph already dedupes, so a chart reading several columns of the
- * same matrix card still draws exactly one line.
+ * Subscribes to the layout version counter (bumped by drag/resize/scroll and by port
+ * (un)registration) plus window resize, and coalesces redraws into one animation frame.
  */
 export function useConnectionGeometry(
   cards: CardModel[],
@@ -86,13 +102,19 @@ export function useConnectionGeometry(
     const out: Connection[] = [];
 
     for (const edge of dependencies.edges()) {
-      const sourceCard = cards.find((c) => c.id === edge.dependsOn);
-      const targetCard = cards.find((c) => c.id === edge.dependent);
-      // Only edges whose dependent side is a chart card draw a line.
-      if (!sourceCard || !targetCard || !isChartCard(targetCard)) continue;
+      const sourceCard = cards.find((card) => card.id === edge.dependsOn);
+      const targetCard = cards.find((card) => card.id === edge.dependent);
+      if (!sourceCard || !targetCard) continue;
 
-      const from = cardTopAnchor(edge.dependsOn);
-      const to = cardTopAnchor(edge.dependent);
+      // Endpoint priority: the named port, then the card edge that faces the other card.
+      const input = targetCard.inputs.find((entry) => entry.target.cardId === edge.dependsOn);
+      const outputId = sourceOutputId(sourceCard, input?.target.matrixId ?? -1);
+      const from =
+        (outputId ? portAnchor(edge.dependsOn, outputId) : null) ??
+        cardAnchor(edge.dependsOn, 'right');
+      const to =
+        (edge.ports.length === 1 ? portAnchor(edge.dependent, edge.ports[0]) : null) ??
+        cardAnchor(edge.dependent, 'left');
       if (!from || !to) continue;
 
       let color = COLOR_GREY;
@@ -109,8 +131,9 @@ export function useConnectionGeometry(
         key: `${edge.dependsOn}->${edge.dependent}`,
         from,
         to,
-        matrixCardId: edge.dependsOn,
-        chartCardId: edge.dependent,
+        ports: edge.ports,
+        dependsOn: edge.dependsOn,
+        dependent: edge.dependent,
         color,
         highlighted,
       });
@@ -124,10 +147,7 @@ export function useConnectionGeometry(
  * Canvas-relative rectangles of every card, refreshed whenever the layout could change.
  *
  * These become the holes in the connection mask: the lines belong to the desktop *behind*
- * the cards, so they must not be painted across a card's face. The `.connection-layer`
- * rule already claims that, but it sat at `z-index: 900` while cards sit at `z-index: 1…N`
- * in the same stacking context — so the SVG won every comparison and the curves ran over
- * table cells and title bars.
+ * the cards, so they must not be painted across a card's face.
  */
 function useCardRects(cards: CardModel[]): Rect[] {
   const version = useSyncLayoutVersion();
@@ -192,22 +212,108 @@ export function useBlockedBlink(blockedCardId: number | null, nonce: number): Se
   }, [active, visible]);
 }
 
+/** Outgoing control point: the curve leaves the anchor along its side's normal. */
+function outControl(anchor: Anchor): { x: number; y: number } {
+  switch (anchor.side) {
+    case 'right':
+      return { x: anchor.x + 60, y: anchor.y };
+    case 'left':
+      return { x: anchor.x - 60, y: anchor.y };
+    case 'bottom':
+      return { x: anchor.x, y: anchor.y + 30 };
+    default:
+      // Top anchors keep the Qt offsets; clamping keeps the curve inside the plane.
+      return { x: anchor.x, y: Math.max(0, anchor.y - 30) };
+  }
+}
+
+/** Incoming control point: same rule mirrored, with the Qt `-80` lift for top anchors. */
+function inControl(anchor: Anchor): { x: number; y: number } {
+  switch (anchor.side) {
+    case 'left':
+      return { x: anchor.x - 60, y: anchor.y };
+    case 'right':
+      return { x: anchor.x + 60, y: anchor.y };
+    case 'bottom':
+      return { x: anchor.x, y: anchor.y + 80 };
+    default:
+      return { x: anchor.x, y: Math.max(0, anchor.y - 80) };
+  }
+}
+
 /**
- * Cubic bezier path using the control offsets from the Qt painter, lifted but clamped.
+ * Cubic bezier between two anchors.
  *
- * The original offsets (`from.y - 30`, `to.y - 80`) are kept, but a control point is never
- * allowed above the top of the canvas: with the chart card high on the plane (or in the
- * tiled layout) `to.y - 80` went negative and the curve bowed out of the canvas, where the
- * `.canvas { overflow: hidden }` clipped it away. Because a cubic bezier is contained in the
- * convex hull of its control points, clamping both lift values to >= 0 keeps the whole
- * curve inside the plane.
+ * A cubic bezier is contained in the convex hull of its control points, so clamping the
+ * control lift to >= 0 keeps the whole curve inside the plane (`overflow: hidden` would
+ * otherwise clip it). Anchors default to the top side, which is the geometry the Qt
+ * overlay used; real callers pass the port's own side.
  */
-export function connectionPath(from: { x: number; y: number }, to: { x: number; y: number }): string {
-  const c1x = from.x;
-  const c1y = Math.max(0, from.y - 30);
-  const c2x = to.x;
-  const c2y = Math.max(0, to.y - 80);
-  return `M ${from.x} ${from.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${to.x} ${to.y}`;
+export function connectionPath(from: Anchor, to: Anchor): string {
+  const c1 = outControl(from);
+  const c2 = inControl(to);
+  return `M ${from.x} ${from.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${to.x} ${to.y}`;
+}
+
+/** Inward normal of an anchor: the direction a line points once it reaches the card. */
+function inward(side: Anchor['side']): { x: number; y: number } {
+  switch (side) {
+    case 'left':
+      return { x: 1, y: 0 };
+    case 'right':
+      return { x: -1, y: 0 };
+    case 'bottom':
+      return { x: 0, y: -1 };
+    default:
+      return { x: 0, y: 1 };
+  }
+}
+
+/**
+ * Arrowhead triangle with its tip on the anchor.
+ *
+ * Drawn as geometry rather than an SVG `<marker>` because `context-stroke` is not
+ * dependable across browsers and the layer already knows each line's colour. `zoom`
+ * divides the size so the arrow keeps a constant size on screen.
+ */
+export function arrowPath(to: Anchor, zoom: number): string {
+  const length = 8 / zoom;
+  const half = 4 / zoom;
+  const d = inward(to.side);
+  const baseX = to.x - d.x * length;
+  const baseY = to.y - d.y * length;
+  const px = -d.y;
+  const py = d.x;
+  return [
+    `M ${to.x} ${to.y}`,
+    `L ${baseX + px * half} ${baseY + py * half}`,
+    `L ${baseX - px * half} ${baseY - py * half}`,
+    'Z',
+  ].join(' ');
+}
+
+/** Midpoint of the curve, where the port label is parked (De Casteljau at t = 0.5). */
+function curveMidpoint(from: Anchor, to: Anchor): { x: number; y: number } {
+  const c1 = outControl(from);
+  const c2 = inControl(to);
+  const ax = (from.x + c1.x) / 2;
+  const ay = (from.y + c1.y) / 2;
+  const bx = (c1.x + c2.x) / 2;
+  const by = (c1.y + c2.y) / 2;
+  const cx = (c2.x + to.x) / 2;
+  const cy = (c2.y + to.y) / 2;
+  const dx = (ax + bx) / 2;
+  const dy = (ay + by) / 2;
+  const ex = (bx + cx) / 2;
+  const ey = (by + cy) / 2;
+  return { x: (dx + ex) / 2, y: (dy + ey) / 2 };
+}
+
+/** Compact port list for the label: two ids, then a count. */
+function portLabel(ports: string[]): string {
+  if (ports.length === 0) return '';
+  const shown = ports.slice(0, 2).join(' · ');
+  return ports.length > 2 ? `${shown} +${ports.length - 2}` : shown;
 }
 
 interface ConnectionLayerProps {
@@ -235,16 +341,29 @@ export function ConnectionLayer({
   const hidden = useBlockedBlink(blockedCardId, blockNonce);
 
   const isHidden = (conn: Connection): boolean =>
-    hidden.has(conn.matrixCardId) || hidden.has(conn.chartCardId);
+    hidden.has(conn.dependsOn) || hidden.has(conn.dependent);
 
   const background = connections.filter((c) => !c.highlighted && !isHidden(c));
   const foreground = connections.filter((c) => c.highlighted && !isHidden(c));
 
   // One mask, reused by both line groups: white everywhere, a black hole per card. The
   // lines therefore stop at every card edge, exactly like lines drawn on the MDI desktop.
-  // The anchor dots and the source-column highlight are drawn *outside* the mask, because
-  // they are deliberately meant to be readable on top of the card they refer to.
   const maskId = 'connection-card-cutout';
+
+  const renderLine = (conn: Connection, framed: boolean) => (
+    <g key={conn.key} className={`connection connection--${framed ? 'fg' : 'bg'}`}>
+      <path
+        className="connection__wire"
+        d={connectionPath(conn.from, conn.to)}
+        stroke={conn.color}
+        strokeWidth={framed ? 3 : 1.5}
+      />
+      <path className="connection__arrow" d={arrowPath(conn.to, view.zoom)} fill={conn.color} />
+      {framed && conn.ports.length > 0 ? (
+        <ConnectionLabel conn={conn} zoom={view.zoom} />
+      ) : null}
+    </g>
+  );
 
   // The SVG itself stays pinned to the viewport (a plane-sized SVG would be rasterised
   // as one enormous layer); only its contents are counter-translated, so everything below
@@ -255,45 +374,52 @@ export function ConnectionLayer({
       {/* Same transform as the world layer: translate *after* scale, so a plane point
           (px, py) lands at (px*zoom - view.x, py*zoom - view.y) in viewport px. */}
       <g transform={`translate(${-view.x}, ${-view.y}) scale(${view.zoom})`}>
-      <defs>
-        <mask id={maskId} maskUnits="userSpaceOnUse">
-          {/* Covers the whole unbounded plane, not just the viewport: this group is
-              counter-translated by the pan, so a `100%` rect would whiten only the first
-              screenful of plane coordinates and silently erase every line beyond it. */}
-          <rect x="-100000" y="-100000" width="200000" height="200000" fill="#ffffff" />
-          {rects.map((rect, index) => (
-            <rect
-              key={index}
-              x={rect.left}
-              y={rect.top}
-              width={rect.width}
-              height={rect.height}
-              fill="#000000"
-            />
-          ))}
-        </mask>
-      </defs>
-      <g mask={`url(#${maskId})`}>
-        {background.map((conn) => (
-          <g key={conn.key} className="connection connection--bg">
-            <path d={connectionPath(conn.from, conn.to)} stroke={conn.color} strokeWidth={1.5} />
-          </g>
-        ))}
-      </g>
-      <g mask={`url(#${maskId})`}>
-        {foreground.map((conn) => (
-          <g key={conn.key} className="connection connection--fg">
-            <path d={connectionPath(conn.from, conn.to)} stroke={conn.color} strokeWidth={3} />
-          </g>
-        ))}
-      </g>
-      {/* No end-point dots: this SVG paints *behind* the cards now, so a marker at either
-          end was occluded by the very card it referred to. Both ends are already conveyed —
-          the line meets each card's edge, and the source column is marked on its header cell
-          by `MatrixCard` (`vtable__colhead--source`), which is real DOM and therefore above
-          the card's own background. */}
+        <defs>
+          <mask id={maskId} maskUnits="userSpaceOnUse">
+            {/* Covers the whole unbounded plane, not just the viewport: this group is
+                counter-translated by the pan, so a `100%` rect would whiten only the first
+                screenful of plane coordinates and silently erase every line beyond it. */}
+            <rect x="-100000" y="-100000" width="200000" height="200000" fill="#ffffff" />
+            {rects.map((rect, index) => (
+              <rect
+                key={index}
+                x={rect.left}
+                y={rect.top}
+                width={rect.width}
+                height={rect.height}
+                fill="#000000"
+              />
+            ))}
+          </mask>
+        </defs>
+        {/* No end-point dots: this SVG paints *behind* the cards, so a marker at either
+            end was occluded by the card it referred to. The arrowhead sits on the target
+            anchor instead, and the label spells the port ids out while a card is selected. */}
+        <g mask={`url(#${maskId})`}>{background.map((conn) => renderLine(conn, false))}</g>
+        <g mask={`url(#${maskId})`}>{foreground.map((conn) => renderLine(conn, true))}</g>
       </g>
     </svg>
+  );
+}
+
+/** Port ids on the line, shown only while one of its two cards is selected. */
+function ConnectionLabel({ conn, zoom }: { conn: Connection; zoom: number }) {
+  const mid = curveMidpoint(conn.from, conn.to);
+  return (
+    <text
+      className="connection__label"
+      x={mid.x}
+      y={mid.y}
+      fill={conn.color}
+      fontSize={11 / zoom}
+      stroke="#ffffff"
+      strokeWidth={3 / zoom}
+      paintOrder="stroke"
+      textAnchor="middle"
+      dominantBaseline="middle"
+    >
+      {portLabel(conn.ports)}
+    </text>
   );
 }
 

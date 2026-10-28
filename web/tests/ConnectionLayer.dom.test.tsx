@@ -1,17 +1,19 @@
 /**
  * @vitest-environment jsdom
  *
- * Card-level connection lines.
+ * Connection lines.
  *
- * The connection line no longer corresponds to a row/column inside a matrix card —
- * it belongs to the whole card. The store's DependencyGraph is the source of truth:
- * exactly one line per dependency edge whose dependent side is a chart card, drawn
- * top-centre to top-centre. Attaching a second column of the same matrix card adds
- * no line, and table scrolling cannot move anything (the geometry never reads the
- * table viewport).
+ * The store's DependencyGraph is the source of truth: exactly one line per dependency
+ * edge — every edge, not only the ones that end at a chart card (2026-10-28). Endpoints
+ * resolve to a port when the edge names one and the card renders it, otherwise to the
+ * card edge that faces the other card, and each line carries an arrowhead at its target.
  *
- * jsdom reports all-zero rectangles, so the card roots and the world layer are given
- * explicit geometry, exactly like InfiniteCanvas.dom.test.tsx does.
+ * A pair of cards is still exactly one line: attaching a second column of the same matrix
+ * card adds no line, and table scrolling cannot move anything (the geometry never reads
+ * the table viewport).
+ *
+ * jsdom reports all-zero rectangles, so the card roots, the port elements and the world
+ * layer are given explicit geometry, exactly like InfiniteCanvas.dom.test.tsx does.
  */
 import { StrictMode, act } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -19,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   registerCard,
+  registerPort,
   resetMetrics,
   setCanvasElement,
   setCanvasZoom,
@@ -27,6 +30,7 @@ import {
 import { MatrixData } from '../src/core/MatrixData.ts';
 import { useWorkspace } from '../src/ui/workspaceStore.ts';
 import { ConnectionLayer } from '../src/ui/ConnectionLayer.tsx';
+import type { FunctionCardModel, PortConnection } from '../src/ui/types.ts';
 
 // React 19 wants this set so act() works outside its test renderer.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -111,9 +115,10 @@ function stubRoot(left: number, top: number, width: number, height: number): HTM
 
 /**
  * A matrix card at (100,80,640,420) and a chart card at (772,104,560,400), each with
- * its registered root rect. Top centres therefore are (420,80) and (1052,104).
+ * its registered root rect. The line therefore leaves the table's right edge at
+ * (740,290) and enters the chart's left edge at (772,304).
  */
-function setupScene() {
+function setupScene({ chart = true }: { chart?: boolean } = {}) {
   const viewport = document.createElement('div');
   stubRect(viewport, { left: 0, top: 0, width: 1200, height: 800 });
   const world = document.createElement('div');
@@ -124,17 +129,62 @@ function setupScene() {
 
   const matrixCardId = store().addMatrixCard([{ name: 'a.csv', matrix: buildMatrix(3) }]);
   store().setBounds(matrixCardId, { x: 100, y: 80, width: 640, height: 420 });
-  const chartId = store().addChartCard(matrixCardId, 0)!;
-  store().setBounds(chartId, { x: 772, y: 104, width: 560, height: 400 });
+  const chartId = (chart ? store().addChartCard(matrixCardId, 0) : 0) ?? 0;
+  if (chartId !== 0) {
+    store().setBounds(chartId, { x: 772, y: 104, width: 560, height: 400 });
+    registerCard(chartId, stubRoot(772, 104, 560, 400));
+  }
 
   registerCard(matrixCardId, stubRoot(100, 80, 640, 420));
-  registerCard(chartId, stubRoot(772, 104, 560, 400));
 
   return { matrixCardId, chartId };
 }
 
-function linePaths(host: HTMLElement): string[] {
-  return [...host.querySelectorAll('.connection-layer .connection path')].map(
+/** Matrix id of one card's first source. */
+function matrixIdOf(cardId: number): number {
+  const card = store().cards.find((entry) => entry.id === cardId) as
+    | { sources?: { matrixId: number }[] }
+    | undefined;
+  return card?.sources?.[0]?.matrixId ?? -1;
+}
+
+/**
+ * Push a function card straight into the store.
+ *
+ * The layer's contract is (cards, graph) — it draws whatever the graph says — so a
+ * backend stub would only add noise here. Store-level creation is covered by
+ * workspaceStore.test.ts.
+ */
+function addFunctionCard(
+  inputs: PortConnection[],
+  at: { x: number; y: number; width: number; height: number },
+): FunctionCardModel {
+  const id = Math.max(0, ...store().cards.map((card) => card.id)) + 50;
+  const card: FunctionCardModel = {
+    kind: 'formula',
+    id,
+    title: '',
+    ...at,
+    z: 5,
+    createdAt: Date.now(),
+    inputs,
+    signatureId: 'builtin:expression-columns',
+    params: { formulas: [{ name: 'A', expression: 'A' }] },
+    outputs: [{ outputId: 'result', resultMatrixId: -1 }],
+    node: null,
+    displayMatrixId: 900 + id,
+  };
+  useWorkspace.setState({ cards: [...store().cards, card] });
+  registerCard(id, stubRoot(at.x, at.y, at.width, at.height));
+  return card;
+}
+
+function wirePaths(host: HTMLElement): string[] {
+  return [...host.querySelectorAll('.connection__wire')].map((path) => path.getAttribute('d') ?? '');
+}
+
+function arrowPaths(host: HTMLElement): string[] {
+  return [...host.querySelectorAll('.connection__arrow')].map(
     (path) => path.getAttribute('d') ?? '',
   );
 }
@@ -160,19 +210,27 @@ afterEach(async () => {
   setCanvasZoom(1);
 });
 
-describe('card-level connection lines', () => {
-  it('draws one line per dependency edge, top-centre to top-centre', async () => {
+describe('connection lines', () => {
+  it('draws one line per dependency edge, from the source edge to the target edge', async () => {
     setupScene();
     const host = await mountLayer();
 
-    expect(linePaths(host)).toEqual(['M 420 80 C 420 50, 1052 24, 1052 104']);
+    expect(wirePaths(host)).toEqual(['M 740 290 C 800 290, 712 304, 772 304']);
   });
 
-  it('colours the line red for the selected source card and blue for the chart', async () => {
+  it('puts exactly one arrowhead on the target anchor, pointing into the card', async () => {
+    setupScene();
+    const host = await mountLayer();
+
+    // Entering the chart through its left edge means the arrow points right (+x).
+    expect(arrowPaths(host)).toEqual(['M 772 304 L 764 308 L 764 300 Z']);
+  });
+
+  it('colours the line red for the selected source card and blue for the target', async () => {
     const { matrixCardId, chartId } = setupScene();
     const host = await mountLayer(matrixCardId);
 
-    const red = host.querySelector('.connection--fg path');
+    const red = host.querySelector('.connection--fg .connection__wire');
     expect(red?.getAttribute('stroke')).toBe(RED);
 
     const root = roots[0];
@@ -184,7 +242,7 @@ describe('card-level connection lines', () => {
       );
     });
     await flush();
-    const blue = host.querySelector('.connection--fg path');
+    const blue = host.querySelector('.connection--fg .connection__wire');
     expect(blue?.getAttribute('stroke')).toBe(BLUE);
 
     await act(async () => {
@@ -195,7 +253,7 @@ describe('card-level connection lines', () => {
       );
     });
     await flush();
-    const grey = host.querySelector('.connection--bg path');
+    const grey = host.querySelector('.connection--bg .connection__wire');
     expect(grey?.getAttribute('stroke')).toBe(GREY);
     expect(host.querySelectorAll('.connection--fg')).toHaveLength(0);
   });
@@ -211,7 +269,7 @@ describe('card-level connection lines', () => {
 
     const chart = store().cards.find((card) => card.id === chartId);
     expect(chart && (chart as { config: { sources: unknown[] } }).config.sources).toHaveLength(2);
-    expect(host.querySelectorAll('.connection-layer .connection')).toHaveLength(1);
+    expect(host.querySelectorAll('.connection')).toHaveLength(1);
   });
 
   it('draws a second line when the chart reads a second matrix card', async () => {
@@ -232,7 +290,7 @@ describe('card-level connection lines', () => {
     });
     await flush();
 
-    expect(host.querySelectorAll('.connection-layer .connection')).toHaveLength(2);
+    expect(host.querySelectorAll('.connection')).toHaveLength(2);
   });
 
   it('skips an edge whose source card no longer exists, without crashing', async () => {
@@ -242,7 +300,101 @@ describe('card-level connection lines', () => {
 
     const host = await mountLayer();
 
-    expect(host.querySelectorAll('.connection-layer .connection')).toHaveLength(1);
-    expect(linePaths(host)[0]).toBe('M 420 80 C 420 50, 1052 24, 1052 104');
+    expect(host.querySelectorAll('.connection')).toHaveLength(1);
+    expect(wirePaths(host)[0]).toBe('M 740 290 C 800 290, 712 304, 772 304');
+  });
+
+  // ── every edge is drawn, not only chart edges (2026-10-28) ──────────
+
+  it('draws the line into a function card, not only into charts', async () => {
+    const { matrixCardId } = setupScene({ chart: false });
+    const functionCard = addFunctionCard(
+      [
+        {
+          portId: 'src',
+          target: { type: 'matrix', cardId: matrixCardId, matrixId: matrixIdOf(matrixCardId) },
+        },
+      ],
+      { x: 100, y: 560, width: 480, height: 320 },
+    );
+    store().dependencies.addDependency(functionCard.id, matrixCardId, 'src');
+
+    const host = await mountLayer();
+
+    // Table right edge (740,290) -> function card left edge (100,720).
+    expect(wirePaths(host)).toEqual(['M 740 290 C 800 290, 40 720, 100 720']);
+  });
+
+  it('draws both hops of a table -> function -> function chain', async () => {
+    const { matrixCardId } = setupScene({ chart: false });
+    const first = addFunctionCard(
+      [
+        {
+          portId: 'src',
+          target: { type: 'matrix', cardId: matrixCardId, matrixId: matrixIdOf(matrixCardId) },
+        },
+      ],
+      { x: 100, y: 560, width: 480, height: 320 },
+    );
+    const second = addFunctionCard(
+      [
+        {
+          portId: 'src',
+          target: { type: 'matrix', cardId: first.id, matrixId: first.displayMatrixId },
+        },
+      ],
+      { x: 100, y: 960, width: 480, height: 320 },
+    );
+    store().dependencies.addDependency(first.id, matrixCardId, 'src');
+    store().dependencies.addDependency(second.id, first.id, 'src');
+
+    const host = await mountLayer();
+
+    // Matrix -> first, then first's right edge (580,720) -> second's left edge (100,1120).
+    expect(wirePaths(host)).toEqual([
+      'M 740 290 C 800 290, 40 720, 100 720',
+      'M 580 720 C 640 720, 40 1120, 100 1120',
+    ]);
+  });
+
+  it('anchors on the port when the card renders one for that portId', async () => {
+    const { matrixCardId } = setupScene({ chart: false });
+    const functionCard = addFunctionCard(
+      [
+        {
+          portId: 'src',
+          target: { type: 'matrix', cardId: matrixCardId, matrixId: matrixIdOf(matrixCardId) },
+        },
+      ],
+      { x: 100, y: 560, width: 480, height: 320 },
+    );
+    store().dependencies.addDependency(functionCard.id, matrixCardId, 'src');
+
+    // The port chip the card would render, at (120,600) with 80x20 -> centre (160,610).
+    const chip = document.createElement('span');
+    stubRect(chip, { left: 120, top: 600, width: 80, height: 20 });
+    await act(async () => {
+      registerPort(functionCard.id, 'src', chip, 'left');
+    });
+
+    const host = await mountLayer();
+
+    expect(wirePaths(host)).toEqual(['M 740 290 C 800 290, 100 610, 160 610']);
+    // The arrowhead follows the port's side, so it points right (+x) into the chip.
+    expect(arrowPaths(host)).toEqual(['M 160 610 L 152 614 L 152 606 Z']);
+  });
+
+  it('labels a highlighted line with the port ids it carries', async () => {
+    const { matrixCardId } = setupScene();
+    const host = await mountLayer(matrixCardId);
+
+    const labels = [...host.querySelectorAll('.connection__label')].map(
+      (node) => node.textContent ?? '',
+    );
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).toBe(`src:${matrixIdOf(matrixCardId)}:0`);
+
+    const plain = await mountLayer(null);
+    expect(plain.querySelectorAll('.connection__label')).toHaveLength(0);
   });
 });

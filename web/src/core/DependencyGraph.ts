@@ -2,34 +2,54 @@
  * Pure integer dependency graph — TypeScript port of `src/core/DependencyGraph.cpp`.
  *
  * Direction: `dependent` depends on `dependsOn`. Internally the map is stored as
- * `dependsOn -> [dependents]`, which makes "who must be closed first?" and
+ * `dependsOn -> { dependent -> ports }`, which makes "who must be closed first?" and
  * "what must be refreshed when this changes?" both O(1) lookups.
  *
- * Two guarantees the C++ original did not provide, added because the roadmap now
+ * Three guarantees the C++ original did not provide, added because the roadmap now
  * includes FunctionCard (which introduces card -> card -> card chains):
  *   1. edges are deduplicated — registering the same relation twice does not make
  *      `getDependents` return the same id twice;
  *   2. the graph stays acyclic — an edge that would close a loop is refused rather
- *      than silently corrupting the close-protection rule.
+ *      than silently corrupting the close-protection rule;
+ *   3. an edge remembers **which ports** carry it (2026-10-28). The pair
+ *      (dependent, dependsOn) is still one edge — one line on the canvas — but the
+ *      port ids on the dependent side are kept, because `portId` is the identity the
+ *      port-semantics spec locks in and the connection layer anchors on it. The set
+ *      is what keeps "a chart reading three columns of one table" from becoming
+ *      three lines.
  */
 
 /** A cycle path, outermost node first: `a -> b -> a`. */
 export type CyclePath = number[];
 
+/** One dependency edge: the card pair plus the port ids recorded on the dependent side. */
+export interface DependencyEdge {
+  dependsOn: number;
+  dependent: number;
+  /** Target-side port ids, sorted for determinism. Empty when the edge was unnamed. */
+  ports: string[];
+}
+
 export class DependencyGraph {
-  /** dependsOn -> set of dependents. A Set keeps the edge set free of duplicates. */
-  private m_dependents = new Map<number, Set<number>>();
+  /** dependsOn -> (dependent -> set of port ids). A Set keeps the edge set free of duplicates. */
+  private m_dependents = new Map<number, Map<number, Set<string>>>();
 
   /**
-   * Register "`dependentId` depends on `dependsOnId`".
+   * Register "`dependentId` depends on `dependsOnId`" through `portId` (optional).
    *
    * Returns `null` when the edge was accepted (including when it already existed),
    * or the offending cycle path when adding it would create a loop — in that case
    * **nothing is mutated** and the caller can surface the refusal to the user.
    *
-   * Self-dependency (`a -> a`) is just the shortest possible cycle.
+   * Registering the same card pair again with a different `portId` adds a port to the
+   * existing edge; it never creates a second one. Self-dependency (`a -> a`) is just the
+   * shortest possible cycle.
    */
-  addDependency(dependentId: number, dependsOnId: number): CyclePath | null {
+  addDependency(
+    dependentId: number,
+    dependsOnId: number,
+    portId?: string | readonly string[],
+  ): CyclePath | null {
     // Follow the *dependency* direction from `dependsOnId`: if it already sits on top
     // of `dependentId`, then making `dependentId` depend on it closes a loop.
     const downstream = this.findDownstreamPath(dependsOnId, dependentId);
@@ -41,10 +61,17 @@ export class DependencyGraph {
 
     let list = this.m_dependents.get(dependsOnId);
     if (!list) {
-      list = new Set<number>();
+      list = new Map<number, Set<string>>();
       this.m_dependents.set(dependsOnId, list);
     }
-    list.add(dependentId);
+    let ports = list.get(dependentId);
+    if (!ports) {
+      ports = new Set<string>();
+      list.set(dependentId, ports);
+    }
+    if (portId !== undefined) {
+      for (const id of typeof portId === 'string' ? [portId] : portId) ports.add(id);
+    }
     return null;
   }
 
@@ -52,13 +79,20 @@ export class DependencyGraph {
    * Unregister "`dependentId` depends on `dependsOnId`" — the inverse of
    * `addDependency`.
    *
-   * A no-op when the edge does not exist: nothing is mutated and nothing thrown. When
-   * the last dependent of `dependsOnId` goes, the map key itself is dropped, so
-   * `hasDependents` reports `false` again for a node nobody reads.
+   * With `portId`, only that port leaves the edge; the edge itself survives while other
+   * ports still name it. Without `portId` (or with the last remaining port), the whole
+   * edge goes. A no-op when the edge does not exist: nothing is mutated and nothing
+   * thrown. When the last dependent of `dependsOnId` goes, the map key itself is dropped,
+   * so `hasDependents` reports `false` again for a node nobody reads.
    */
-  removeDependency(dependentId: number, dependsOnId: number): void {
+  removeDependency(dependentId: number, dependsOnId: number, portId?: string): void {
     const deps = this.m_dependents.get(dependsOnId);
     if (!deps) return;
+    const ports = deps.get(dependentId);
+    if (ports && portId !== undefined) {
+      ports.delete(portId);
+      if (ports.size > 0) return;
+    }
     deps.delete(dependentId);
     if (deps.size === 0) this.m_dependents.delete(dependsOnId);
   }
@@ -76,12 +110,21 @@ export class DependencyGraph {
 
   getDependents(cardId: number): number[] {
     const deps = this.m_dependents.get(cardId);
-    return deps ? [...deps] : [];
+    return deps ? [...deps.keys()] : [];
   }
 
   hasDependents(cardId: number): boolean {
     const deps = this.m_dependents.get(cardId);
     return deps !== undefined && deps.size > 0;
+  }
+
+  /**
+   * Port ids recorded for one edge, sorted. Empty when the edge exists unnamed — the
+   * caller must then fall back to a card-level anchor instead of inventing a port.
+   */
+  getPorts(dependentId: number, dependsOnId: number): string[] {
+    const ports = this.m_dependents.get(dependsOnId)?.get(dependentId);
+    return ports ? [...ports].sort() : [];
   }
 
   /** Direct dependencies of `cardId` (the cards it itself depends on). */
@@ -105,10 +148,12 @@ export class DependencyGraph {
   }
 
   /** Snapshot of every edge, for debugging and tests. */
-  edges(): Array<{ dependsOn: number; dependent: number }> {
-    const out: Array<{ dependsOn: number; dependent: number }> = [];
+  edges(): DependencyEdge[] {
+    const out: DependencyEdge[] = [];
     for (const [dependsOn, deps] of this.m_dependents) {
-      for (const dependent of deps) out.push({ dependsOn, dependent });
+      for (const [dependent, ports] of deps) {
+        out.push({ dependsOn, dependent, ports: [...ports].sort() });
+      }
     }
     return out;
   }
@@ -125,7 +170,7 @@ export class DependencyGraph {
 
     while (queue.length > 0) {
       const current = queue.shift() as number;
-      for (const next of this.m_dependents.get(current) ?? []) {
+      for (const next of this.m_dependents.get(current)?.keys() ?? []) {
         if (seen.has(next)) continue;
         seen.add(next);
         previous.set(next, current);
@@ -167,7 +212,7 @@ export class DependencyGraph {
       if (mark === 0) return true;
       if (mark === 1) return false;
       state.set(node, 0);
-      for (const next of this.m_dependents.get(node) ?? []) {
+      for (const next of this.m_dependents.get(node)?.keys() ?? []) {
         if (visit(next)) return true;
       }
       state.set(node, 1);
@@ -184,7 +229,7 @@ export class DependencyGraph {
     const all = new Set<number>();
     for (const [dependsOn, deps] of this.m_dependents) {
       all.add(dependsOn);
-      for (const dependent of deps) all.add(dependent);
+      for (const dependent of deps.keys()) all.add(dependent);
     }
     return [...all];
   }

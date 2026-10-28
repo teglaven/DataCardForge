@@ -24,6 +24,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { MatrixData } from '../../core/MatrixData.ts';
 import { useTranslator, useWorkspace, type RepointOffer } from '../workspaceStore.ts';
+import { registerPort, unregisterPort, type AnchorSide } from '../cardMetrics.ts';
 import type { FunctionCardModel, NodeStatus } from '../types.ts';
 import type { MessageKey } from '../i18n.ts';
 import { CHART_TYPE_ORDER, chartTypeDef, minimumColumns, type ChartTypeId } from '../../charts/chartTypes.ts';
@@ -100,6 +101,18 @@ export function FormulaCard({
   const setFormula = useWorkspace((s) => s.setFormula);
   const removeFormula = useWorkspace((s) => s.removeFormula);
   const showToast = useWorkspace((s) => s.showToast);
+  /**
+   * Register one rendered port as a connection endpoint.
+   *
+   * The layer anchors on `portId`, never on position (port-semantics-v1 §已锁定 1). The
+   * cleanup keeps the registry honest when the list re-renders or the card goes away — a
+   * stale rect would leave a wire pointing at nothing.
+   */
+  const portRef = (portId: string, side: AnchorSide) => (element: HTMLElement | null) => {
+    if (!element) return undefined;
+    registerPort(card.id, portId, element, side);
+    return () => unregisterPort(card.id, portId);
+  };
   /** Column header menu: pick a chart type for one output column. */
   const [chartMenu, setChartMenu] = useState<{ x: number; y: number; column: number } | null>(null);
 
@@ -229,7 +242,11 @@ export function FormulaCard({
             ) : (
               <ul className="formula-card__port-list">
                 {inputs.map((input) => (
-                  <li key={input.portId} className="formula-card__port">
+                  <li
+                    key={input.portId}
+                    className="formula-card__port"
+                    ref={portRef(input.portId, 'left')}
+                  >
                     <span className="formula-card__port-id" title={input.portId}>
                       {input.portId}
                     </span>
@@ -439,7 +456,11 @@ export function FormulaCard({
               ) : null}
               <ul className="formula-card__output-list">
                 {card.outputs.map((output, index) => (
-                  <li key={output.outputId} className="formula-card__output-item">
+                  <li
+                    key={output.outputId}
+                    className="formula-card__output-item"
+                    ref={portRef(output.outputId, 'right')}
+                  >
                     <span className="formula-card__output-id">
                       {index === 0 ? t('formula.outputName') : output.outputId}
                     </span>

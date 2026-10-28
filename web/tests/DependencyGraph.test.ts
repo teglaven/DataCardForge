@@ -66,7 +66,46 @@ describe('DependencyGraph', () => {
   it('exposes its edges for inspection', () => {
     const graph = new DependencyGraph();
     graph.addDependency(10, 1);
-    expect(graph.edges()).toEqual([{ dependsOn: 1, dependent: 10 }]);
+    expect(graph.edges()).toEqual([{ dependsOn: 1, dependent: 10, ports: [] }]);
+  });
+
+  // ── port identity on edges (2026-10-28) ─────────────────────────────
+
+  it('keeps one edge per card pair and collects its port ids', () => {
+    const graph = new DependencyGraph();
+    // A chart reading two columns of one table is still one line (2026-10-24), but both
+    // port ids must survive: the connection layer anchors on portId, never on position
+    // (port-semantics-v1 §已锁定 1).
+    graph.addDependency(10, 1, 'src:7:2');
+    graph.addDependency(10, 1, 'src:7:0');
+
+    expect(graph.edgeCount()).toBe(1);
+    expect(graph.getPorts(10, 1)).toEqual(['src:7:0', 'src:7:2']);
+    expect(graph.edges()).toEqual([
+      { dependsOn: 1, dependent: 10, ports: ['src:7:0', 'src:7:2'] },
+    ]);
+  });
+
+  it('removes one port and keeps the edge while another port still names it', () => {
+    const graph = new DependencyGraph();
+    graph.addDependency(10, 1, ['src:7:0', 'src:7:2']);
+
+    graph.removeDependency(10, 1, 'src:7:0');
+    expect(graph.hasDependents(1)).toBe(true);
+    expect(graph.getPorts(10, 1)).toEqual(['src:7:2']);
+
+    graph.removeDependency(10, 1, 'src:7:2');
+    expect(graph.hasDependents(1)).toBe(false);
+  });
+
+  it('records no ports when a refused edge would close a loop', () => {
+    const graph = new DependencyGraph();
+    graph.addDependency(10, 1, 'src:7:0');
+    const cycle = graph.addDependency(1, 10, 'out');
+
+    expect(cycle).not.toBeNull();
+    expect(graph.getPorts(1, 10)).toEqual([]);
+    expect(graph.edgeCount()).toBe(1);
   });
 
   // ── edge deduplication (2026-10-15) ───────────────────────────────────
@@ -160,7 +199,7 @@ describe('DependencyGraph', () => {
     expect(graph.edgeCount()).toBe(1);
     expect(graph.hasDependents(1)).toBe(true);
     expect(graph.getDependents(1)).toEqual([11]);
-    expect(graph.edges()).toEqual([{ dependsOn: 1, dependent: 11 }]);
+    expect(graph.edges()).toEqual([{ dependsOn: 1, dependent: 11, ports: [] }]);
   });
 
   it('is a no-op for an edge that does not exist', () => {
@@ -186,6 +225,6 @@ describe('DependencyGraph', () => {
     graph.removeDependency(10, 1);
     expect(graph.hasDependents(1)).toBe(false); // the key itself is dropped
     expect(graph.edgeCount()).toBe(1);
-    expect(graph.edges()).toEqual([{ dependsOn: 2, dependent: 11 }]);
+    expect(graph.edges()).toEqual([{ dependsOn: 2, dependent: 11, ports: [] }]);
   });
 });

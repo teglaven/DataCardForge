@@ -728,7 +728,9 @@ function rebuildDependencies(cards: CardModel[]): {
         droppedEdges += 1;
         continue;
       }
-      if (dependencies.addDependency(card.id, target)) droppedEdges += 1;
+      // The port id travels with the edge: it is the identity the connection layer
+      // anchors on, and it is already on the envelope — no per-kind knowledge needed.
+      if (dependencies.addDependency(card.id, target, input.portId)) droppedEdges += 1;
     }
   }
   return { dependencies, droppedEdges };
@@ -961,9 +963,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
     const beforeOwners = new Set(card.inputs.map((input) => input.target.cardId));
     const afterOwners = new Set(nextInputs.map((input) => input.target.cardId));
+    const portsFor = (ownerId: number): string[] =>
+      nextInputs.filter((input) => input.target.cardId === ownerId).map((input) => input.portId);
     for (const ownerId of afterOwners) {
       if (beforeOwners.has(ownerId)) continue;
-      const cycle = state.dependencies.addDependency(cardId, ownerId);
+      const cycle = state.dependencies.addDependency(cardId, ownerId, portsFor(ownerId));
       if (cycle) {
         get().showToast(
           'error',
@@ -974,6 +978,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     }
     for (const ownerId of beforeOwners) {
       if (!afterOwners.has(ownerId)) state.dependencies.removeDependency(cardId, ownerId);
+    }
+    // A surviving owner can still have its port set rewritten (a column was added to or
+    // removed from the chart without changing who owns it), so re-sync the set instead of
+    // only appending to it.
+    for (const ownerId of afterOwners) {
+      state.dependencies.removeDependency(cardId, ownerId);
+      state.dependencies.addDependency(cardId, ownerId, portsFor(ownerId));
     }
     set({ cards: cards.map((entry) => (entry.id === cardId ? { ...nextCard, inputs: nextInputs } : entry)) });
     return true;
@@ -1146,7 +1157,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // Guarded against loops — once FunctionCard chains cards together, a chart could
       // otherwise end up depending on itself through a longer path.
       for (const ownerId of new Set(cardIds)) {
-        const cycle = state.dependencies.addDependency(cardId, ownerId);
+        const ports = card.inputs
+          .filter((input) => input.target.cardId === ownerId)
+          .map((input) => input.portId);
+        const cycle = state.dependencies.addDependency(cardId, ownerId, ports);
         if (cycle) {
           get().showToast(
             'error',
@@ -1558,7 +1572,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         displayMatrixId,
       };
 
-      const cycle = state.dependencies.addDependency(cardId, sourceCardId);
+      const cycle = state.dependencies.addDependency(
+        cardId,
+        sourceCardId,
+        inputs.map((input) => input.portId),
+      );
       if (cycle) {
         get().showToast(
           'error',
@@ -1673,7 +1691,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         node: null,
         displayMatrixId: state.nextMatrixId,
       };
-      state.dependencies.addDependency(cardId, sourceCardId);
+      state.dependencies.addDependency(
+        cardId,
+        sourceCardId,
+        inputs.map((input) => input.portId),
+      );
       set({
         cards: [...state.cards, card],
         dependencies: state.dependencies,
