@@ -607,6 +607,36 @@ try {
   await page.waitForTimeout(1_500);
   const posErrors = await page.locator('.formula-card__error').allInnerTexts();
   check('a Pos.N reference computes', posErrors.length === 0, posErrors.join(' | '));
+
+  // The reported failure: after 视图 → 平铺 the card becomes viewport-sized, and the result
+  // grid (whose flex basis is its own content height) used to squeeze the formula zone to
+  // ~11 px — the editor was gone exactly when the card was big enough to be useful.
+  await page.locator('.menubar__trigger').nth(1).click();
+  await page.waitForSelector('.menubar__item', { timeout: 5_000 });
+  await page
+    .locator('.menubar__item')
+    .filter({ hasText: /Tile|平铺/ })
+    .first()
+    .click();
+  await page.waitForTimeout(800);
+  const zones = await page.evaluate(() => {
+    const formulas = document.querySelector('.formula-card__formulas');
+    const outputs = document.querySelector('.formula-card__outputs');
+    const expr = document.querySelector('.formula-card__expr');
+    const f = formulas.getBoundingClientRect();
+    const o = outputs.getBoundingClientRect();
+    return {
+      formulasH: Math.round(f.height),
+      overlap: Math.round(f.bottom - o.top),
+      exprH: expr ? Math.round(expr.getBoundingClientRect().height) : -1,
+    };
+  });
+  check(
+    'a tiled (viewport-sized) card keeps the formula zone above the result grid',
+    zones.formulasH >= 40 && zones.overlap <= 1 && zones.exprH >= 12,
+    JSON.stringify(zones),
+  );
+
   await page.locator('.card--formula .card__close').first().click();
   await page.waitForTimeout(400);
 
