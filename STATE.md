@@ -5,9 +5,11 @@
 B 方案：C++/Eigen 后端持计算，浏览器只是交互表面；函数卡接口已稳定，交互还没收口。
 
 ## 上次收工点
-- HEAD: 30d9837（feat(web): 连线路由变化加过渡——形状补间 220ms）
-- 时间: 2026-10-29T18:20:00Z
-- 在做: 连线绕行已落地并柔化，且改为「路线形状补间」（卡心补间已删，翻边/整卡跳变都被动画到）；hover/断线编辑仍未做
+- HEAD: 1c5a215（chore(state): 收工点 30d9837 —— 路线补间入账）
+- 时间: 2026-10-29T18:44:16Z
+- 在做: 仓库卫生 + 权属文档。PROVENANCE 补齐三处：时间线（2026-07 原型 → 08-07 Qt → 10-14 web）、
+  数据来源（合成数据 + `generate_matrix.py` 可复现）、测试口径（删硬编码数字，改「以命令输出为准」——
+  此前 394/489/507 三处漂移）。`AGENTS.md` 与 `web/src/probe.ts` 等临时探针移出追踪，文件仍在磁盘。
 
 ## 已冻结契约（改它要新决策）
 - 端口 = 稳定身份 portId（不做位置语义）
@@ -22,15 +24,17 @@ B 方案：C++/Eigen 后端持计算，浏览器只是交互表面；函数卡�
 - 性能门禁阈值（本次新建，首版；3× / 1.3× 是首测拍的，见 docs/docs/decisions/2026-10-29-perf-gate.md）
 
 ## 已知缺口（top 5）
-1. 函数卡：参数表单未按签名渲染；K>1 无输出选择器
-2. 前端 `web/src/core/stats.ts`（437 行：分位/直方图/KDE/回归/Pearson）仍在算统计，越界，待搬后端
-3. 性能门禁只有引擎层这一版：HTTP 层、缓存命中/冷启动、CI 触发都未覆盖（opt-in，CI 仍不跑）
-4. 连线：hover / 断线编辑未做；极窄缝隙张力退化到近折线；路线补间是逐点插值，中间帧可能短暂掠过第三张卡（卡不透明+线在卡下，表现为背后掠过）
-5. 未提交：15 个已改文件（`backend/src/http_server.{cpp,h}`、`web/src/**` 属「结果预览 / 稠密帧」lane）
-   + 3 个未跟踪（`web/src/probe.ts`、`web/tests/zz-cascade.probe.test.ts` 两份临时探针待清理；
-   `docs/docs/decisions/2026-10-29-result-preview.md` 是该 lane 的决策草案）
+1. **探针依赖，阻塞发布**：`web/src/ui/workspaceStore.ts:18` 仍 `import { probeLog, probeNow, probeOrigin }
+   from '../probe.ts'`，而 probe.ts 已按仓库卫生出库。这批 lane 文件一提交即为坏构建（克隆后
+   `Cannot find module '../probe.ts'`）。二选一：清掉探针调用，或把 probe.ts 正式化并恢复追踪。
+2. `tPullStart` 越出作用域（定义在 workspaceStore.ts:836 的函数内，885 处使用）→ 测试
+   **549 passed / 2 failed / 14 skipped**。冒烟「Ctrl+滚轮缩放」那条也红，已 stash 验证与本轮无关。
+3. 函数卡：参数表单未按签名渲染；K>1 无输出选择器
+4. 前端 `web/src/core/stats.ts`（437 行：分位/直方图/KDE/回归/Pearson）仍在算统计，越界，待搬后端
+5. 性能门禁只有引擎层：HTTP 层、缓存命中/冷启动、CI 触发都未覆盖（opt-in，CI 仍不跑）；
+   连线 hover / 断线编辑未做（要先裁决「连线不拦截鼠标」这条锁定项）
 
 ## 下次开工第一件事（RESUME）
-先跑 `bash scripts/state-check.sh`；工作区还压着「结果预览 / 稠密帧」lane 的 15 个未提交文件
-（`workspaceStore.ts` 的 `tPullStart` 未定义 → 2 条用例红；冒烟里「Ctrl+滚轮缩放」那条也红，
-已 stash 验证与本轮无关），先让它收口再谈别的。之后按缺口 top 4：hover / 断线编辑（要先裁决「连线不拦截鼠标」这条锁定项）。
+先跑 `bash scripts/state-check.sh`。工作区仍压着「结果预览 / 稠密帧」lane 的 15 个改动：先解缺口 1
+的探针依赖，再修 `tPullStart` 作用域让 2 条用例转绿，然后才提交该 lane。切 GitHub Public 排在
+这个 lane 收口之后（发布不可逆，见 PROVENANCE 第四节）。

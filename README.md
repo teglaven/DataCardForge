@@ -289,7 +289,7 @@ npm test                  # unit tests (vitest, includes cross-tier fixtures)
 ### Tests
 
 ```bash
-# Frontend: typecheck + 489 unit tests (including 81 cross-tier differential fixtures)
+# Frontend: typecheck + unit tests (count printed by vitest; includes 81 cross-tier differential fixtures)
 cd web && npm run typecheck && npm test
 
 # Backend: 7 ctest cases (cross-tier fixtures, matrix operators, node registry, card fixtures; 3 further gates are opt-in and Skipped by default)

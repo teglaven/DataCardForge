@@ -46,3 +46,16 @@ web/.probe/
 # scripts/ before they count as a regression defence (see docs/docs/history.md
 # §6.1-2 "可复跑 ≠ 在别人机器上能复跑").
 work/
+
+# ── 本机 agent 协议：不入库 ────────────────────────────────────────────────
+# AGENTS.md 含本机绝对路径、systemd 单元名与端口，属工作区协议而非项目产物。
+AGENTS.md
+
+# ── 临时探针：调试用，不构成回归防线（真防线是 backend/tests/ 与 web/tests/ 的正式用例）──
+# ⚠ 已知依赖：web/src/ui/workspaceStore.ts 仍 import '../probe.ts'。提交该文件前必须先清掉
+#   探针调用，否则仓库克隆后无法构建（见 STATE.md 已知缺口 1）。
+web/src/probe.ts
+web/tests/*.probe.test.ts
+
+# ── 本地工具环境（venv 等）────────────────────────────────────────────────
+.tools/
