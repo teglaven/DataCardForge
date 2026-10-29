@@ -5,11 +5,10 @@
 B 方案：C++/Eigen 后端持计算，浏览器只是交互表面；函数卡接口已稳定，交互还没收口。
 
 ## 上次收工点
-- HEAD: 4ff4d51（docs(provenance): 补齐原型时间线与数据来源，AGENTS.md 与临时探针出库）
-- 时间: 2026-10-29T18:52:00Z
-- 在做: 删探针 + 文档收口。`web/src/probe.ts` 与 `zz-cascade.probe.test.ts` 已删除，
-  `workspaceStore.ts` 的 import 与 17 处 probe 调用一并清掉；顺带修掉 `tPullStart` 越界
-  （拉全量结果时误用了预览的计时变量）。前端 typecheck 通过，测试 550 passed / 14 skipped。
+- 时间: 2026-10-29T18:55:28Z
+- 在做: 删探针 + 文档按「读者边界」重构。`probe.ts` 与探针用例已删，`workspaceStore.ts` 的
+  import 与 17 处 probe 调用清掉；顺带修掉 `tPullStart` 越界 → typecheck 通过、550 passed / 14 skipped。
+  PROVENANCE 砍到 29 行，只留权属 / 数据来源 / AI 说明 / 贡献方式；
 
 ## 已冻结契约（改它要新决策）
 - 端口 = 稳定身份 portId（不做位置语义）
