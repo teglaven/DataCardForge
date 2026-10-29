@@ -77,6 +77,16 @@ target_link_libraries(dc_card_fixture_run PRIVATE dc_core)
 add_test(NAME card_fixtures
   COMMAND dc_card_fixture_run ${CMAKE_SOURCE_DIR}/../web/tests/fixtures/cards/function-card.v2.json)
 
+# Engine-layer perf gate (docs/docs/decisions/2026-10-29-perf-gate.md): dc_bench calls
+# ExprEngine::evaluate / evaluateMatrix directly — no HTTP, no server, no service restarts.
+# Opt-in like diff_fuzz / nodes_stress: without DC_RUN_BENCH=1 the binary itself exits 101 and
+# ctest records "Not Run" (SKIP_RETURN_CODE), so CI stays fast and deterministic. No Python
+# needed: the gate is a self-contained C++17 binary linked against dc_core.
+add_executable(dc_bench bench/bench_engine.cpp)
+target_link_libraries(dc_bench PRIVATE dc_core)
+add_test(NAME perf_gate COMMAND dc_bench)
+set_tests_properties(perf_gate PROPERTIES SKIP_RETURN_CODE 101)
+
 # Both opt-in gates below need a Python interpreter, and find_package must run BEFORE
 # the add_test calls that expand ${Python3_EXECUTABLE} — otherwise the variable is empty,
 # the command degenerates to the bare script path, and ctest fails with BAD_COMMAND

@@ -1,0 +1,19 @@
+{
+  "machine": "AMD Ryzen 7 5700X 8-Core Processor",
+  "git": "eac99b2",
+  "taken_at": "2026-10-29T16:55:47Z",
+  "cases": {
+    "elem.add": { "p50_ms": 0.19, "p95_ms": 0.21 },
+    "elem.sqrt": { "p50_ms": 0.48, "p95_ms": 0.49 },
+    "elem.branch": { "p50_ms": 0.59, "p95_ms": 0.60 },
+    "elem.aggregate": { "p50_ms": 0.24, "p95_ms": 0.25 },
+    "elem.window": { "p50_ms": 0.54, "p95_ms": 0.55 },
+    "elem.k5": { "p50_ms": 1.59, "p95_ms": 1.65 },
+    "mx.transpose": { "p50_ms": 4.20, "p95_ms": 4.29 },
+    "mx.mixed": { "p50_ms": 6.59, "p95_ms": 6.65 },
+    "mx.matmul": { "p50_ms": 12.27, "p95_ms": 12.28 },
+    "mx.inv": { "p50_ms": 51.50, "p95_ms": 52.71 },
+    "mx.det": { "p50_ms": 7.47, "p95_ms": 7.48 },
+    "mx.solve": { "p50_ms": 55.58, "p95_ms": 55.93 }
+  }
+}

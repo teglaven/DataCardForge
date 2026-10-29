@@ -1,0 +1,44 @@
+{
+  "generated_from": "backend/bench/baseline.json（首测 p50；git eac99b2；2026-10-29T16:55:47Z；AMD Ryzen 7 5700X 8-Core Processor）",
+  "generated_at": "2026-10-29",
+  "rule": "max_ms = 首测 p50 × 3，向上取到 0.1 ms",
+  "regression_ratio": 1.3,
+  "cases": {
+    "elem.add": {
+      "max_ms": 0.6
+    },
+    "elem.sqrt": {
+      "max_ms": 1.5
+    },
+    "elem.branch": {
+      "max_ms": 1.8
+    },
+    "elem.aggregate": {
+      "max_ms": 0.8
+    },
+    "elem.window": {
+      "max_ms": 1.7
+    },
+    "elem.k5": {
+      "max_ms": 4.8
+    },
+    "mx.transpose": {
+      "max_ms": 12.6
+    },
+    "mx.mixed": {
+      "max_ms": 19.8
+    },
+    "mx.matmul": {
+      "max_ms": 36.9
+    },
+    "mx.inv": {
+      "max_ms": 154.5
+    },
+    "mx.det": {
+      "max_ms": 22.5
+    },
+    "mx.solve": {
+      "max_ms": 166.8
+    }
+  }
+}
