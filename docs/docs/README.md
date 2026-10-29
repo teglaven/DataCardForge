@@ -29,6 +29,8 @@
   - [长回合烧额度：提前发现与结构防治](lessons/2026-10-27-long-turn-budget.md) ← **成本治理规则 + 三条被否掉的方案**
   - [ImPlot v1.1 API 大改](lessons/implot-v1.1-api.md)
   - [ImGui Docking 下 PushStyleColor 的坑](lessons/imgui-docking-pushstylecolor.md)
+- 🧾 **任务书** (`tasks/`) — 一次会话可完成的执行切片：前置条件、契约红线、验收命令
+  - [摘要面板 P2（前端）](tasks/2026-10-29-summary-p2-panel.md) ← 待开工，被「结果预览 / 稠密帧」lane 阻塞
 - 📅 **开发日志** (`log/`) — 按日期记录进展
   - [2026-10-28](log/2026-10-28.md)（用户报障两句 → 三个真缺陷：指针捕获吞 click · 带表头列没有可用的列名 · 公式区被结果表挤成 0）
   - [2026-10-27](log/2026-10-27.md)（函数卡从规格到能跑：v2 落地 · 重指向确认 · 列数契约 · 结果可绘图/可链式 · 回归签名反证通用性）
