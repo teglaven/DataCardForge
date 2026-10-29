@@ -33,14 +33,15 @@ import { cardRect, subscribeLayout, getLayoutVersion, type Rect } from './cardMe
 import {
   advanceTween,
   arrowPathAt,
-  arrowTip,
   dashArray,
   dashCycle,
   dashDuration,
   geometryDistance,
-  pathData,
+  routeArrowTip,
+  routeGeometry,
+  routeLabelPoint,
+  routePathData,
   tweenPlan,
-  visibleLabelPoint,
   wireGeometry,
   type Point,
   type WireDirection,
@@ -376,9 +377,27 @@ export function ConnectionLayer({
   // and that is also what turns centre-to-centre endpoints into frame-to-frame wires.
   const maskId = 'connection-card-cutout';
 
+  /**
+   * Cards between the two endpoints — the obstacles a wire has to go around.
+   *
+   * The endpoints' own cards are excluded on purpose: the wire starts and ends at their
+   * centres and the mask erases those stretches, so treating them as obstacles would ask
+   * the router to escape a box it is anchored inside.
+   */
+  const obstaclesFor = (conn: Connection): Rect[] => {
+    const out: Rect[] = [];
+    for (const [id, rect] of rects) {
+      if (id !== conn.dependsOn && id !== conn.dependent) out.push(rect);
+    }
+    return out;
+  };
+
   const renderLine = (conn: Connection, framed: boolean) => {
     const geometry = drawn.get(conn.key) ?? conn.target;
-    const arrow = arrowTip(geometry, conn.targetRect);
+    // Detour (2026-10-29): when the single cubic would cross a third card, the wire is
+    // routed around it instead of being erased there. Clear wires keep the exact old path.
+    const route = routeGeometry(geometry.from, geometry.to, obstaclesFor(conn));
+    const arrow = routeArrowTip(route, geometry, conn.targetRect);
     // The whole layer sits inside a `scale(zoom)` group, so widths and dash lengths are
     // converted to user units here instead of relying on `vector-effect` (which does not
     // cover dash patterns, and left them zoom-dependent).
@@ -393,7 +412,7 @@ export function ConnectionLayer({
       <g key={conn.key} className={`connection connection--${framed ? 'fg' : 'bg'}`}>
         <path
           className={`connection__wire${framed ? ' connection__wire--flow' : ''}`}
-          d={pathData(geometry)}
+          d={routePathData(route, geometry)}
           stroke={conn.color}
           strokeWidth={(framed ? 3 : 1.5) / view.zoom}
           strokeDasharray={framed ? dashArray(conn.direction, view.zoom) : undefined}
@@ -409,7 +428,7 @@ export function ConnectionLayer({
         {framed && conn.ports.length > 0 ? (
           <ConnectionLabel
             conn={conn}
-            point={visibleLabelPoint(geometry, rectList)}
+            point={routeLabelPoint(route, geometry, rectList)}
             zoom={view.zoom}
           />
         ) : null}

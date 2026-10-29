@@ -368,3 +368,307 @@ export function dashDuration(direction: WireDirection): number {
   const [dash, gap] = direction === 'out' ? DASH_OUT : DASH_IN;
   return (dash + gap) / FLOW_SPEED;
 }
+
+/* ── Detour around intermediate cards ────────────────────────────────── */
+
+/**
+ * How far outside a card the wire is routed (plane px).
+ *
+ * This is the whole separation between "the line crosses the card" and "the line goes
+ * around it": the visibility graph works on rectangles inflated by this much, so every
+ * leg of the detour keeps at least this distance from the real frame.
+ */
+export const ROUTE_PADDING = 20;
+
+/** Corner rounding of the detour. Kept below the padding so the arc cannot cut in. */
+export const ROUTE_RADIUS = 10;
+
+/** Samples used to ask "does the single cubic enter a card at all?". */
+const DETOUR_SAMPLES = 24;
+
+/** Length of segment below which a grazing contact does not count as a crossing (px). */
+const HIT_TOLERANCE = 0.5;
+
+/** Grow a rectangle by `pad` on every side. */
+export function inflateRect(rect: Rect, pad: number): Rect {
+  return {
+    left: rect.left - pad,
+    top: rect.top - pad,
+    width: rect.width + pad * 2,
+    height: rect.height + pad * 2,
+  };
+}
+
+/**
+ * Does the straight segment `a -> b` pass through `rect`?
+ *
+ * Liang–Barsky clipping, then a length test: a path that merely touches a corner is not a
+ * crossing, and treating it as one would make the router take absurd detours along edges
+ * that were already clear.
+ */
+export function segmentHitsRect(a: Point, b: Point, rect: Rect, tolerance = HIT_TOLERANCE): boolean {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  let t0 = 0;
+  let t1 = 1;
+
+  const clip = (p: number, q: number): boolean => {
+    if (Math.abs(p) < 1e-12) return q >= 0;
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+    return true;
+  };
+
+  if (!clip(-dx, a.x - rect.left)) return false;
+  if (!clip(dx, rect.left + rect.width - a.x)) return false;
+  if (!clip(-dy, a.y - rect.top)) return false;
+  if (!clip(dy, rect.top + rect.height - a.y)) return false;
+  if (t1 <= t0) return false;
+  return (t1 - t0) * Math.hypot(dx, dy) > tolerance;
+}
+
+/** Polyline the wire follows, from the source centre to the target centre. */
+export interface RouteGeometry {
+  /** At least two points; `points[0]` is the source centre, the last one the target centre. */
+  points: Point[];
+  /** True when at least one waypoint was inserted to get around a card. */
+  detoured: boolean;
+}
+
+/**
+ * Route `from -> to` around `obstacles` (cards that are neither endpoint).
+ *
+ * Fast path: when the single cubic does not enter any card, nothing is inserted — the
+ * drawing stays byte-identical to the pre-detour geometry. Only when it does enter a card
+ * does a visibility graph run: nodes are the two endpoints plus the four corners of every
+ * inflated rectangle, edges exist between any two nodes whose segment crosses no
+ * rectangle, and Dijkstra picks the shortest route. Shortest-path around polygonal
+ * obstacles bends only at obstacle corners, so this is exact for the shape we route.
+ *
+ * Returns `detoured: false` when no route exists (e.g. another card overlaps the source),
+ * which degrades to the old "mask eats the crossing" behaviour instead of inventing one.
+ */
+export function routeGeometry(
+  from: Point,
+  to: Point,
+  obstacles: Rect[],
+  padding = ROUTE_PADDING,
+): RouteGeometry {
+  const straight: RouteGeometry = { points: [from, to], detoured: false };
+  if (obstacles.length === 0) return straight;
+
+  const blocked = obstacles
+    .filter((rect) => {
+      const inflated = inflateRect(rect, padding);
+      const base = wireGeometry(from, to);
+      for (let i = 0; i <= DETOUR_SAMPLES; i += 1) {
+        if (rectContains(inflated, cubicPoint(base, i / DETOUR_SAMPLES))) return true;
+      }
+      return false;
+    })
+    .map((rect) => inflateRect(rect, padding));
+  if (blocked.length === 0) return straight;
+
+  // Refuse to route from/to a point that sits inside an obstacle: no visibility path can
+  // start there, and a route that begins with a hidden hop is worse than the old line.
+  if (blocked.some((rect) => rectContains(rect, from) || rectContains(rect, to))) return straight;
+
+  const nodes: Point[] = [from, to];
+  for (const rect of blocked) {
+    nodes.push(
+      { x: rect.left, y: rect.top },
+      { x: rect.left + rect.width, y: rect.top },
+      { x: rect.left, y: rect.top + rect.height },
+      { x: rect.left + rect.width, y: rect.top + rect.height },
+    );
+  }
+
+  // Corners sit *on* the inflated frame, so a leg that follows that frame would count as
+  // a crossing and no route would ever exist. The visibility test therefore works on a
+  // slightly shrunk rectangle: hugging the boundary is legal, cutting one pixel into it is
+  // not. The drawn curve inherits the same margin (padding - 1).
+  const solid = blocked.map((rect) => inflateRect(rect, -1));
+  const clear = (a: Point, b: Point): boolean => !solid.some((rect) => segmentHitsRect(a, b, rect));
+  const count = nodes.length;
+  const dist = new Array<number>(count).fill(Number.POSITIVE_INFINITY);
+  const previous = new Array<number>(count).fill(-1);
+  const done = new Array<boolean>(count).fill(false);
+  dist[0] = 0;
+
+  for (;;) {
+    let current = -1;
+    for (let i = 0; i < count; i += 1) {
+      if (!done[i] && (current < 0 || dist[i] < dist[current])) current = i;
+    }
+    if (current < 0 || dist[current] === Number.POSITIVE_INFINITY) break;
+    if (current === 1) break;
+    done[current] = true;
+    for (let next = 0; next < count; next += 1) {
+      if (done[next] || next === current) continue;
+      if (!clear(nodes[current], nodes[next])) continue;
+      const candidate = dist[current] + distance(nodes[current], nodes[next]);
+      if (candidate < dist[next]) {
+        dist[next] = candidate;
+        previous[next] = current;
+      }
+    }
+  }
+
+  if (dist[1] === Number.POSITIVE_INFINITY) return straight;
+
+  const path: Point[] = [];
+  for (let at = 1; at >= 0; at = previous[at]) {
+    path.push(nodes[at]);
+    if (at === 0) break;
+  }
+  path.reverse();
+  if (path.length <= 2) return straight;
+  return { points: path, detoured: true };
+}
+
+/**
+ * `d` for a route: the single cubic when nothing is in the way, otherwise a polyline whose
+ * interior corners are rounded with quadratic arcs.
+ *
+ * A rounded polyline is tangent-continuous at every joint (the arc leaves the corner along
+ * the incoming leg), and because the radius never exceeds the padding the arc stays inside
+ * the corner square — it cannot cut back into the card it just avoided.
+ */
+export function routePathData(route: RouteGeometry, base: WireGeometry, radius = ROUTE_RADIUS): string {
+  if (!route.detoured) return pathData(base);
+
+  const { points } = route;
+  const parts: string[] = [`M ${round(points[0].x)} ${round(points[0].y)}`];
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const prev = points[i - 1];
+    const corner = points[i];
+    const next = points[i + 1];
+    const inLength = distance(prev, corner);
+    const outLength = distance(corner, next);
+    const r = Math.min(radius, inLength / 2, outLength / 2);
+    if (r < 0.5) {
+      parts.push(`L ${round(corner.x)} ${round(corner.y)}`);
+      continue;
+    }
+    const inDir = { x: (corner.x - prev.x) / inLength, y: (corner.y - prev.y) / inLength };
+    const outDir = { x: (next.x - corner.x) / outLength, y: (next.y - corner.y) / outLength };
+    parts.push(`L ${round(corner.x - inDir.x * r)} ${round(corner.y - inDir.y * r)}`);
+    parts.push(`Q ${round(corner.x)} ${round(corner.y)} ${round(corner.x + outDir.x * r)} ${round(corner.y + outDir.y * r)}`);
+  }
+  const last = points[points.length - 1];
+  parts.push(`L ${round(last.x)} ${round(last.y)}`);
+  return parts.join(' ');
+}
+
+/**
+ * Arrowhead for a route.
+ *
+ * The final leg always approaches the target centre in a straight line (rounding happens
+ * at interior corners), so the frame crossing is found by bisecting that last leg — the
+ * same contract as `arrowTip`: never park the arrow inside the card.
+ */
+export function routeArrowTip(
+  route: RouteGeometry,
+  base: WireGeometry,
+  rect: Rect,
+): ArrowPlacement | null {
+  if (!route.detoured) return arrowTip(base, rect);
+
+  const points = route.points;
+  let inside = points[points.length - 1];
+  if (!rectContains(rect, inside)) return null;
+
+  for (let i = points.length - 2; i >= 0; i -= 1) {
+    const outside = points[i];
+    if (rectContains(rect, outside)) {
+      inside = outside;
+      continue;
+    }
+    let lo = 0;
+    let hi = 1;
+    for (let k = 0; k < EXIT_BISECTIONS; k += 1) {
+      const mid = (lo + hi) / 2;
+      const point = { x: outside.x + (inside.x - outside.x) * mid, y: outside.y + (inside.y - outside.y) * mid };
+      if (rectContains(rect, point)) hi = mid;
+      else lo = mid;
+    }
+    const tip = { x: outside.x + (inside.x - outside.x) * lo, y: outside.y + (inside.y - outside.y) * lo };
+    const inward = { x: inside.x - tip.x, y: inside.y - tip.y };
+    const length = Math.hypot(inward.x, inward.y);
+    if (length < 1e-9) return null;
+    return { tip, dir: { x: inward.x / length, y: inward.y / length } };
+  }
+  return null;
+}
+
+/** Where the label goes on a route: middle of the longest stretch outside every card. */
+export function routeLabelPoint(route: RouteGeometry, base: WireGeometry, rects: Rect[]): Point {
+  if (!route.detoured || rects.length === 0) {
+    return route.detoured ? midpointOfPolyline(route.points) : visibleLabelPoint(base, rects);
+  }
+
+  const samples = 96;
+  const points: Point[] = [];
+  let total = 0;
+  for (let i = 0; i < route.points.length - 1; i += 1) {
+    const a = route.points[i];
+    const b = route.points[i + 1];
+    const length = distance(a, b);
+    const steps = Math.max(1, Math.round((length / Math.max(1, polylineLength(route.points))) * samples));
+    for (let s = 0; s < steps; s += 1) {
+      const t = s / steps;
+      points.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      total += length / steps;
+    }
+  }
+  points.push(route.points[route.points.length - 1]);
+
+  let best: { start: number; end: number } | null = null;
+  let runStart = -1;
+  for (let i = 0; i < points.length; i += 1) {
+    const covered = rects.some((rect) => rectContains(rect, points[i]));
+    if (covered) {
+      if (runStart >= 0) {
+        if (!best || i - 1 - runStart > best.end - best.start) best = { start: runStart, end: i - 1 };
+        runStart = -1;
+      }
+    } else if (runStart < 0) {
+      runStart = i;
+    }
+  }
+  if (runStart >= 0 && (!best || points.length - 1 - runStart > best.end - best.start)) {
+    best = { start: runStart, end: points.length - 1 };
+  }
+  if (!best) return midpointOfPolyline(route.points);
+  const mid = Math.round((best.start + best.end) / 2);
+  return points[Math.max(0, Math.min(points.length - 1, mid))];
+}
+
+function polylineLength(points: Point[]): number {
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i += 1) total += distance(points[i], points[i + 1]);
+  return total;
+}
+
+function midpointOfPolyline(points: Point[]): Point {
+  const half = polylineLength(points) / 2;
+  let travelled = 0;
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const leg = distance(points[i], points[i + 1]);
+    if (travelled + leg >= half) {
+      const t = leg === 0 ? 0 : (half - travelled) / leg;
+      return {
+        x: points[i].x + (points[i + 1].x - points[i].x) * t,
+        y: points[i].y + (points[i + 1].y - points[i].y) * t,
+      };
+    }
+    travelled += leg;
+  }
+  return points[points.length - 1];
+}

@@ -495,6 +495,31 @@ describe('connection lines', () => {
     expect(parsePath(wirePaths(host)[0]).to).toEqual({ x: 340, y: 720 });
   });
 
+  it('routes around a third card instead of letting the mask erase it', async () => {
+    const { chartId } = setupScene();
+
+    // Put the chart *below* the table and slide a third card exactly between them.
+    let betweenId = 0;
+    await act(async () => {
+      store().setBounds(chartId, { x: 100, y: 900, width: 640, height: 300 });
+      registerCard(chartId, stubRoot({ x: 100, y: 900, width: 640, height: 300 }));
+      betweenId = store().addMatrixCard([{ name: 'c.csv', matrix: buildMatrix(2) }]);
+      store().setBounds(betweenId, { x: 100, y: 540, width: 640, height: 320 });
+      registerCard(betweenId, stubRoot({ x: 100, y: 540, width: 640, height: 320 }));
+    });
+    await flush();
+
+    const host = await mountLayer();
+    const d = wirePaths(host)[0];
+
+    // Table centre (420,290) -> chart centre (420,1050); a straight line would cross the
+    // card at (100,540,640,320), so the wire must be a rounded polyline around it.
+    expect(d.startsWith('M 420 290')).toBe(true);
+    expect(d).toContain(' Q ');
+    expect((d.match(/ L /g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(d.endsWith('L 420 1050')).toBe(true);
+  });
+
   it('labels a highlighted line with the port ids it carries', async () => {
     const { matrixCardId } = setupScene();
     const host = await mountLayer(matrixCardId);
