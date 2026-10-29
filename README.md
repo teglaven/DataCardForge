@@ -57,7 +57,7 @@ Requirements: Node 22+, CMake 3.24+, a C++17 compiler and the Eigen 3.4 headers
 │  Card layout · Ports · Connections · Status lamps   │
 │  Pure interaction — NO numeric computation          │
 └──────────────────────┬──────────────────────────────┘
-                       │ HTTP + JSON + DCM1 binary
+                       │ HTTP + JSON + DCM2 binary
                        ▼
 ┌─────────────────────────────────────────────────────┐
 │              Compute Backend (C++17)                │
@@ -67,7 +67,7 @@ Requirements: Node 22+, CMake 3.24+, a C++17 compiler and the Eigen 3.4 headers
 └─────────────────────────────────────────────────────┘
 ```
 
-The frontend speaks [protocol v1](docs/docs/architecture/backend-protocol-v1.md): JSON control messages over HTTP plus DCM1 binary frames for matrix windows. Long-poll event stream pushes node state changes (dirty → computing → done | error) to drive the four-state status lamps.
+The frontend speaks [protocol v1](docs/docs/architecture/backend-protocol-v1.md): JSON control messages over HTTP plus DCM2 binary frames for dense-matrix windows (window + full shape). Long-poll event stream pushes node state changes (dirty → computing → done | error) to drive the four-state status lamps.
 
 ## Implemented Features
 
@@ -114,19 +114,22 @@ The backend holds **authoritative copies** of all data, dependency graphs, and c
 - **Matrix-mode evaluation**: when any input variable is declared matrix-mode, `*` becomes matrix multiplication; additional functions: `TRANSPOSE`, `DET`, `INV`, `SOLVE`, `MMUL` (explicit matmul), `EMUL` (explicit element-wise multiply). Shape mismatches produce structured `shapeMismatch` errors — never silent garbage
 - **Dependency graph**: per-port edges, atomic cycle refusal (N edges either all register or none), result-matrix-aware cascade via `resultOwner_` map
 - **Node state machine**: dirty → computing → done | error, pushed via monotonic-seq event stream
-- **Protocol v1**: HTTP/1.1 + JSON control plane + DCM1 binary matrix frames + long-poll events. Version handshake on connect; mismatch → visible banner
+- **Protocol v1**: HTTP/1.1 + JSON control plane + DCM2 binary matrix frames (window + full shape) + long-poll events. Version handshake on connect; mismatch → visible banner
 
 > Cross-tier test fixtures (`web/tests/fixtures/xlayer/`) are the single judge format.
 > Both the TS reference and C++ engine must pass the same JSON — CI enforces this.
 
 ### Connection Visualization (ConnectionLayer)
 - **One line per dependency edge**: table → function card, function card → function card, and table/function → chart (after schema v2 a function card is a graph node too)
-- Endpoints land on a **port** when the edge names one and the card renders it (`portId` is the identity, never the position); otherwise they fall back to the card edge that faces the other card
-- Red = source card selected; blue = target card selected; gray = neither; every line carries an arrowhead at its target
-- Selecting a card labels its lines with the `portId`s they carry (multi-port edges fold into `+N`)
+- **Endpoints are the two card-window centres** (2026-10-29); the mask swallows the part inside each card, so the visible wire starts and ends at the frames
+- The whole route is **one cubic Bézier** (at most two inflection points); its control points blend between the horizontal and the vertical solution by `|dx|/(|dx|+|dy|)`, so dragging across the diagonal cannot flip the curve
+- Red = source card selected (long dashes), blue = target card selected (short dashes), gray = neither (thin solid); the red/blue wires **flow toward the target**, so colour + flow direction + dash pattern all encode input vs output (colour-blind friendly)
+- The arrowhead parks **outside the target card's frame** (inside it the mask would erase it); when the target card covers the whole wire no arrow is drawn at all
+- Selecting a card labels its lines at the middle of the **visible** stretch with the `portId`s they carry (multi-port edges fold into `+N`)
 - Lines track in real time when cards move or resize (driven by a layout version counter, not a polling timer); **table scrolling no longer moves them**
+- A layout jump (tile / cascade / project load / undo) tweens the curve over 220 ms; when the transition would sweep across a third card, it is shortened to 70 ms so the wire crosses that window quickly
 - The layer is `pointer-events: none`, so it never steals input or affects layout (the **connection subordination** principle holds by construction)
-- `non-scaling-stroke` keeps the on-screen weight constant across the 10%–300% zoom range
+- Stroke width, dash length and flow cycle are divided by the zoom in the component, so they stay constant **on screen** across the 10%–300% range
 
 ### UI / Interaction
 - Consistent theme with automatic light/dark adaptation
@@ -174,7 +177,7 @@ gated by tests, while the card-graph layer is still being closed out.
 | Data cards, virtualised table, 9 chart types, exports, i18n, workspace persistence | **Done**, covered by unit + end-to-end gates |
 | Compute backend (expression engine, matrix operators, dependency graph, scheduling) | **Done** for the two shipped signatures (`builtin:expr`, `builtin:linear-regression`) |
 | **Function cards** | **Half-finished (WIP)** — see below |
-| **Port-level connections** | **Repaired 2026-10-28** (port ids on edges + port anchors + direction arrows) — see below |
+| **Port-level connections** | **Repaired 2026-10-28**, geometry re-cut 2026-10-29 (port ids on edges; endpoints are the card centres; flowing dashes; arrows on the target frame) — see below |
 
 ### Function cards are still a work in progress
 
@@ -210,16 +213,22 @@ The data model and the contracts are settled (see
 [`2026-10-26-card-schema-v2.md`](docs/docs/decisions/2026-10-26-card-schema-v2.md)); what is missing is
 UI on top of it. Treat the function card as **API-stable, UX-incomplete**.
 
-### Port-level connections (repaired 2026-10-28)
+### Port-level connections (repaired 2026-10-28, geometry revised 2026-10-29)
 
 Schema v2 moved dependencies into the envelope and bindings onto ports, and the connection layer fell
 back to card-level: neither geometry nor interaction could see a `portId`. Dependency edges now
 **carry their port ids**, function cards register their input ports and output rows as anchors, and
-endpoints resolve in two steps — port first, then the card edge that faces the other card. Selecting a
-card labels its lines with the port identity.
+selecting a card labels its lines with the port identity.
+
+2026-10-29 revised the **geometry**: endpoints no longer sit on a port but on the two card-window
+centres (the mask swallows the inside of each card), the route is a single cubic Bézier, red/blue are
+long/short flowing dashes, and the arrowhead parks outside the target frame. Ports are back to what
+they were — data identity and the label's source. See the
+[centre-endpoint decision](docs/docs/decisions/2026-10-29-connection-center-anchors.md).
 
 Still missing: hover/selection of a single line, deleting a line (disconnecting means editing data and
-wants an undo path — tracked separately) and dragging a new line. See the
+wants an undo path — tracked separately), dragging a new line, and port dots (`portAnchor` is reserved
+for those). See the
 [decision record](docs/docs/decisions/2026-10-28-port-level-connections.md).
 
 ## Tech Stack
@@ -336,11 +345,13 @@ GitHub Pages on every push that touches `web/` — that is what serves the live 
 - [x] **Whole-workbench zoom** → wheel zoom anchored on the cursor, 10%–300%, cards/fonts/charts/connections scale together (2026-10-21)
 - [ ] **Canvas minimap / zoom shortcuts**: overview and keyboard zoom (the entry point is clear: reuse resetView's fit maths)
 - [ ] **VirtualTable windowed data source**: large matrices fetched by visible-row window, not loaded whole
-- [x] **Port anchors**: per-port connection endpoints in `cardMetrics` + `ConnectionLayer` (2026-10-28)
+- [x] **Port anchors**: per-port connection endpoints in `cardMetrics` + `ConnectionLayer` (2026-10-28);
+  since 2026-10-29 ports are data identity only — the geometry endpoints are the card centres
 - [x] **Per-port logical-connection hints** (repaired 2026-10-28 — see [Status & known gaps](#status--known-gaps))
 - [x] **Four-state status lamps** (2026-10-27): driven by node state events (gray/yellow/green/red)
 - [ ] Data **editing** capability (non-file-backed cards, double-click edit + formula evaluation)
-- [x] Connection arrows pointing at the target (2026-10-28); bidirectional highlight still open
+- [x] Connection arrows pointing at the target (2026-10-28), parked outside the target frame since 2026-10-29;
+  [x] flowing red/blue dashes (long/short + direction, colour-blind friendly); bidirectional highlight still open
 - [ ] **Card beautification**: unify card styling, spacing, colors, and layout
 
 ## Long-term Roadmap
