@@ -1118,6 +1118,16 @@ body {
   background: var(--border);
 }
 
+/* One-line rule under a menu title (e.g. why the pair-based chart types are greyed out). */
+.context-menu__hint {
+  max-width: 240px;
+  padding: 0 8px 5px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  white-space: normal;
+}
+
 /* ── Function card (three zones) ─────────────────────────────────────── */
 
 /*
@@ -1742,6 +1752,12 @@ body {
   padding: 12px;
   text-align: center;
   font-size: 12px;
+}
+
+/* The "not bound" state offers a retry; keep it a clear second line, not a run-on. */
+.formula-card__empty > .card__control {
+  margin-top: 8px;
+  color: var(--text);
 }
 
 /*

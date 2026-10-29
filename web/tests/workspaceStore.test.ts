@@ -652,11 +652,15 @@ function stubBackend(opts: {
   nodeNames?: string[];
   /** Serve this many rows through real start/count paging (exercises the window loop). */
   resultRows?: number;
-  createState?: 'done' | 'error';
+  createState?: 'done' | 'dirty' | 'error';
   error?: { code: string; params?: Record<string, unknown> };
   failAll?: boolean;
   /** Override the advertised capabilities (to test version negotiation). */
   capabilities?: string[];
+  /** Delay the matrix upload so a card can be created while registration is in flight. */
+  matrixDelayMs?: number;
+  /** Delay node creation so a downstream card can be built while the upstream is pushing. */
+  nodeDelayMs?: number;
 }) {
   const calls: Call[] = [];
   let nextNodeId = 1;
@@ -695,9 +699,11 @@ function stubBackend(opts: {
       });
     }
     if (url.endsWith('/matrices') && method === 'POST') {
+      if (opts.matrixDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.matrixDelayMs));
       return json({ matrixId: nextMatrixId++, revision: 1 });
     }
     if (url.endsWith('/nodes') && method === 'POST') {
+      if (opts.nodeDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.nodeDelayMs));
       const nodeId = nextNodeId++;
       const resultMatrixId = nextMatrixId++;
       if (opts.createState === 'error') {
@@ -713,7 +719,10 @@ function stubBackend(opts: {
     }
     if (/\/nodes\/\d+$/.test(url) && method === 'PATCH') {
       const id = Number(url.split('/').pop());
-      return json({ nodeId: id, state: opts.createState ?? 'done', resultMatrixIds: [nextMatrixId - 1] });
+      // The real server's PATCH answers with nodeId + state only (http_server.cpp:652-654):
+      // no output ids, because a patch cannot change the signature's K. Keeping the stub
+      // honest is what makes the "empty list must not overwrite outputs" guard testable.
+      return json({ nodeId: id, state: opts.createState ?? 'done' });
     }
     if (/\/nodes\/\d+$/.test(url) && method === 'DELETE') {
       return json({ deleted: Number(url.split('/').pop()) });
@@ -1382,15 +1391,18 @@ describe('offer hygiene', () => {
 
 // ── chaining: a function card's output feeds another function card ──────────────
 describe('function card chains', () => {
-  it('binds the downstream card to the upstream output matrix', async () => {
+  it('binds the downstream card to the upstream output matrix (server id, not the local cache)', async () => {
     const stub = stubBackend({ nodeResult: [[2, 4]], nodeNames: ['Pos.1 double'] });
     try {
       const srcId = await loadSource([[1], [2]], ['A']);
       const a = store().addFormulaCard(srcId)!;
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await flush();
       const upstream = store().cards.find((c) => c.id === a) as FunctionCardModel;
+      const upstreamResultId = upstream.outputs[0].resultMatrixId;
+      expect(upstreamResultId).toBeGreaterThan(0);
 
       const b = store().addFormulaCard(a)!;
+      await flush();
       expect(b).not.toBeNull();
       const downstream = store().cards.find((c) => c.id === b) as FunctionCardModel;
       expect(downstream.inputs).toEqual([
@@ -1399,9 +1411,151 @@ describe('function card chains', () => {
           target: { type: 'matrix', cardId: a, matrixId: upstream.displayMatrixId },
         },
       ]);
+      // The display cache is local, so the node must be bound to the server-side RESULT
+      // matrix. Binding the local id is exactly the bug that left every chained card idle:
+      // the payload was never sent, and the old assertions below still passed without it.
+      const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(creates).toHaveLength(2);
+      const payload = JSON.parse(creates[1].body!);
+      expect(payload.inputs).toEqual([
+        { portId: 'src', varName: 'src', mode: 'matrix', sourceMatrixId: upstreamResultId },
+      ]);
+      expect(downstream.node?.nodeId).toBeGreaterThan(0);
       // The graph is A → B, so close protection keeps A alive while B reads it.
       expect(store().dependencies.getDependents(a)).toContain(b);
       expect(store().removeCard(a)).toBe(false);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('binds a downstream card created while the upstream node is still being created', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], nodeNames: ['Pos.1 double'], nodeDelayMs: 5 });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const a = store().addFormulaCard(srcId)!;
+      // The upstream push is still in flight, so it has no result matrix id yet.
+      const b = store().addFormulaCard(a)!;
+      await flush();
+      expect((store().cards.find((c) => c.id === b) as FunctionCardModel).node).toBeNull();
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      await flush();
+      const downstream = store().cards.find((c) => c.id === b) as FunctionCardModel;
+      const upstream = store().cards.find((c) => c.id === a) as FunctionCardModel;
+      expect(downstream.node?.nodeId).toBeGreaterThan(0);
+      const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(creates).toHaveLength(2);
+      const payload = JSON.parse(creates[1].body!);
+      expect(payload.inputs[0].sourceMatrixId).toBe(upstream.outputs[0].resultMatrixId);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('retries a card whose source matrix was still uploading (no permanent idle card)', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], matrixDelayMs: 15 });
+    try {
+      const srcId = store().addMatrixCard([{ name: 's.txt', matrix: matrix([[1], [2]], ['A']) }]);
+      const fId = store().addFormulaCard(srcId)!;
+      await flush();
+      // Nothing authoritative to bind to yet, so no node may be created.
+      expect(stub.calls.some((c) => c.url.endsWith('/nodes') && c.method === 'POST')).toBe(false);
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      await flush();
+      const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(creates).toHaveLength(1);
+      expect((store().cards.find((c) => c.id === fId) as FunctionCardModel).node?.nodeId).toBeGreaterThan(0);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('creates exactly one node when an edit lands while the create is in flight', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], nodeDelayMs: 10 });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      store().setFormula(fId, 0, 'Pos.1 x3', 'Pos.1 * 3');
+      store().setFormula(fId, 0, 'Pos.1 x4', 'Pos.1 * 4');
+      await new Promise<void>((resolve) => setTimeout(resolve, 80));
+      await flush();
+      const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(creates).toHaveLength(1);
+      // Coalescing must not lose the edit: the retry PATCHes the LAST expression.
+      const patches = stub.calls.filter((c) => /\/nodes\/\d+$/.test(c.url) && c.method === 'PATCH');
+      expect(patches.length).toBeGreaterThan(0);
+      const sent = JSON.parse(patches[patches.length - 1].body!);
+      expect(sent.params.formulas[0].expression).toBe('Pos.1 * 4');
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('re-binds a restored chain to the upstream result matrix', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]] });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const a = store().addFormulaCard(srcId)!;
+      await flush();
+      store().addFormulaCard(a)!;
+      await flush();
+      const snapshot = store().toSnapshot();
+      stub.calls.length = 0;
+      store().reset();
+      store().loadSnapshot(snapshot);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      await flush();
+      const creates = stub.calls.filter((c) => c.url.endsWith('/nodes') && c.method === 'POST');
+      expect(creates).toHaveLength(2);
+      const upstream = store().cards.find((c) => c.id === a) as FunctionCardModel;
+      const bound = creates.some((call) => {
+        const body = JSON.parse(call.body!);
+        return body.inputs?.[0]?.sourceMatrixId === upstream.outputs[0].resultMatrixId;
+      });
+      expect(bound).toBe(true);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('releases a node created for a card that was closed while the create was in flight', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], nodeDelayMs: 10 });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const fId = store().addFormulaCard(srcId)!;
+      // Close before the create response lands: removeCard cannot release a node it does
+      // not know about yet, so the push has to clean up after itself.
+      expect(store().removeCard(fId)).toBe(true);
+      await new Promise<void>((resolve) => setTimeout(resolve, 60));
+      const deletes = stub.calls.filter((c) => /\/nodes\/\d+$/.test(c.url) && c.method === 'DELETE');
+      expect(deletes).toHaveLength(1);
+      expect(store().cards.some((c) => c.id === fId)).toBe(false);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('does not bind a node from the previous workspace to a card that reused its id', async () => {
+    const stub = stubBackend({ nodeResult: [[2, 4]], nodeDelayMs: 10 });
+    try {
+      const srcId = await loadSource([[1], [2]], ['A']);
+      const staleId = store().addFormulaCard(srcId)!;
+      // Replace the workspace while the first push is still in flight. Ids restart at 1,
+      // so the next formula card inherits the id the stale push was started for.
+      store().reset();
+      const src2 = await loadSource([[3], [4]], ['A']);
+      const freshId = store().addFormulaCard(src2)!;
+      expect(freshId).toBe(staleId);
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 80));
+      // The stale node is released instead of being bound to the new card…
+      const deletes = stub.calls.filter((c) => /\/nodes\/\d+$/.test(c.url) && c.method === 'DELETE');
+      expect(deletes).toHaveLength(1);
+      // …and the new card owns a node of its own.
+      const fresh = store().cards.find((c) => c.id === freshId) as FunctionCardModel;
+      expect(fresh.node?.nodeId).toBeGreaterThan(0);
     } finally {
       stub.restore();
     }

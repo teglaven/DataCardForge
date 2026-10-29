@@ -168,6 +168,9 @@ export function MatrixCard({
             }
             onHeaderContextMenu={(event, column) => {
               event.preventDefault();
+              // The card owns its own menu: without this the event also reaches the canvas,
+              // whose right-click gesture belongs to a different surface.
+              event.stopPropagation();
               setMenu({ x: event.clientX, y: event.clientY, column });
             }}
           />

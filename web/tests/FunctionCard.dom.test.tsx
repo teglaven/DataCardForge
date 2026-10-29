@@ -12,9 +12,9 @@
  *   - an `upstreamError` is shown as *invalidated* (grey) rather than as this card's own
  *     definition error (red), and it still says something — never a silent blank.
  */
-import { StrictMode, act } from 'react';
+import { StrictMode, act, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MatrixData } from '../src/core/MatrixData.ts';
 import { useWorkspace } from '../src/ui/workspaceStore.ts';
@@ -494,5 +494,172 @@ describe('a signature without expressions', () => {
       resultMatrix: matrix(5, 1),
     });
     expect(host.querySelector('.formula-card__rename')).toBeNull();
+  });
+});
+
+describe('an empty result zone says why it is empty', () => {
+  it('says the card is not bound instead of claiming there is no expression', async () => {
+    const recompute = vi.fn();
+    const original = store().recomputeFormula;
+    await act(async () => {
+      useWorkspace.setState({ recomputeFormula: recompute });
+    });
+    try {
+      const host = await mount(makeCard());
+      const empty = host.querySelector<HTMLElement>('.formula-card__empty')!;
+      expect(empty.textContent).toContain('尚未绑定后端计算节点');
+      // The old copy blamed a missing expression even though one was already there.
+      expect(empty.textContent).not.toContain('输入表达式');
+      const button = empty.querySelector<HTMLButtonElement>('button')!;
+      await act(async () => {
+        button.click();
+      });
+      expect(recompute).toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        useWorkspace.setState({ recomputeFormula: original });
+      });
+    }
+  });
+
+  it('does not offer a retry when the node computed an empty table', async () => {
+    const host = await mount(makeCard({ node: { nodeId: 7, state: 'done' } }), {
+      resultMatrix: new MatrixData(),
+    });
+    const empty = host.querySelector<HTMLElement>('.formula-card__empty')!;
+    expect(empty.textContent).toContain('暂无结果');
+    expect(empty.querySelector('button')).toBeNull();
+  });
+
+  it('points at the message above when the node failed', async () => {
+    const host = await mount(
+      makeCard({ node: { nodeId: 4, state: 'error', code: 'unknownColumn', params: { name: 'ZZ' } } }),
+    );
+    const empty = host.querySelector<HTMLElement>('.formula-card__empty')!;
+    expect(empty.textContent).toContain('计算失败');
+    expect(host.querySelector('.formula-card__error')).not.toBeNull();
+  });
+});
+
+describe('the result-column menu explains a single-column table', () => {
+  const openMenu = async (host: HTMLElement) => {
+    const header = host.querySelector<HTMLElement>('.card--formula .vtable__colhead')!;
+    await act(async () => {
+      header.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 160 }),
+      );
+    });
+    return document.querySelector<HTMLElement>('.context-menu--list')!;
+  };
+  const item = (menu: HTMLElement, label: string) =>
+    [...menu.querySelectorAll<HTMLButtonElement>('.context-menu__item')].find(
+      (button) => button.textContent?.trim() === label,
+    )!;
+
+  it('greys out the pair-based types and states the rule', async () => {
+    const host = await mount(makeCard(), { resultMatrix: matrix(1, 4) });
+    const menu = await openMenu(host);
+    expect(item(menu, '散点图').disabled).toBe(true);
+    expect(item(menu, '回归图').disabled).toBe(true);
+    expect(item(menu, '相关性热力图').disabled).toBe(true);
+    expect(item(menu, '折线图').disabled).toBe(false);
+    expect(menu.querySelector('.context-menu__hint')?.textContent).toContain('只剩 1 列');
+  });
+
+  it('surfaces a refused chart creation instead of closing silently', async () => {
+    // onOpenChart returns null when the store refuses (e.g. the type needs more trailing
+    // columns than the table has). The menu used to just close, which read as a dead click.
+    store().clearToast();
+    const host = await mount(makeCard(), {
+      resultMatrix: matrix(2, 4),
+      onOpenChart: () => null,
+    });
+    const menu = await openMenu(host);
+    const line = [...menu.querySelectorAll<HTMLButtonElement>('.context-menu__item')].find(
+      (button) => button.textContent?.trim() === '折线图',
+    )!;
+    await act(async () => {
+      line.click();
+    });
+    const toast = store().toast;
+    expect(toast?.kind).toBe('error');
+    expect(toast?.message).toContain('折线图');
+    expect(document.querySelector('.context-menu--list')).toBeNull();
+  });
+
+  it('drops the hint once two columns are available', async () => {
+    const host = await mount(makeCard(), { resultMatrix: matrix(2, 4) });
+    const menu = await openMenu(host);
+    expect(menu.querySelector('.context-menu__hint')).toBeNull();
+    expect(item(menu, '散点图').disabled).toBe(false);
+  });
+
+  it('closes instead of throwing when a recompute shrinks the result under it', async () => {
+    const card = makeCard();
+    let shrink: (next: MatrixData) => void = () => {};
+    function Harness() {
+      const [result, update] = useState<MatrixData>(matrix(1, 4));
+      shrink = update;
+      return (
+        <FormulaCard
+          card={card}
+          resultMatrix={result}
+          sourceColumnNames={[]}
+          inputs={[]}
+          repoint={null}
+          repointBatch={0}
+          onApplyRepoint={() => {}}
+          onDismissRepoint={() => {}}
+          onApplyAllRepoints={() => {}}
+          onRenameOutputColumn={() => {}}
+          onSetColumnContract={() => {}}
+          onOpenChart={() => 42}
+          onOpenFunction={() => {}}
+          active
+          closeBlocked={false}
+          onClose={() => {}}
+          onCloseBlocked={() => {}}
+          onActivate={() => {}}
+        />
+      );
+    }
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    roots.push(root);
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <Harness />
+        </StrictMode>,
+      );
+    });
+    const header = host.querySelector<HTMLElement>('.vtable__colhead')!;
+    await act(async () => {
+      header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 160 }));
+    });
+    expect(document.querySelector('.context-menu--list')).not.toBeNull();
+    await act(async () => {
+      shrink(new MatrixData());
+    });
+    expect(document.querySelector('.context-menu--list')).toBeNull();
+  });
+});
+
+describe('a header right-click stays inside the card', () => {
+  it('does not reach the surrounding canvas surface', async () => {
+    const host = await mount(makeCard(), { resultMatrix: matrix(2, 4) });
+    const spy = vi.fn();
+    document.addEventListener('contextmenu', spy);
+    try {
+      await act(async () => {
+        host
+          .querySelector('.vtable__colhead')!
+          .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener('contextmenu', spy);
+    }
   });
 });

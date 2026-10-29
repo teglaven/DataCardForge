@@ -488,6 +488,39 @@ function normalizeRestoredCards(cards: CardModel[]): CardModel[] {
 }
 
 /**
+ * Server id for a local matrix — with a function card's display cache resolved through its
+ * owning card.
+ *
+ * A formula card's output table exists in the browser only as a display cache
+ * (`displayMatrixId`); the authoritative copy is the node's result matrix, whose id is
+ * recorded on `outputs[]`. Nothing registers the display matrix itself — `backendMatrixIds`
+ * deliberately holds uploaded tables only (see `loadSnapshot`'s derived-matrix exclusion) —
+ * so the local→server map can never answer for it. Resolving through the owning card is
+ * what lets a chart or a chained function card read a formula card's output; the backend
+ * already accepts a result matrix as `sourceMatrixId`.
+ */
+function backendMatrixIdFor(localMatrixId: number): number | null {
+  const mapped = backendMatrixIds.get(localMatrixId);
+  if (mapped !== undefined) return mapped;
+  for (const card of useWorkspace.getState().cards) {
+    if (!isFormulaCard(card) || card.displayMatrixId !== localMatrixId) continue;
+    const serverId = card.outputs[0]?.resultMatrixId ?? -1;
+    return serverId > 0 ? serverId : null;
+  }
+  return null;
+}
+
+/** Cards with a node push in flight, and cards asked again while that push ran. */
+const syncingCards = new Set<number>();
+const resyncRequested = new Set<number>();
+/**
+ * Workspace generation. Bumped by `reset` / `loadSnapshot`: card ids restart at 1 after a
+ * reset, so a push that started in the previous workspace must not bind its node to the
+ * card that happens to inherit the same id.
+ */
+let workspaceEpoch = 0;
+
+/**
  * Register / patch the ONE backend node behind a function card.
  *
  * v2 (docs/decisions/2026-10-26-card-schema-v2.md): a card is one node with K outputs, so
@@ -499,18 +532,40 @@ function normalizeRestoredCards(cards: CardModel[]): CardModel[] {
  * flips the banner (contract 1 — 降级必须可见), it does not fall back to local compute.
  */
 async function syncFunctionCard(cardId: number): Promise<void> {
+  // One node per card: two overlapping pushes both read `node === null` and create two
+  // nodes, and the loser is orphaned server-side (its result matrix is never released).
+  // Coalesce rather than drop — the edit that arrived mid-flight must still land, so the
+  // card is pushed once more with its latest state when the current push settles.
+  if (syncingCards.has(cardId)) {
+    resyncRequested.add(cardId);
+    return;
+  }
+  syncingCards.add(cardId);
+  try {
+    await pushFunctionCard(cardId);
+  } finally {
+    syncingCards.delete(cardId);
+    if (resyncRequested.delete(cardId)) void syncFunctionCard(cardId);
+  }
+}
+
+async function pushFunctionCard(cardId: number): Promise<void> {
   const state = useWorkspace.getState();
   const card = state.cards.find((c) => c.id === cardId);
   if (!card || !isFormulaCard(card)) return;
 
-  // The node must read the *server-side* copies of the referenced matrices. If one is not
-  // registered yet (offline at load time), there is nothing authoritative to bind to —
-  // leave the node unregistered and let the offline banner carry the failure.
-  const bindings = portBindingsFor(card, (localId) => backendMatrixIds.get(localId) ?? null);
+  // The node must read the *server-side* copies of the referenced matrices. A missing id
+  // (offline, or not registered yet) is not an error: the card stays unbound and the
+  // registration callback / upstream push retries it (syncUnbound* below), instead of
+  // leaving it unusable forever.
+  const bindings = portBindingsFor(card, backendMatrixIdFor);
   if (!bindings) return;
   const params: Record<string, unknown> = { formulas: card.params.formulas };
 
   const existing = card.node;
+  // Identity of the card this push was started for: it can be closed (or the whole
+  // workspace replaced) while the request is in flight, and a later card may reuse the id.
+  const startedInEpoch = workspaceEpoch;
   const result = existing && existing.nodeId > 0
     ? await backendClient.patchNode(existing.nodeId, { params, inputs: bindings })
     : await backendClient.createNode(bindings, { signatureId: card.signatureId, params });
@@ -527,13 +582,54 @@ async function syncFunctionCard(cardId: number): Promise<void> {
   }
 
   const nodeId = result.nodeId!;
+  // Closing a card while its create is in flight cannot release a node that did not exist
+  // yet, so the fresh node (and its result matrices) would leak server-side forever. The
+  // close is the newer intent, so the node is the thing that goes.
+  const stillCurrent =
+    workspaceEpoch === startedInEpoch &&
+    useWorkspace.getState().cards.some((entry) => entry.id === cardId && isFormulaCard(entry));
+  if (!stillCurrent) {
+    if (!existing) void backendClient.deleteNode(nodeId);
+    return;
+  }
+  // A PATCH response carries no output ids (only nodeId + state), so an empty list must
+  // not overwrite the ids recorded at creation — outputs[] keeps the previous values.
   const resultMatrixIds = result.resultMatrixIds ?? (result.resultMatrixId !== undefined ? [result.resultMatrixId] : []);
   applyNodeSnapshot(cardId, {
     nodeId,
     state: result.state ?? 'dirty',
   });
-  applyOutputIds(cardId, resultMatrixIds);
+  if (resultMatrixIds.length > 0) applyOutputIds(cardId, resultMatrixIds);
+  // A downstream card may have been created before this card had a node or a result id;
+  // now that it has one, the binding can be completed.
+  syncUnboundDependents(cardId);
   if (result.state === 'done') void pullResultIntoCache(cardId);
+}
+
+/**
+ * Re-attempt binding for unbound formula cards that read `ownerCardId`'s output.
+ *
+ * The chain is built from the upstream card's result menu, and that card may still be
+ * computing (or have no node yet). Nothing else retries the binding, so without this an
+ * unbound downstream card used to stay "No result yet" forever.
+ */
+function syncUnboundDependents(ownerCardId: number): void {
+  for (const card of useWorkspace.getState().cards) {
+    if (!isFormulaCard(card) || card.node !== null) continue;
+    if (card.inputs.some((input) => input.target.cardId === ownerCardId)) {
+      void syncFunctionCard(card.id);
+    }
+  }
+}
+
+/** Same retry for a matrix that finished registering after the card was created. */
+function syncUnboundReadersOfMatrix(localMatrixId: number): void {
+  for (const card of useWorkspace.getState().cards) {
+    if (!isFormulaCard(card) || card.node !== null) continue;
+    if (card.inputs.some((input) => input.target.matrixId === localMatrixId)) {
+      void syncFunctionCard(card.id);
+    }
+  }
 }
 
 /** Record a node's state on its card (drives the four-state light). */
@@ -1090,7 +1186,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
             data: c.data,
           }));
           const id = await get().registerMatrixWithBackend(entry.name, columns);
-          if (id !== null) backendMatrixIds.set(matrixId, id);
+          if (id !== null) {
+            backendMatrixIds.set(matrixId, id);
+            // A function card created while this table was still uploading has been waiting
+            // for exactly this id; nothing else retries its binding.
+            syncUnboundReadersOfMatrix(matrixId);
+          }
         })();
       }
 
@@ -1272,6 +1373,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         // A function card owns its display cache outright; no other card references it, so
         // it must not be left behind in the map.
         matrices.delete(card.displayMatrixId);
+        // The display cache is never a registered source, so a stale entry here could only
+        // come from a future change; dropping it keeps the map honest either way.
+        backendMatrixIds.delete(card.displayMatrixId);
         // Delete the one backing node server-side. `DELETE /api/nodes/{id}` also drops its
         // result matrices, which is what releases the compute graph on close.
         const nodeId = card.node?.nodeId ?? -1;
@@ -1744,11 +1848,20 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         node: null,
         displayMatrixId: state.nextMatrixId,
       };
-      state.dependencies.addDependency(
+      const cycle = state.dependencies.addDependency(
         cardId,
         sourceCardId,
         inputs.map((input) => input.portId),
       );
+      if (cycle) {
+        // A regression reads two columns of its source, so the edge is the same shape as an
+        // expression card's — and a refused edge must not leave a card with no dependency.
+        get().showToast(
+          'error',
+          translatorFor(get().locale)('status.cycle', { path: cycle.join(' → ') }),
+        );
+        return null;
+      }
       set({
         cards: [...state.cards, card],
         dependencies: state.dependencies,
@@ -2136,6 +2249,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     },
 
     loadSnapshot(snapshot) {
+      // A push started against the previous workspace must not bind into this one.
+      workspaceEpoch += 1;
       const matrices = new Map<number, MatrixData>();
       for (const entry of snapshot.matrices) {
         const matrix = new MatrixData();
@@ -2219,6 +2334,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // Matrix ids restart at 1, so cached server ids from the previous workspace would
       // point at the wrong rows after a reset. Drop them together with the matrices.
       backendMatrixIds.clear();
+      // A coalesced re-run queued before the reset would otherwise target the *new* card
+      // that inherits the same id.
+      syncingCards.clear();
+      resyncRequested.clear();
+      workspaceEpoch += 1;
       lastEventSeq = 0;
       stopEventLoop();
       set({

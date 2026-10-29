@@ -105,6 +105,9 @@ export function FormulaCard({
   // The reference dialog is store-owned: the Help menu opens the same one, and this card
   // must not need a prop relayed through CardCanvas to reach it.
   const openHelp = useWorkspace((s) => s.openHelp);
+  // Re-send this card's parameters + binding to the backend. The card has no compute of its
+  // own, so "recompute" is exactly one push — the same call the expression editor makes.
+  const recomputeFormula = useWorkspace((s) => s.recomputeFormula);
   /**
    * Explanations sit behind a ~1 s rest (`HoverHelp`), never on a native `title`: the card
    * is dense, and instant browser tooltips fire on every accidental pass-over.
@@ -132,6 +135,15 @@ export function FormulaCard({
   };
   /** Column header menu: pick a chart type for one output column. */
   const [chartMenu, setChartMenu] = useState<{ x: number; y: number; column: number } | null>(null);
+
+  // A recompute replaces the result table under an open menu, so the stored column index
+  // can end up past the last column. Closing the menu is the honest response: the column it
+  // was opened for no longer exists (and reading its label would throw).
+  useEffect(() => {
+    if (chartMenu && chartMenu.column >= (resultMatrix?.columnCount() ?? 0)) {
+      setChartMenu(null);
+    }
+  }, [chartMenu, resultMatrix]);
 
   /**
    * The editor keeps its own draft and only commits after a pause.
@@ -611,15 +623,40 @@ export function FormulaCard({
                     rowLabel={(n) => t('table.rowHeader', { n })}
                     onHeaderContextMenu={(event, column) => {
                       event.preventDefault();
+                      // The card owns its own menu: without this the event also reaches
+                      // the canvas, whose handler is a different surface's gesture.
+                      event.stopPropagation();
                       setChartMenu({ x: event.clientX, y: event.clientY, column });
                     }}
                   />
                 </div>
               ) : (
                 <div className="formula-card__empty">
-                  {state === 'computing' || state === 'dirty'
-                    ? t('formula.pending')
-                    : t('formula.empty')}
+                  {state === 'computing' || state === 'dirty' ? (
+                    t('formula.pending')
+                  ) : state === 'error' || state === 'stale' ? (
+                    // The structured message already sits beside the formulas; the result
+                    // area says where to look instead of repeating it.
+                    t('formula.emptyError')
+                  ) : card.node === null ? (
+                    // No node at all: every expression is fine, the card simply has not
+                    // been bound to a compute node yet. Saying "enter an expression" here
+                    // was a lie that hid a binding failure behind a missing keystroke.
+                    <>
+                      <span>{t('formula.notBound')}</span>
+                      <button
+                        type="button"
+                        className="card__control"
+                        onClick={() => recomputeFormula(card.id)}
+                      >
+                        {t('formula.recompute')}
+                      </button>
+                    </>
+                  ) : (
+                    // Computed, but the result carries no columns (e.g. the expression
+                    // produced nothing usable). Not a binding problem, so no retry offer.
+                    t('formula.outputEmpty')
+                  )}
                 </div>
               )}
             </section>
@@ -676,9 +713,16 @@ export function FormulaCard({
         >
           <div className="context-menu__title">
             {t('table.contextChartMenu')} ·{' '}
-            {resultMatrix.columnLabel(chartMenu.column) ||
-              resultMatrix.column(chartMenu.column).posName}
+            {chartMenu.column < cols
+              ? resultMatrix.columnLabel(chartMenu.column) ||
+                resultMatrix.column(chartMenu.column).posName
+              : ''}
           </div>
+          {/* A single trailing column cannot carry a scatter/regression/correlation: say so
+              once, so the disabled items below read as a rule and not as a broken menu. */}
+          {cols - chartMenu.column === 1 ? (
+            <div className="context-menu__hint">{t('chart.singleColumnHint')}</div>
+          ) : null}
           {CHART_TYPE_ORDER.map((id) => {
             const def = chartTypeDef(id);
             // A chart is built from this column *and the ones after it*, so the test is

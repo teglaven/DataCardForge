@@ -734,7 +734,64 @@ try {
     JSON.stringify(zones),
   );
 
-  await page.locator('.card--formula .card__close').first().click();
+  // ── 11d. the function card's OUTPUT is a real dataflow source ───────
+  // Both entries existed and were silently broken: a chart drawn from a function card's
+  // result, and a chained function card built from that result. Both bind the backend to
+  // the RESULT matrix, and its id only exists server-side — while the card's display cache
+  // is a local id. Nothing registered that mapping, so portBindingsFor returned null, the
+  // create request was never sent, and the cards sat at "No result yet" forever. The suite
+  // had no assertion that either entry actually produces anything, which is why it shipped.
+  const chartCountBefore = await page.locator('.card--chart').count();
+  await page.locator('.card--formula .vtable__colhead').first().click({ button: 'right' });
+  await page.waitForSelector('.context-menu', { timeout: 5_000 });
+  await page
+    .locator('.context-menu__item')
+    .filter({ hasText: /^Line$|^折线图$/ })
+    .first()
+    .click();
+  await page.waitForTimeout(800);
+  check(
+    'a chart is created from the function card result',
+    (await page.locator('.card--chart').count()) > chartCountBefore,
+    `${chartCountBefore} -> ${await page.locator('.card--chart').count()}`,
+  );
+
+  await page.locator('.card--formula .vtable__colhead').first().click({ button: 'right' });
+  await page.waitForSelector('.context-menu', { timeout: 5_000 });
+  await page
+    .locator('.context-menu__item')
+    .filter({ hasText: /New Formula Card|新建公式卡/ })
+    .last()
+    .click();
+  await page.waitForTimeout(1_800);
+  const chainedBadge = (await page.locator('.card--formula .card__badge').last().innerText()).trim();
+  const chainedNodeState = await page
+    .locator('.card--formula .node-light')
+    .last()
+    .getAttribute('class');
+  check(
+    'a chained function card computes a result of its own',
+    /\d+\s*columns?/i.test(chainedBadge) &&
+      !/\b0\s*columns?/i.test(chainedBadge) &&
+      /node-light--done/.test(chainedNodeState ?? ''),
+    `${chainedBadge} | ${chainedNodeState}`,
+  );
+
+  // Tear the two derived cards down before the formula card: both depend on it, and a
+  // depended-on card refuses to close (that refusal is asserted in section 9 on purpose).
+  // They can sit off the visible canvas once the function card is tiled, so they are closed
+  // through the DOM rather than by making Playwright scroll the card plane.
+  const closeLast = (selector) =>
+    page.evaluate((sel) => {
+      const cards = document.querySelectorAll(sel);
+      const close = cards[cards.length - 1]?.querySelector('.card__close');
+      if (close instanceof HTMLElement) close.click();
+    }, selector);
+  await closeLast('.card--formula');
+  await page.waitForTimeout(300);
+  await closeLast('.card--chart');
+  await page.waitForTimeout(300);
+  await closeLast('.card--formula');
   await page.waitForTimeout(400);
 
   // ── 12. no runtime errors ───────────────────────────────────────────
