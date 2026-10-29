@@ -70,11 +70,17 @@
 - e2e：`smoke.mjs` 11d——结果列建图、链式子卡出自己的结果、按依赖顺序清理。
 - 变异验证：去掉 resolver / 注册补绑 / 依赖补绑 / 孤儿清理 / 回滚组件，各自都有用例变红。
 
-## 遗留（后续，不在本轮范围）
+## 遗留（已记录，暂不处理）
 
-- **页面刷新而后端仍活时会泄漏旧 node**：`normalizeRestoredCards` 清零后强制重建，旧 node 无人回收；
-  `client.getNode` / `listNodes` 定义了但从未在 store 里使用。建议 restore 时先对账（复用或删除）。
-- `closeAllCards` 只清状态，不释放服务端矩阵 / node，也不清两张同步簿记（既有泄漏），建议日后与
-  `reset()` 对齐。
-- `addChartCard` 的若干 `null` 分支（`:1143/:1145/:1166`）在 UI 上不可达（菜单已按 `minimumColumns`
-  禁用），保持静默、未加 toast；若将来从其他入口调用需补提示。
+> 以下是复核过程中发现、但**不属于本 bug**的既有问题或未触发分支。
+> 状态：记录在案，本轮不动；将来要做时从这里起手。
+
+1. **页面刷新、后端仍活 → 旧 node 泄漏**。`normalizeRestoredCards` 把 `node` 与
+   `outputs[].resultMatrixId` 清零后强制重建，旧 node 无人回收；`client.getNode` / `listNodes`
+   定义了却从未在 store 里使用（`backendIntegration.test.ts` 里才有调用）。建议 restore 时先对账：
+   旧 node 仍在 → PATCH 复用，否则重建 / DELETE 旧的。
+2. **`closeAllCards` 不释放服务端资源**。它只清状态（`cards: [] / matrices: new Map()`），不删矩阵、
+   不删 node，也不清 `syncingCards` / `resyncRequested`；建议与 `reset()` 对齐（复用同一段清理）。
+3. **`addChartCard` 的 `null` 分支不可达**。`:1143/:1145/:1166` 在两个菜单里都被
+   `minimumColumns` 的 `disabled` 挡住，目前静默返回、没有 toast；若将来从其他入口（快捷键、
+   批量操作）调用，需要补提示文案。
