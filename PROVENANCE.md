@@ -113,11 +113,11 @@ git 里的 commit date 是**作者自报**的，任何人克隆后都能原样�
   无任何第三方见证。因此它目前只能证明「作者主张在该时间点已有此项目」，不能独立锚定时间。
   补强方式见第四节。
 
-### 6.3 数据来源
+### 6.2 数据来源
 
 `docs/sampleData/` 下的样本数据为**合成数据**，由
 [`docs/sampleData/generate_matrix.py`](docs/sampleData/generate_matrix.py) 生成
-（`math.sin(r)` 叠加 `random.uniform(-1, 1)` 噪声），**不含任何用人单位的数据**。
+（`math.sin(r)` 叠加 `random.uniform(-1, 1)` 噪声），**不含任何外部或专有数据**。
 
 复现：
 
