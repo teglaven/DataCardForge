@@ -522,6 +522,45 @@ describe('connection lines', () => {
     expect(d.endsWith('420 1050')).toBe(true);
   });
 
+  it('animates the wire when moving an obstacle flips its route', async () => {
+    const { chartId } = setupScene();
+
+    // Chart below the table, one card exactly in between: the wire detours around it.
+    let betweenId = 0;
+    await act(async () => {
+      store().setBounds(chartId, { x: 100, y: 900, width: 640, height: 300 });
+      registerCard(chartId, stubRoot({ x: 100, y: 900, width: 640, height: 300 }));
+      betweenId = store().addMatrixCard([{ name: 'c.csv', matrix: buildMatrix(2) }]);
+      store().setBounds(betweenId, { x: 100, y: 540, width: 640, height: 320 });
+      registerCard(betweenId, stubRoot({ x: 100, y: 540, width: 640, height: 320 }));
+    });
+    await flush();
+
+    const host = await mountLayer();
+    const detoured = wirePaths(host)[0];
+    expect(detoured).toContain('C');
+
+    // Slide the obstacle far to the side: the route is now a single clear curve.
+    await act(async () => {
+      const away = { x: 5000, y: 540, width: 640, height: 320 };
+      store().setBounds(betweenId, away);
+      registerCard(betweenId, stubRoot(away));
+      invalidateLayout();
+    });
+    // Two frames in, the reflow is running but has not arrived (it takes 220ms).
+    await settle(80);
+
+    // Mid-reflow the wire is neither the old detour nor the settled curve: it is on its way.
+    const during = wirePaths(host)[0];
+    const settledPath = 'M 420 290 C 420 670, 420 670, 420 1050';
+    expect(during).not.toBe(detoured);
+    expect(during).not.toBe(settledPath);
+    expect((during.match(/C/g) ?? []).length).toBeGreaterThan(1);
+
+    await settle(500);
+    expect(wirePaths(host)[0]).toBe(settledPath);
+  });
+
   it('labels a highlighted line with the port ids it carries', async () => {
     const { matrixCardId } = setupScene();
     const host = await mountLayer(matrixCardId);

@@ -31,18 +31,26 @@ import type { CSSProperties } from 'react';
 
 import { cardRect, subscribeLayout, getLayoutVersion, type Rect } from './cardMetrics.ts';
 import {
-  advanceTween,
   arrowPathAt,
   dashArray,
   dashCycle,
   dashDuration,
-  geometryDistance,
+  easeOutCubic,
+  lerpPolyline,
+  polylineArrowTip,
+  polylineDistance,
+  polylineLabelPoint,
+  polylinePathData,
   routeArrowTip,
   routeGeometry,
   routeLabelPoint,
   routePathData,
-  tweenPlan,
+  ROUTE_JUMP,
+  ROUTE_REFLOW_MS,
+  ROUTE_SAMPLES,
+  sampleRoute,
   wireGeometry,
+  type ArrowPlacement,
   type Point,
   type WireDirection,
   type WireGeometry,
@@ -219,36 +227,58 @@ function prefersReducedMotion(): boolean {
   }
 }
 
-interface Tween {
-  from: WireGeometry;
-  to: WireGeometry;
-  duration: number;
+/**
+ * Drive the drawn wire from the *settled* layout, not from a tweened centre pair.
+ *
+ * A wire has one shape to animate: its route. Interpolating the two card centres and then
+ * re-routing (which is what the old `useTweenedGeometry` did) cannot animate a route whose
+ * *topology* changed — when moving an obstacle flips the detour from above to below, the
+ * centres barely move and the drawn path jumps anyway. So the whole route is sampled and
+ * interpolated here, and that covers a card jump as well as a detour flip.
+ */
+
+/** One wire as it is currently drawn: path, arrowhead and label anchor. */
+interface WireFrame {
+  d: string;
+  arrow: ArrowPlacement | null;
+  label: Point;
+  samples: Point[];
+}
+
+interface Reflow {
+  from: Point[];
+  to: Point[];
+  target: WireFrame;
+  /** Target card frame: the arrowhead has to re-park on it every animation frame. */
+  rect: Rect;
   startedAt: number;
 }
 
 /**
- * The shapes actually on screen.
+ * Animate the wire when its route is forced to change shape.
  *
- * A drag or a resize changes the geometry every frame; those deltas are small, so the wire
- * is simply redrawn (`JUMP_THRESHOLD`). A tile / cascade / project load moves a card in one
- * step, and *that* is animated — otherwise the wire teleports across the plane and the
- * dependency it encodes is lost for a moment. When the transition would sweep across a
- * third card, `tweenPlan` shortens it so the wire passes through the hole in a few frames
- * instead of crawling behind someone else's window.
+ * The route is recomputed from the **settled** card rects, and the whole sampled shape is
+ * interpolated — which covers a card jump *and* a detour flip (moving an obstacle so the
+ * wire goes from above a card to below it changes no centre at all, but changes the drawn
+ * path by hundreds of pixels). Small per-frame changes during a drag are snapped, because
+ * the wire has to track the cursor: a tween on every drag frame is rubber-band lag.
  *
- * The frame loop only exists while a transition is running: nothing here polls.
+ * A reflow already in flight is *retargeted*, never restarted — the layout can keep
+ * changing while a card is dragged, and restarting would reset `startedAt` and leave the
+ * wire chasing a moving goal forever.
  */
-function useTweenedGeometry(
+function useReflowedWires(
   connections: Connection[],
   rects: Map<number, Rect>,
-): Map<string, WireGeometry> {
-  const [drawn, setDrawn] = useState<Map<string, WireGeometry>>(() => new Map());
-  const shownRef = useRef(new Map<string, WireGeometry>());
-  const tweensRef = useRef(new Map<string, Tween>());
+  rectList: Rect[],
+): Map<string, WireFrame> {
+  const [frames, setFrames] = useState<Map<string, WireFrame>>(() => new Map());
+  const shownRef = useRef(new Map<string, WireFrame>());
+  const tweenRef = useRef(new Map<string, Reflow>());
   const frameRef = useRef(0);
+  const reduced = prefersReducedMotion();
 
   useEffect(() => {
-    const reduced = prefersReducedMotion();
     const now = performance.now();
     const keys = new Set<string>();
     let animating = false;
@@ -258,68 +288,82 @@ function useTweenedGeometry(
       frameRef.current = 0;
       const time = performance.now();
       let alive = false;
-      for (const [key, tween] of tweensRef.current) {
-        const elapsed = time - tween.startedAt;
-        shownRef.current.set(key, advanceTween(tween.from, tween.to, elapsed, tween.duration));
-        if (elapsed >= tween.duration) tweensRef.current.delete(key);
-        else alive = true;
+      for (const [key, tween] of tweenRef.current) {
+        const progress = easeOutCubic(Math.min(1, (time - tween.startedAt) / ROUTE_REFLOW_MS));
+        if (progress >= 1) {
+          shownRef.current.set(key, tween.target);
+          tweenRef.current.delete(key);
+          continue;
+        }
+        const samples = lerpPolyline(tween.from, tween.to, progress);
+        shownRef.current.set(key, {
+          samples,
+          d: polylinePathData(samples),
+          arrow: polylineArrowTip(samples, tween.rect),
+          label: polylineLabelPoint(samples, rectList),
+        });
+        alive = true;
       }
-      setDrawn(new Map(shownRef.current));
+      setFrames(new Map(shownRef.current));
       if (alive) frameRef.current = requestAnimationFrame(tick);
     };
 
-    for (const connection of connections) {
-      keys.add(connection.key);
-      const target = connection.target;
-      const shown = shownRef.current.get(connection.key);
-      const active = tweensRef.current.get(connection.key);
-
-      if (!shown) {
-        // A brand new wire is born where it belongs: appearing is not a layout jump.
-        shownRef.current.set(connection.key, target);
-        settled = true;
-        continue;
-      }
-      if (geometryDistance(shown, target) < 0.01) {
-        // Already there — or already heading there (see the `active` branch below).
-        if (active) animating = true;
-        continue;
-      }
-      if (active && geometryDistance(active.to, target) < 0.01) {
-        animating = true;
-        continue;
-      }
-
+    for (const conn of connections) {
+      keys.add(conn.key);
       const obstacles: Rect[] = [];
       for (const [id, rect] of rects) {
-        if (id !== connection.dependsOn && id !== connection.dependent) obstacles.push(rect);
+        if (id !== conn.dependsOn && id !== conn.dependent) obstacles.push(rect);
       }
-      const plan = tweenPlan(shown, target, obstacles);
-      if (reduced || plan.durationMs <= 0) {
-        shownRef.current.set(connection.key, target);
-        tweensRef.current.delete(connection.key);
+      const route = routeGeometry(conn.target.from, conn.target.to, obstacles);
+      const target: WireFrame = {
+        samples: sampleRoute(route, ROUTE_SAMPLES),
+        d: routePathData(route),
+        arrow: routeArrowTip(route, conn.targetRect),
+        label: routeLabelPoint(route, rectList),
+      };
+
+      const shown = shownRef.current.get(conn.key);
+      if (!shown) {
+        // A brand new wire is born where it belongs: appearing is not a layout jump.
+        shownRef.current.set(conn.key, target);
         settled = true;
-      } else {
-        tweensRef.current.set(connection.key, {
-          from: shown,
-          to: target,
-          duration: plan.durationMs,
-          startedAt: now,
-        });
-        animating = true;
+        continue;
       }
+
+      const active = tweenRef.current.get(conn.key);
+      if (active) {
+        active.to = target.samples;
+        active.target = target;
+        active.rect = conn.targetRect;
+        animating = true;
+        continue;
+      }
+
+      if (reduced || polylineDistance(shown.samples, target.samples) <= ROUTE_JUMP) {
+        shownRef.current.set(conn.key, target);
+        settled = true;
+        continue;
+      }
+
+      tweenRef.current.set(conn.key, {
+        from: shown.samples,
+        to: target.samples,
+        target,
+        rect: conn.targetRect,
+        startedAt: now,
+      });
+      animating = true;
     }
 
-    // Forget wires whose edge disappeared (deleted card, re-pointed port).
     for (const key of [...shownRef.current.keys()]) {
       if (!keys.has(key)) {
         shownRef.current.delete(key);
-        tweensRef.current.delete(key);
+        tweenRef.current.delete(key);
         settled = true;
       }
     }
 
-    if (settled) setDrawn(new Map(shownRef.current));
+    if (settled) setFrames(new Map(shownRef.current));
     if (animating && !frameRef.current) frameRef.current = requestAnimationFrame(tick);
 
     return () => {
@@ -328,9 +372,9 @@ function useTweenedGeometry(
         frameRef.current = 0;
       }
     };
-  }, [connections, rects]);
+  }, [connections, rects, rectList, reduced]);
 
-  return drawn;
+  return frames;
 }
 
 /** Compact port list for the label: two ids, then a count. */
@@ -362,7 +406,6 @@ export function ConnectionLayer({
 }: ConnectionLayerProps) {
   const rects = useCardRects(cards);
   const connections = useConnectionGeometry(cards, selectedId, dependencies, rects);
-  const drawn = useTweenedGeometry(connections, rects);
   const hidden = useBlockedBlink(blockedCardId, blockNonce);
   const rectList = useMemo(() => [...rects.values()], [rects]);
 
@@ -377,27 +420,12 @@ export function ConnectionLayer({
   // and that is also what turns centre-to-centre endpoints into frame-to-frame wires.
   const maskId = 'connection-card-cutout';
 
-  /**
-   * Cards between the two endpoints — the obstacles a wire has to go around.
-   *
-   * The endpoints' own cards are excluded on purpose: the wire starts and ends at their
-   * centres and the mask erases those stretches, so treating them as obstacles would ask
-   * the router to escape a box it is anchored inside.
-   */
-  const obstaclesFor = (conn: Connection): Rect[] => {
-    const out: Rect[] = [];
-    for (const [id, rect] of rects) {
-      if (id !== conn.dependsOn && id !== conn.dependent) out.push(rect);
-    }
-    return out;
-  };
+  const frames = useReflowedWires(connections, rects, rectList);
 
   const renderLine = (conn: Connection, framed: boolean) => {
-    const geometry = drawn.get(conn.key) ?? conn.target;
-    // Detour (2026-10-29): when the single cubic would cross a third card, the wire is
-    // routed around it instead of being erased there. Clear wires keep the exact old path.
-    const route = routeGeometry(geometry.from, geometry.to, obstaclesFor(conn));
-    const arrow = routeArrowTip(route, conn.targetRect);
+    const frame = frames.get(conn.key);
+    if (!frame) return null;
+    const arrow = frame.arrow;
     // The whole layer sits inside a `scale(zoom)` group, so widths and dash lengths are
     // converted to user units here instead of relying on `vector-effect` (which does not
     // cover dash patterns, and left them zoom-dependent).
@@ -412,7 +440,7 @@ export function ConnectionLayer({
       <g key={conn.key} className={`connection connection--${framed ? 'fg' : 'bg'}`}>
         <path
           className={`connection__wire${framed ? ' connection__wire--flow' : ''}`}
-          d={routePathData(route)}
+          d={frame.d}
           stroke={conn.color}
           strokeWidth={(framed ? 3 : 1.5) / view.zoom}
           strokeDasharray={framed ? dashArray(conn.direction, view.zoom) : undefined}
@@ -428,7 +456,7 @@ export function ConnectionLayer({
         {framed && conn.ports.length > 0 ? (
           <ConnectionLabel
             conn={conn}
-            point={routeLabelPoint(route, rectList)}
+            point={frame.label}
             zoom={view.zoom}
           />
         ) : null}

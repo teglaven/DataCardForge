@@ -31,7 +31,13 @@ import {
   routeArrowTip,
   routeGeometry,
   routeLabelPoint,
+  ROUTE_SAMPLES,
+  lerpPolyline,
+  polylineArrowTip,
+  polylineDistance,
+  polylinePathData,
   routePathData,
+  sampleRoute,
   tweenPlan,
   visibleLabelPoint,
   wireGeometry,
@@ -337,5 +343,58 @@ describe('detour around intermediate cards (2026-10-29)', () => {
     expect(rectContains(between, point)).toBe(false);
     expect(rectContains(source, point)).toBe(false);
     expect(rectContains(target, point)).toBe(false);
+  });
+});
+
+describe('route reflow (2026-10-29)', () => {
+  const between: Rect = { left: 0, top: 300, width: 400, height: 300 };
+  const target: Rect = { left: 0, top: 600, width: 400, height: 300 };
+  const from = { x: 200, y: 150 };
+  const to = { x: 200, y: 750 };
+
+  it('resamples a route to a fixed count, keeping both endpoints', () => {
+    const route = routeGeometry(from, to, [between]);
+    const samples = sampleRoute(route, ROUTE_SAMPLES);
+    expect(samples).toHaveLength(ROUTE_SAMPLES + 1);
+    expect(samples[0]).toEqual(from);
+    expect(samples[ROUTE_SAMPLES]).toEqual(to);
+  });
+
+  it('measures the worst displacement between two shapes', () => {
+    const a = sampleRoute(routeGeometry(from, to, [between]), 16);
+    const b = sampleRoute(routeGeometry(from, to, [between]), 16);
+    expect(polylineDistance(a, b)).toBe(0);
+    // Moving the obstacle away flips the route: a big, animatable shape change.
+    const clear = sampleRoute(routeGeometry(from, to, []), 16);
+    expect(polylineDistance(a, clear)).toBeGreaterThan(20);
+  });
+
+  it('interpolates point by point and lands on the target at t = 1', () => {
+    const a = sampleRoute(routeGeometry(from, to, [between]), 12);
+    const b = sampleRoute(routeGeometry(from, to, []), 12);
+    expect(lerpPolyline(a, b, 0)).toEqual(a);
+    expect(lerpPolyline(a, b, 1)).toEqual(b);
+    const mid = lerpPolyline(a, b, 0.5);
+    expect(polylineDistance(mid, a)).toBeGreaterThan(0);
+    expect(polylineDistance(mid, a)).toBeLessThan(polylineDistance(b, a));
+  });
+
+  it('draws the in-between shape as one smooth cubic chain', () => {
+    const samples = lerpPolyline(
+      sampleRoute(routeGeometry(from, to, [between]), 12),
+      sampleRoute(routeGeometry(from, to, []), 12),
+      0.5,
+    );
+    const d = polylinePathData(samples);
+    expect(d.startsWith(`M ${samples[0].x} ${samples[0].y}`)).toBe(true);
+    expect(d).not.toContain(' L ');
+    expect((d.match(/C/g) ?? []).length).toBe(samples.length - 1);
+  });
+
+  it('parks the arrowhead on the frame while a reflow is in flight', () => {
+    const samples = sampleRoute(routeGeometry(from, to, [between]), 16);
+    const arrow = polylineArrowTip(samples, target);
+    expect(arrow).not.toBeNull();
+    expect(rectContains(target, arrow!.tip)).toBe(false);
   });
 });

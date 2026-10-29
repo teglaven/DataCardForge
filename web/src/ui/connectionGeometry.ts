@@ -665,3 +665,154 @@ export function routeLabelPoint(route: RouteGeometry, rects: Rect[]): Point {
   const t = Math.min(1, Math.max(0, (midIndex - segmentIndex * LABEL_SAMPLES) / LABEL_SAMPLES));
   return cubicPoint(route.segments[segmentIndex], t);
 }
+
+/* ── Reflow: animating a route when the layout is forced to change ────── */
+
+/** Shape change (plane px) above which a route reflow is animated instead of snapped. */
+export const ROUTE_JUMP = 8;
+
+/** Duration of a route reflow. Long enough to read as "the wire moved", short enough to not lag. */
+export const ROUTE_REFLOW_MS = 220;
+
+/** How many points a route is resampled to before it can be interpolated. */
+export const ROUTE_SAMPLES = 32;
+
+/**
+ * Resample a route to a fixed number of arc-length-spaced points.
+ *
+ * Interpolating two routes requires them to have the *same* shape description: the number
+ * of cubic segments changes when the router picks a different side of a card, so the raw
+ * control points cannot be paired up. Equal-count arc-length samples can.
+ */
+export function sampleRoute(route: RouteGeometry, count = ROUTE_SAMPLES): Point[] {
+  const total = route.segments.reduce((sum, segment) => sum + segmentLength(segment), 0);
+  const out: Point[] = [];
+  if (total <= 1e-9) {
+    const only = route.segments[0]?.from ?? { x: 0, y: 0 };
+    return new Array(count + 1).fill(only);
+  }
+  let segment = 0;
+  let travelled = 0;
+  let length = segmentLength(route.segments[0]);
+  for (let i = 0; i <= count; i += 1) {
+    const wanted = (total * i) / count;
+    while (segment < route.segments.length - 1 && travelled + length < wanted) {
+      travelled += length;
+      segment += 1;
+      length = segmentLength(route.segments[segment]);
+    }
+    // `t` inside this segment, found by a short bisection on arc length.
+    const local = length <= 1e-9 ? 0 : (wanted - travelled) / length;
+    out.push(cubicPoint(route.segments[segment], Math.min(1, Math.max(0, local))));
+  }
+  return out;
+}
+
+/** Approximate length of one cubic (16 samples is plenty for reflow spacing). */
+function segmentLength(segment: WireGeometry): number {
+  let length = 0;
+  let previous = segment.from;
+  for (let i = 1; i <= 16; i += 1) {
+    const point = cubicPoint(segment, i / 16);
+    length += Math.hypot(point.x - previous.x, point.y - previous.y);
+    previous = point;
+  }
+  return length;
+}
+
+/** Largest point-to-point displacement between two equal-length polylines. */
+export function polylineDistance(a: Point[], b: Point[]): number {
+  const count = Math.min(a.length, b.length);
+  let worst = 0;
+  for (let i = 0; i < count; i += 1) {
+    worst = Math.max(worst, Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y));
+  }
+  return worst;
+}
+
+/** Point-by-point interpolation of two equal-length polylines. */
+export function lerpPolyline(a: Point[], b: Point[], t: number): Point[] {
+  const count = Math.min(a.length, b.length);
+  const out: Point[] = [];
+  for (let i = 0; i < count; i += 1) {
+    out.push({ x: a[i].x + (b[i].x - a[i].x) * t, y: a[i].y + (b[i].y - a[i].y) * t });
+  }
+  return out;
+}
+
+/**
+ * Smooth `d` through a sampled polyline (Catmull-Rom, one cubic per span).
+ *
+ * Used only while a reflow is running: the settled shape keeps its canonical path so it
+ * stays byte-identical to `routePathData`, and the animation borrows this approximation.
+ */
+export function polylinePathData(points: Point[], tension = 1 / 6): string {
+  if (points.length < 2) return '';
+  const parts = [`M ${round(points[0].x)} ${round(points[0].y)}`];
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[i - 1] ?? points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] ?? p2;
+    const c1 = { x: p1.x + (p2.x - p0.x) * tension, y: p1.y + (p2.y - p0.y) * tension };
+    const c2 = { x: p2.x - (p3.x - p1.x) * tension, y: p2.y - (p3.y - p1.y) * tension };
+    parts.push(
+      `C ${round(c1.x)} ${round(c1.y)}, ${round(c2.x)} ${round(c2.y)}, ${round(p2.x)} ${round(p2.y)}`,
+    );
+  }
+  return parts.join(' ');
+}
+
+/** Arrowhead for a sampled polyline: bisect the last leg against the target frame. */
+export function polylineArrowTip(points: Point[], rect: Rect): ArrowPlacement | null {
+  if (points.length < 2) return null;
+  const last = points[points.length - 1];
+  if (!rectContains(rect, last)) return null;
+  for (let i = points.length - 2; i >= 0; i -= 1) {
+    const outside = points[i];
+    if (rectContains(rect, outside)) continue;
+    let lo = 0;
+    let hi = 1;
+    for (let k = 0; k < EXIT_BISECTIONS; k += 1) {
+      const mid = (lo + hi) / 2;
+      const point = {
+        x: outside.x + (last.x - outside.x) * mid,
+        y: outside.y + (last.y - outside.y) * mid,
+      };
+      if (rectContains(rect, point)) hi = mid;
+      else lo = mid;
+    }
+    const tip = {
+      x: outside.x + (last.x - outside.x) * lo,
+      y: outside.y + (last.y - outside.y) * lo,
+    };
+    const inward = { x: last.x - tip.x, y: last.y - tip.y };
+    const length = Math.hypot(inward.x, inward.y);
+    if (length < 1e-9) return null;
+    return { tip, dir: { x: inward.x / length, y: inward.y / length } };
+  }
+  return null;
+}
+
+/** Where to park the label on a sampled polyline: middle of the longest uncovered run. */
+export function polylineLabelPoint(points: Point[], rects: Rect[]): Point {
+  if (rects.length === 0) return points[Math.floor(points.length / 2)];
+  let best: { start: number; end: number } | null = null;
+  let runStart = -1;
+  for (let i = 0; i < points.length; i += 1) {
+    const covered = rects.some((rect) => rectContains(rect, points[i]));
+    if (covered) {
+      if (runStart >= 0) {
+        if (!best || i - 1 - runStart > best.end - best.start) best = { start: runStart, end: i - 1 };
+        runStart = -1;
+      }
+    } else if (runStart < 0) {
+      runStart = i;
+    }
+  }
+  if (runStart >= 0 && (!best || points.length - 1 - runStart > best.end - best.start)) {
+    best = { start: runStart, end: points.length - 1 };
+  }
+  if (!best) return points[Math.floor(points.length / 2)];
+  return points[Math.round((best.start + best.end) / 2)];
+}
