@@ -380,9 +380,6 @@ export function dashDuration(direction: WireDirection): number {
  */
 export const ROUTE_PADDING = 20;
 
-/** Corner rounding of the detour. Kept below the padding so the arc cannot cut in. */
-export const ROUTE_RADIUS = 10;
-
 /** Samples used to ask "does the single cubic enter a card at all?". */
 const DETOUR_SAMPLES = 24;
 
@@ -433,13 +430,28 @@ export function segmentHitsRect(a: Point, b: Point, rect: Rect, tolerance = HIT_
   return (t1 - t0) * Math.hypot(dx, dy) > tolerance;
 }
 
-/** Polyline the wire follows, from the source centre to the target centre. */
+/** The route a wire takes: one or more cubics, from the source centre to the target centre. */
 export interface RouteGeometry {
-  /** At least two points; `points[0]` is the source centre, the last one the target centre. */
+  /** Waypoints including both endpoints; at most two are interior (i.e. at most two bends). */
   points: Point[];
+  /** Cubics to draw, in order. A clear wire is a single one — byte-identical to before. */
+  segments: WireGeometry[];
   /** True when at least one waypoint was inserted to get around a card. */
   detoured: boolean;
 }
+
+/**
+ * Tensions tried for the smoothing spline, strongest first.
+ *
+ * `1/6` is the classic Catmull-Rom value; smaller values pull the curve closer to the
+ * polyline. The first tension whose curve stays out of every card wins, so the result is
+ * "as soft as the clearance allows" — a hard corner only appears when a soft one would
+ * actually touch a card.
+ */
+const SMOOTH_TENSIONS = [1 / 6, 1 / 9, 1 / 12, 1 / 16, 1 / 24, 0];
+
+/** Samples per segment used when checking that the smoothed curve clears every card. */
+const SMOOTH_SAMPLES = 24;
 
 /**
  * Route `from -> to` around `obstacles` (cards that are neither endpoint).
@@ -451,6 +463,9 @@ export interface RouteGeometry {
  * rectangle, and Dijkstra picks the shortest route. Shortest-path around polygonal
  * obstacles bends only at obstacle corners, so this is exact for the shape we route.
  *
+ * The corner polyline is then **smoothed into cubics** (see `smoothRoute`): the mode the
+ * product asked for is a soft curve with at most two bends, not a mechanical polyline.
+ *
  * Returns `detoured: false` when no route exists (e.g. another card overlaps the source),
  * which degrades to the old "mask eats the crossing" behaviour instead of inventing one.
  */
@@ -460,13 +475,13 @@ export function routeGeometry(
   obstacles: Rect[],
   padding = ROUTE_PADDING,
 ): RouteGeometry {
-  const straight: RouteGeometry = { points: [from, to], detoured: false };
+  const base = wireGeometry(from, to);
+  const straight: RouteGeometry = { points: [from, to], segments: [base], detoured: false };
   if (obstacles.length === 0) return straight;
 
   const blocked = obstacles
     .filter((rect) => {
       const inflated = inflateRect(rect, padding);
-      const base = wireGeometry(from, to);
       for (let i = 0; i <= DETOUR_SAMPLES; i += 1) {
         if (rectContains(inflated, cubicPoint(base, i / DETOUR_SAMPLES))) return true;
       }
@@ -529,110 +544,108 @@ export function routeGeometry(
   }
   path.reverse();
   if (path.length <= 2) return straight;
-  return { points: path, detoured: true };
+
+  const points = simplifyWaypoints(path, obstacles);
+  return { points, segments: smoothRoute(points, obstacles), detoured: true };
 }
 
 /**
- * `d` for a route: the single cubic when nothing is in the way, otherwise a polyline whose
- * interior corners are rounded with quadratic arcs.
+ * Keep at most two interior waypoints.
  *
- * A rounded polyline is tangent-continuous at every joint (the arc leaves the corner along
- * the incoming leg), and because the radius never exceeds the padding the arc stays inside
- * the corner square — it cannot cut back into the card it just avoided.
+ * Two bends is the ceiling the product asked for; a plain "around one card" route already
+ * yields exactly two. Longer routes (several cards) are reduced to their first and last
+ * corner, and only kept long if the reduced curve would actually cut a card — that is
+ * what `smoothRoute` reports by returning a shape that fails the clearance check.
  */
-export function routePathData(route: RouteGeometry, base: WireGeometry, radius = ROUTE_RADIUS): string {
-  if (!route.detoured) return pathData(base);
-
-  const { points } = route;
-  const parts: string[] = [`M ${round(points[0].x)} ${round(points[0].y)}`];
-  for (let i = 1; i < points.length - 1; i += 1) {
-    const prev = points[i - 1];
-    const corner = points[i];
-    const next = points[i + 1];
-    const inLength = distance(prev, corner);
-    const outLength = distance(corner, next);
-    const r = Math.min(radius, inLength / 2, outLength / 2);
-    if (r < 0.5) {
-      parts.push(`L ${round(corner.x)} ${round(corner.y)}`);
-      continue;
-    }
-    const inDir = { x: (corner.x - prev.x) / inLength, y: (corner.y - prev.y) / inLength };
-    const outDir = { x: (next.x - corner.x) / outLength, y: (next.y - corner.y) / outLength };
-    parts.push(`L ${round(corner.x - inDir.x * r)} ${round(corner.y - inDir.y * r)}`);
-    parts.push(`Q ${round(corner.x)} ${round(corner.y)} ${round(corner.x + outDir.x * r)} ${round(corner.y + outDir.y * r)}`);
-  }
-  const last = points[points.length - 1];
-  parts.push(`L ${round(last.x)} ${round(last.y)}`);
-  return parts.join(' ');
+function simplifyWaypoints(points: Point[], obstacles: Rect[]): Point[] {
+  if (points.length <= 4) return points;
+  const reduced = [points[0], points[1], points[points.length - 2], points[points.length - 1]];
+  const candidate = smoothRoute(reduced, obstacles);
+  return curveClears(candidate, obstacles) ? reduced : points;
 }
 
 /**
- * Arrowhead for a route.
+ * Smooth a corner polyline into a run of cubics (Catmull-Rom tangents), picking the
+ * strongest tension that still clears every card.
  *
- * The final leg always approaches the target centre in a straight line (rounding happens
- * at interior corners), so the frame crossing is found by bisecting that last leg — the
- * same contract as `arrowTip`: never park the arrow inside the card.
+ * Corner-cutting is deliberate: the route was computed on rectangles inflated by
+ * `ROUTE_PADDING`, so a curve may legitimately shave the padding band — it just may never
+ * touch a card. Walking the tension down (and finally to zero, i.e. the straight polyline)
+ * means the answer is "as soft as clearance allows", never "soft and cutting through".
  */
-export function routeArrowTip(
-  route: RouteGeometry,
-  base: WireGeometry,
-  rect: Rect,
-): ArrowPlacement | null {
-  if (!route.detoured) return arrowTip(base, rect);
-
-  const points = route.points;
-  let inside = points[points.length - 1];
-  if (!rectContains(rect, inside)) return null;
-
-  for (let i = points.length - 2; i >= 0; i -= 1) {
-    const outside = points[i];
-    if (rectContains(rect, outside)) {
-      inside = outside;
-      continue;
-    }
-    let lo = 0;
-    let hi = 1;
-    for (let k = 0; k < EXIT_BISECTIONS; k += 1) {
-      const mid = (lo + hi) / 2;
-      const point = { x: outside.x + (inside.x - outside.x) * mid, y: outside.y + (inside.y - outside.y) * mid };
-      if (rectContains(rect, point)) hi = mid;
-      else lo = mid;
-    }
-    const tip = { x: outside.x + (inside.x - outside.x) * lo, y: outside.y + (inside.y - outside.y) * lo };
-    const inward = { x: inside.x - tip.x, y: inside.y - tip.y };
-    const length = Math.hypot(inward.x, inward.y);
-    if (length < 1e-9) return null;
-    return { tip, dir: { x: inward.x / length, y: inward.y / length } };
+function smoothRoute(points: Point[], obstacles: Rect[]): WireGeometry[] {
+  for (const tension of SMOOTH_TENSIONS) {
+    const segments = catmullRom(points, tension);
+    if (curveClears(segments, obstacles)) return segments;
   }
-  return null;
+  return catmullRom(points, 0);
+}
+
+/** Catmull-Rom spline through `points`, converted to one cubic per span. */
+function catmullRom(points: Point[], tension: number): WireGeometry[] {
+  const out: WireGeometry[] = [];
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[i - 1] ?? points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] ?? p2;
+    out.push({
+      from: p1,
+      to: p2,
+      c1: { x: p1.x + (p2.x - p0.x) * tension, y: p1.y + (p2.y - p0.y) * tension },
+      c2: { x: p2.x - (p3.x - p1.x) * tension, y: p2.y - (p3.y - p1.y) * tension },
+    });
+  }
+  return out;
+}
+
+/** True when no sampled point of the route lands inside any card. */
+function curveClears(segments: WireGeometry[], obstacles: Rect[]): boolean {
+  for (const segment of segments) {
+    for (let i = 0; i <= SMOOTH_SAMPLES; i += 1) {
+      const point = cubicPoint(segment, i / SMOOTH_SAMPLES);
+      if (obstacles.some((rect) => rectContains(rect, point))) return false;
+    }
+  }
+  return true;
+}
+
+/** `d` for a route: the single cubic when nothing is in the way, otherwise the smooth chain. */
+export function routePathData(route: RouteGeometry): string {
+  if (route.segments.length === 1) return pathData(route.segments[0]);
+  const first = route.segments[0];
+  return [
+    `M ${round(first.from.x)} ${round(first.from.y)}`,
+    ...route.segments.map(segmentD),
+  ].join(' ');
+}
+
+/** `C` part of one cubic (the `M` is emitted once for the whole chain). */
+function segmentD(segment: WireGeometry): string {
+  return `C ${round(segment.c1.x)} ${round(segment.c1.y)}, ${round(segment.c2.x)} ${round(segment.c2.y)}, ${round(segment.to.x)} ${round(segment.to.y)}`;
+}
+
+/**
+ * Arrowhead for a route: the last cubic is handed to the same bisection the single-curve
+ * case uses, so the tip always parks outside the target frame.
+ */
+export function routeArrowTip(route: RouteGeometry, rect: Rect): ArrowPlacement | null {
+  const last = route.segments[route.segments.length - 1];
+  return last ? arrowTip(last, rect) : null;
 }
 
 /** Where the label goes on a route: middle of the longest stretch outside every card. */
-export function routeLabelPoint(route: RouteGeometry, base: WireGeometry, rects: Rect[]): Point {
-  if (!route.detoured || rects.length === 0) {
-    return route.detoured ? midpointOfPolyline(route.points) : visibleLabelPoint(base, rects);
-  }
-
-  const samples = 96;
-  const points: Point[] = [];
-  let total = 0;
-  for (let i = 0; i < route.points.length - 1; i += 1) {
-    const a = route.points[i];
-    const b = route.points[i + 1];
-    const length = distance(a, b);
-    const steps = Math.max(1, Math.round((length / Math.max(1, polylineLength(route.points))) * samples));
-    for (let s = 0; s < steps; s += 1) {
-      const t = s / steps;
-      points.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-      total += length / steps;
-    }
-  }
-  points.push(route.points[route.points.length - 1]);
+export function routeLabelPoint(route: RouteGeometry, rects: Rect[]): Point {
+  if (rects.length === 0) return cubicPoint(route.segments[0], 0.5);
 
   let best: { start: number; end: number } | null = null;
   let runStart = -1;
-  for (let i = 0; i < points.length; i += 1) {
-    const covered = rects.some((rect) => rectContains(rect, points[i]));
+  const total = route.segments.length * LABEL_SAMPLES;
+  for (let i = 0; i <= total; i += 1) {
+    const segmentIndex = Math.min(route.segments.length - 1, Math.floor(i / LABEL_SAMPLES));
+    const t = (i - segmentIndex * LABEL_SAMPLES) / LABEL_SAMPLES;
+    const point = cubicPoint(route.segments[segmentIndex], Math.min(1, Math.max(0, t)));
+    const covered = rects.some((rect) => rectContains(rect, point));
     if (covered) {
       if (runStart >= 0) {
         if (!best || i - 1 - runStart > best.end - best.start) best = { start: runStart, end: i - 1 };
@@ -642,33 +655,13 @@ export function routeLabelPoint(route: RouteGeometry, base: WireGeometry, rects:
       runStart = i;
     }
   }
-  if (runStart >= 0 && (!best || points.length - 1 - runStart > best.end - best.start)) {
-    best = { start: runStart, end: points.length - 1 };
+  if (runStart >= 0 && (!best || total - runStart > best.end - best.start)) {
+    best = { start: runStart, end: total };
   }
-  if (!best) return midpointOfPolyline(route.points);
-  const mid = Math.round((best.start + best.end) / 2);
-  return points[Math.max(0, Math.min(points.length - 1, mid))];
-}
+  if (!best) return cubicPoint(route.segments[0], 0.5);
 
-function polylineLength(points: Point[]): number {
-  let total = 0;
-  for (let i = 0; i < points.length - 1; i += 1) total += distance(points[i], points[i + 1]);
-  return total;
-}
-
-function midpointOfPolyline(points: Point[]): Point {
-  const half = polylineLength(points) / 2;
-  let travelled = 0;
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const leg = distance(points[i], points[i + 1]);
-    if (travelled + leg >= half) {
-      const t = leg === 0 ? 0 : (half - travelled) / leg;
-      return {
-        x: points[i].x + (points[i + 1].x - points[i].x) * t,
-        y: points[i].y + (points[i + 1].y - points[i].y) * t,
-      };
-    }
-    travelled += leg;
-  }
-  return points[points.length - 1];
+  const midIndex = Math.round((best.start + best.end) / 2);
+  const segmentIndex = Math.min(route.segments.length - 1, Math.floor(midIndex / LABEL_SAMPLES));
+  const t = Math.min(1, Math.max(0, (midIndex - segmentIndex * LABEL_SAMPLES) / LABEL_SAMPLES));
+  return cubicPoint(route.segments[segmentIndex], t);
 }

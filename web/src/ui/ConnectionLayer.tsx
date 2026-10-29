@@ -397,7 +397,7 @@ export function ConnectionLayer({
     // Detour (2026-10-29): when the single cubic would cross a third card, the wire is
     // routed around it instead of being erased there. Clear wires keep the exact old path.
     const route = routeGeometry(geometry.from, geometry.to, obstaclesFor(conn));
-    const arrow = routeArrowTip(route, geometry, conn.targetRect);
+    const arrow = routeArrowTip(route, conn.targetRect);
     // The whole layer sits inside a `scale(zoom)` group, so widths and dash lengths are
     // converted to user units here instead of relying on `vector-effect` (which does not
     // cover dash patterns, and left them zoom-dependent).
@@ -412,7 +412,7 @@ export function ConnectionLayer({
       <g key={conn.key} className={`connection connection--${framed ? 'fg' : 'bg'}`}>
         <path
           className={`connection__wire${framed ? ' connection__wire--flow' : ''}`}
-          d={routePathData(route, geometry)}
+          d={routePathData(route)}
           stroke={conn.color}
           strokeWidth={(framed ? 3 : 1.5) / view.zoom}
           strokeDasharray={framed ? dashArray(conn.direction, view.zoom) : undefined}
@@ -428,7 +428,7 @@ export function ConnectionLayer({
         {framed && conn.ports.length > 0 ? (
           <ConnectionLabel
             conn={conn}
-            point={routeLabelPoint(route, geometry, rectList)}
+            point={routeLabelPoint(route, rectList)}
             zoom={view.zoom}
           />
         ) : null}

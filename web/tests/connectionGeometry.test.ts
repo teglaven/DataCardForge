@@ -17,7 +17,6 @@ import {
   DASH_IN,
   DASH_OUT,
   FAST_TWEEN_MS,
-  ROUTE_PADDING,
   TWEEN_MS,
   advanceTween,
   arrowPathAt,
@@ -27,14 +26,12 @@ import {
   dashCycle,
   dashDuration,
   geometryDistance,
-  inflateRect,
   pathData,
   rectContains,
   routeArrowTip,
   routeGeometry,
   routeLabelPoint,
   routePathData,
-  segmentHitsRect,
   tweenPlan,
   visibleLabelPoint,
   wireGeometry,
@@ -208,13 +205,17 @@ describe('detour around intermediate cards (2026-10-29)', () => {
   const from = { x: 200, y: 150 };
   const to = { x: 200, y: 750 };
 
-  /** Sample an `M/L/Q` path so a test can ask what the *drawn* curve actually does. */
+  /** Sample an `M/L/Q/C` path so a test can ask what the *drawn* curve actually does. */
   function samplePath(d: string, steps = 24): { x: number; y: number }[] {
-    const tokens = d.replace(/[MLQ]/g, ' $& ').trim().split(/\s+/);
+    const tokens = d.replace(/[MLQC]/g, ' $& ').trim().split(/\s+/);
     const points: { x: number; y: number }[] = [];
     let cursor = { x: 0, y: 0 };
     let i = 0;
     const num = () => Number(tokens[i++]);
+    const lerp = (a: { x: number; y: number }, b: { x: number; y: number }, t: number) => ({
+      x: a.x + (b.x - a.x) * t,
+      y: a.y + (b.y - a.y) * t,
+    });
     while (i < tokens.length) {
       const cmd = tokens[i++];
       if (cmd === 'M') {
@@ -222,12 +223,7 @@ describe('detour around intermediate cards (2026-10-29)', () => {
         points.push(cursor);
       } else if (cmd === 'L') {
         const next = { x: num(), y: num() };
-        for (let s = 1; s <= steps; s += 1) {
-          points.push({
-            x: cursor.x + (next.x - cursor.x) * (s / steps),
-            y: cursor.y + (next.y - cursor.y) * (s / steps),
-          });
-        }
+        for (let s = 1; s <= steps; s += 1) points.push(lerp(cursor, next, s / steps));
         cursor = next;
       } else if (cmd === 'Q') {
         const control = { x: num(), y: num() };
@@ -241,6 +237,19 @@ describe('detour around intermediate cards (2026-10-29)', () => {
           });
         }
         cursor = next;
+      } else if (cmd === 'C') {
+        const c1 = { x: num(), y: num() };
+        const c2 = { x: num(), y: num() };
+        const next = { x: num(), y: num() };
+        for (let s = 1; s <= steps; s += 1) {
+          const t = s / steps;
+          const u = 1 - t;
+          points.push({
+            x: u * u * u * cursor.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * next.x,
+            y: u * u * u * cursor.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * next.y,
+          });
+        }
+        cursor = next;
       } else {
         throw new Error(`unexpected path command ${cmd}`);
       }
@@ -248,39 +257,50 @@ describe('detour around intermediate cards (2026-10-29)', () => {
     return points;
   }
 
+  const inside = (route: ReturnType<typeof routeGeometry>): { x: number; y: number }[] => {
+    const drawn = samplePath(routePathData(route));
+    // Ignore the stretched ends: they are inside the two endpoint cards on purpose.
+    return drawn.slice(Math.floor(drawn.length * 0.2), Math.ceil(drawn.length * 0.8));
+  };
+
   it('leaves a clear wire exactly as it was (single cubic, no detour)', () => {
     const away: Rect = { left: 5000, top: 5000, width: 100, height: 100 };
     const route = routeGeometry(from, to, [away]);
     expect(route.detoured).toBe(false);
-    const base = wireGeometry(from, to);
-    expect(routePathData(route, base)).toBe(pathData(base));
+    expect(route.segments).toHaveLength(1);
+    expect(routePathData(route)).toBe(pathData(wireGeometry(from, to)));
   });
 
-  it('routes around a card that sits between the two centres', () => {
+  it('routes around a card, and smooths the corners into a bezier chain', () => {
     const route = routeGeometry(from, to, [between]);
     expect(route.detoured).toBe(true);
+    // Two bends is the product ceiling: waypoints are the endpoints plus at most two.
     expect(route.points.length).toBeGreaterThan(2);
-    // Every waypoint is outside the card, and every leg keeps clear of it. The legs may
-    // hug the inflated frame (that is what "贴边" means), so the assertion is against the
-    // real frame — which is what the user sees.
-    const inflated = inflateRect(between, ROUTE_PADDING);
-    for (let i = 0; i < route.points.length; i += 1) {
-      expect(rectContains(between, route.points[i])).toBe(false);
-      // Waypoints sit on the inflated frame, i.e. never tighter than the padding.
-      expect(rectContains(inflateRect(between, ROUTE_PADDING - 1), route.points[i])).toBe(false);
-      if (i > 0) {
-        expect(segmentHitsRect(route.points[i - 1], route.points[i], between)).toBe(false);
-      }
+    expect(route.points.length).toBeLessThanOrEqual(4);
+    expect(route.segments.length).toBe(route.points.length - 1);
+    // A polyline would emit L/Q; the requested shape is all cubics.
+    expect(routePathData(route)).not.toContain(' L ');
+    expect(routePathData(route)).not.toContain(' Q ');
+    expect((routePathData(route).match(/C/g) ?? []).length).toBe(route.segments.length);
+  });
+
+  it('joins the segments tangentially (no visible kink at a bend)', () => {
+    const route = routeGeometry(from, to, [between]);
+    for (let i = 1; i < route.segments.length; i += 1) {
+      const prev = route.segments[i - 1];
+      const next = route.segments[i];
+      const inDir = { x: prev.to.x - prev.c2.x, y: prev.to.y - prev.c2.y };
+      const outDir = { x: next.c1.x - next.from.x, y: next.c1.y - next.from.y };
+      const inLength = Math.hypot(inDir.x, inDir.y);
+      const outLength = Math.hypot(outDir.x, outDir.y);
+      expect(Math.abs(inDir.x / inLength - outDir.x / outLength)).toBeLessThan(1e-9);
+      expect(Math.abs(inDir.y / inLength - outDir.y / outLength)).toBeLessThan(1e-9);
     }
-    expect(segmentHitsRect(route.points[1], route.points[2], inflated)).toBe(true);
   });
 
   it('keeps the drawn curve outside the card it went around', () => {
     const route = routeGeometry(from, to, [between]);
-    const drawn = samplePath(routePathData(route, wireGeometry(from, to)));
-    // Ignore the stretched ends: they are inside the two endpoint cards on purpose.
-    const middle = drawn.slice(Math.floor(drawn.length * 0.2), Math.ceil(drawn.length * 0.8));
-    for (const point of middle) {
+    for (const point of inside(route)) {
       expect(rectContains(between, point)).toBe(false);
     }
   });
@@ -290,9 +310,7 @@ describe('detour around intermediate cards (2026-10-29)', () => {
     const lower: Rect = { left: 0, top: 480, width: 400, height: 200 };
     const route = routeGeometry(from, to, [upper, lower]);
     expect(route.detoured).toBe(true);
-    const drawn = samplePath(routePathData(route, wireGeometry(from, to)));
-    const middle = drawn.slice(Math.floor(drawn.length * 0.2), Math.ceil(drawn.length * 0.8));
-    for (const point of middle) {
+    for (const point of inside(route)) {
       expect(rectContains(upper, point)).toBe(false);
       expect(rectContains(lower, point)).toBe(false);
     }
@@ -306,17 +324,16 @@ describe('detour around intermediate cards (2026-10-29)', () => {
 
   it('parks the arrow on the target frame, not on the detour', () => {
     const route = routeGeometry(from, to, [between]);
-    const arrow = routeArrowTip(route, wireGeometry(from, to), target);
+    const arrow = routeArrowTip(route, target);
     expect(arrow).not.toBeNull();
     expect(rectContains(target, arrow!.tip)).toBe(false);
-    // One pixel along the direction must be inside the card: it points the data in.
     const inward = { x: arrow!.tip.x + arrow!.dir.x, y: arrow!.tip.y + arrow!.dir.y };
     expect(rectContains(target, inward)).toBe(true);
   });
 
   it('keeps the label off every card on a detoured route', () => {
     const route = routeGeometry(from, to, [between]);
-    const point = routeLabelPoint(route, wireGeometry(from, to), [source, between, target]);
+    const point = routeLabelPoint(route, [source, between, target]);
     expect(rectContains(between, point)).toBe(false);
     expect(rectContains(source, point)).toBe(false);
     expect(rectContains(target, point)).toBe(false);

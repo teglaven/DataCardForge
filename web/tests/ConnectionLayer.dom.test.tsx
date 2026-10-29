@@ -513,11 +513,13 @@ describe('connection lines', () => {
     const d = wirePaths(host)[0];
 
     // Table centre (420,290) -> chart centre (420,1050); a straight line would cross the
-    // card at (100,540,640,320), so the wire must be a rounded polyline around it.
+    // card at (100,540,640,320), so the wire must bend around it — as a smooth bezier
+    // chain (2026-10-29: at most two bends, no polyline corners).
     expect(d.startsWith('M 420 290')).toBe(true);
-    expect(d).toContain(' Q ');
-    expect((d.match(/ L /g) ?? []).length).toBeGreaterThanOrEqual(2);
-    expect(d.endsWith('L 420 1050')).toBe(true);
+    expect(d).not.toContain(' L ');
+    expect(d).not.toContain(' Q ');
+    expect((d.match(/C/g) ?? []).length).toBe(3);
+    expect(d.endsWith('420 1050')).toBe(true);
   });
 
   it('labels a highlighted line with the port ids it carries', async () => {
