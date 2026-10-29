@@ -8,7 +8,8 @@
 - 🧭 **项目演进史** (`history.md`) — 把决策/日志/踩坑/审计按因果链串成一条历史，含四个时代、四条螺旋线、教训清单与文档不一致盘点
   - [项目演进史（Data Workbench / DataCardForge）](history.md) ← **先读这篇再进各分册**
 - 📌 **决策记录** (`decisions/`) — 已经拍板、影响后续的方向性结论
-  - [表达式列引用语法：名称可写、能带限定、全角可用](decisions/2026-10-28-expression-reference-syntax.md) ← **最新：公式卡对带表头文件恢复可用**
+  - [引擎层性能门禁：12 个用例、p50×3 预算、1.3× 回归护栏](decisions/2026-10-29-perf-gate.md) ← **最新：把「变慢了」变成一个可执行的数字**
+  - [表达式列引用语法：名称可写、能带限定、全角可用](decisions/2026-10-28-expression-reference-syntax.md) ← 公式卡对带表头文件恢复可用
   - [端口级连线：边带 portId、端点落端口](decisions/2026-10-28-port-level-connections.md) ← 连线恢复为完整的依赖可视化（同日）
   - [摘要（`builtin:summary`）v1：统计量目录、惰性求值、数字归后端](decisions/2026-10-27-summary-builtin.md) ← 第一个惰性签名 + 目录即行序
   - [函数卡的三个契约（列数 · 参数归属 · 单列端口）](decisions/2026-10-27-card-contracts.md) ← 函数卡实现期把三处含糊定死了
