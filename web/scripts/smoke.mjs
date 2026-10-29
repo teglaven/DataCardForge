@@ -10,8 +10,9 @@
  *   4. right-clicking a column header offers "draw line chart"
  *   5. the chart card renders an SVG (the vector-export capability)
  *   6. one card-level connection line appears between the table and the chart, colours
- *      the active card (red = source table, blue = target chart), ignores table scrolling,
- *      and the chart's left column dock adds/removes plotted columns
+ *      the active card (red = source table, blue = target chart), runs centre to centre
+ *      with the arrow on the target frame, flows as a dashed line that survives a zoom,
+ *      ignores table scrolling, and the chart's left column dock adds/removes columns
  *   7. closing a depended-on table is refused, then allowed after the chart closes
  *   8. a multi-file card exposes a selector and switching updates dependents
  *   9. the UI switches language at runtime
@@ -234,8 +235,121 @@ try {
     .getAttribute('stroke');
   check('active table highlights the line in red', redStroke === 'rgb(200, 50, 50)', String(redStroke));
 
+  // ── 6a. centre-to-centre wire, frame-parked arrow, flowing dashes (2026-10-29) ──
+  // Since 2026-10-29 both endpoints are the card *centres* (the mask hides the part inside
+  // each card), the arrowhead parks on the target frame, and the selected wires are
+  // flowing dashes: red draws long, blue draws short, so colour is not the only cue.
+  const geometry = await page.evaluate(() => {
+    const svg = document.querySelector('.connection-layer');
+    const transform = svg.querySelector('g').getAttribute('transform');
+    const m = transform.match(/translate\(([-\d.]+), ([-\d.]+)\) scale\(([-\d.]+)\)/);
+    const [tx, ty, scale] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const box = svg.getBoundingClientRect();
+    // Plane point -> screen point, the same conversion the world layer performs.
+    const toScreen = (x, y) => ({ x: box.left + x * scale - tx, y: box.top + y * scale - ty });
+    const centre = (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    };
+    const nums = (d) => (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+
+    const wire = svg.querySelector('.connection--fg .connection__wire');
+    const wireNumbers = nums(wire.getAttribute('d'));
+    const arrow = svg.querySelector('.connection--fg .connection__arrow');
+    const arrowNumbers = arrow ? nums(arrow.getAttribute('d')) : [];
+    const chart = document.querySelector('.card--chart');
+    const chartRect = chart.getBoundingClientRect();
+
+    return {
+      start: toScreen(wireNumbers[0], wireNumbers[1]),
+      end: toScreen(wireNumbers[6], wireNumbers[7]),
+      tableCentre: centre(document.querySelector('.card--matrix')),
+      chartCentre: centre(chart),
+      tip: arrowNumbers.length ? toScreen(arrowNumbers[0], arrowNumbers[1]) : null,
+      chartFrame: { left: chartRect.left, top: chartRect.top, right: chartRect.right, bottom: chartRect.bottom },
+      dash: wire.getAttribute('stroke-dasharray'),
+      flow: getComputedStyle(wire).animationName,
+      strokeWidth: Number(wire.getAttribute('stroke-width')),
+      zoom: scale,
+    };
+  });
+
+  const near = (a, b) => Math.abs(a - b) <= 2;
+  check(
+    'the wire runs from the table centre to the chart centre',
+    near(geometry.start.x, geometry.tableCentre.x) &&
+      near(geometry.start.y, geometry.tableCentre.y) &&
+      near(geometry.end.x, geometry.chartCentre.x) &&
+      near(geometry.end.y, geometry.chartCentre.y),
+    JSON.stringify({
+      start: geometry.start,
+      table: geometry.tableCentre,
+      end: geometry.end,
+      chart: geometry.chartCentre,
+    }),
+  );
+
+  check(
+    'the arrowhead parks just outside the target frame (inside it is masked away)',
+    geometry.tip !== null &&
+      geometry.tip.x < geometry.chartFrame.left + 1 &&
+      geometry.tip.x > geometry.chartFrame.left - 12 &&
+      geometry.tip.y > geometry.chartFrame.top &&
+      geometry.tip.y < geometry.chartFrame.bottom,
+    JSON.stringify({ tip: geometry.tip, frame: geometry.chartFrame }),
+  );
+
+  check(
+    'the selected wire flows as a dashed line (long dash for the source)',
+    /^\d+(\.\d+)? \d+(\.\d+)?$/.test(String(geometry.dash)) &&
+      geometry.flow === 'connection-dash-flow' &&
+      near(geometry.strokeWidth * geometry.zoom, 3),
+    JSON.stringify({ dash: geometry.dash, flow: geometry.flow }),
+  );
+
+  // The dash pattern and the stroke width are specified in screen px, so both survive a
+  // zoom: the layer divides them by the zoom instead of relying on `vector-effect`.
+  // Ctrl+wheel zooms even over a card (a plain wheel belongs to the card), and the zoom is
+  // exponential, so the same delta in the opposite direction restores the view exactly.
+  const readZoomedWire = () =>
+    page.evaluate(() => {
+      const svg = document.querySelector('.connection-layer');
+      const scale = Number(
+        svg.querySelector('g').getAttribute('transform').match(/scale\(([-\d.]+)\)/)[1],
+      );
+      const wire = svg.querySelector('.connection--fg .connection__wire');
+      return {
+        zoom: scale,
+        screenWidth: Number(wire.getAttribute('stroke-width')) * scale,
+        dash: wire.getAttribute('stroke-dasharray'),
+      };
+    });
+
+  await page.mouse.move(
+    (geometry.chartFrame.left + geometry.chartFrame.right) / 2,
+    (geometry.chartFrame.top + geometry.chartFrame.bottom) / 2,
+  );
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -240);
+  await page.keyboard.up('Control');
+  await page.waitForTimeout(250);
+  const zoomedIn = await readZoomedWire();
+  check(
+    'stroke width and dash length stay constant on screen when zoomed',
+    Math.abs(zoomedIn.screenWidth - 3) < 0.1 &&
+      zoomedIn.zoom > 1.2 &&
+      /^\d+(\.\d+)? \d+(\.\d+)?$/.test(String(zoomedIn.dash)),
+    JSON.stringify(zoomedIn),
+  );
+
+  // Put the view back where the rest of the journey expects it.
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, 240);
+  await page.keyboard.up('Control');
+  await page.waitForTimeout(300);
+
   // ── 6b. the line is card-level: table scrolling must NOT move it ──
-  // The line anchors at the card's top centre. It used to be glued to a column header,
+  // Both endpoints are the card centres. The line used to be glued to a column header,
   // so scrolling the table moved it — that coupling is exactly what this guards against.
   const lineStartBefore = await page
     .locator('.connection-layer .connection--fg path')
@@ -318,7 +432,13 @@ try {
   await page.locator('.canvas').click({ position: { x: 8, y: 8 } });
   await page.waitForTimeout(250);
   const greyCount = await page.locator('.connection-layer .connection--bg path').count();
+  const greyDash = await page
+    .locator('.connection-layer .connection--bg .connection__wire')
+    .first()
+    .getAttribute('stroke-dasharray');
   check('unselected cards fall back to the grey background layer', greyCount >= 1, `${greyCount}`);
+  // Grey stays a plain line: the flow animation is for the two cards the user is reading.
+  check('the grey background wire stays solid (no flowing dashes)', greyDash === null, String(greyDash));
 
   // ── 7. close rules ──────────────────────────────────────────────────
   await page.locator('.card--matrix .card__close').first().click();

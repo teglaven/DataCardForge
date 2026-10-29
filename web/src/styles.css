@@ -273,9 +273,36 @@ body {
 .connection__wire {
   fill: none;
   stroke-linecap: round;
-  /* Keep the wire the same weight on screen at every zoom. The view range is 10%–300%;
-     a 1.5 plane-px stroke scaled to 10% is 0.15 screen px, i.e. invisible. */
-  vector-effect: non-scaling-stroke;
+  /* No `vector-effect: non-scaling-stroke` any more: it covers stroke *width* only, not the
+     dash pattern, and the selected wires are dashes now. The component converts both the
+     width and the dash lengths to user units by dividing out the zoom, so a wire measures
+     the same on screen at 10% and at 300% — the property this rule used to guard. */
+}
+
+/*
+ * Flow. A negative dash offset moves the dashes toward the path's end, i.e. from the source
+ * card to the target card, so the direction of travel reads as the direction of the data.
+ * The cycle length and the duration are set inline (they depend on zoom and on whether the
+ * wire is an input or an output); this rule only owns the parts that do not.
+ */
+.connection__wire--flow {
+  animation-name: connection-dash-flow;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+@keyframes connection-dash-flow {
+  to {
+    stroke-dashoffset: var(--connection-dash-cycle, 0px);
+  }
+}
+
+/* Attention without motion: the dashes stay put, and the long/short pattern still tells
+   the two directions apart without relying on colour. */
+@media (prefers-reduced-motion: reduce) {
+  .connection__wire--flow {
+    animation: none;
+  }
 }
 
 /* The arrowhead is geometry, not a stroked line: it must keep its fill. */

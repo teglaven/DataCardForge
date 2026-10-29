@@ -7,8 +7,8 @@
  * place where that DOM measurement happens:
  *
  *   - a card registers its root element once,
- *   - the connection layer asks for `cardTopAnchor()` in canvas coordinates and
- *     never touches the DOM itself.
+ *   - the connection layer asks for `cardRect()` in canvas coordinates and never touches
+ *     the DOM itself (it derives the wire endpoints from the rectangle's centre).
  *
  * All measurements are in CSS pixels relative to the canvas container, so window
  * scroll and devicePixelRatio do not have to be handled twice.
@@ -184,8 +184,12 @@ export function cardRect(id: number): Rect | null {
  * A line is not just two points: the side decides the bezier's control points *and* the
  * direction of the arrowhead. Sending every wire out of the top edge made a card that
  * sits below its source bend the line back over itself; a port on the left column and an
- * output on the right column now leave/enter horizontally, which is what the layout
- * already looked like.
+ * output on the right column left/entered horizontally.
+ *
+ * **Since 2026-10-29 nothing in the connection layer reads this**: wires own the whole
+ * curve (`wireGeometry` in `connectionGeometry.ts`), endpoints are card centres, and the
+ * arrowhead follows the curve's tangent. `AnchorSide` is kept only because the dormant
+ * port anchors below still carry one.
  */
 export type AnchorSide = 'top' | 'bottom' | 'left' | 'right';
 
@@ -202,9 +206,14 @@ const ports = new Map<number, Map<string, { element: HTMLElement; side: AnchorSi
  * Register one rendered port element as a line endpoint.
  *
  * `portId` — not its position — is the identity (port-semantics-v1 §已锁定 1). Cards call
- * this from a ref callback; the layer resolves `portAnchor(cardId, portId)` and only falls
- * back to a card anchor when the card renders no port for that id (matrix cards have no
- * ports, chart cards name their sources by column id).
+ * this from a ref callback.
+ *
+ * **Since 2026-10-29 the connection layer does not read these anchors any more**: a wire
+ * runs from one card centre to the other (see `connectionGeometry.ts` and the
+ * `2026-10-29-connection-center-anchors` decision), and a `portId` survives only as data
+ * identity in the edge and in the on-line label. The measurement is kept because the
+ * "port marker dot" from the 08-07 subordination decision is still unimplemented, and it
+ * is the only existing way to place a dot on a rendered port.
  */
 export function registerPort(
   cardId: number,
