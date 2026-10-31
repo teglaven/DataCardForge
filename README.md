@@ -1,4 +1,4 @@
-# Data Workbench — Data Matrix Workbench
+# DataCardForge — Data Matrix Workbench
 
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages demo](https://img.shields.io/badge/demo-live%20(front%20end)-2ea44f)](https://teglaven.github.io/DataCardForge/)
@@ -12,10 +12,10 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 > ⚠️ **Early Experimental Project**: As of October 2026, this project is still in its **early experimental stage**. You can use it to try out features and test workflows, but it is **strongly not recommended** for production use or formal scientific research.
 
 <p align="center">
-  <img src="web/docs/screenshots/hero.png" width="92%" alt="Data Workbench: a 10 000 × 10 measurement file as a data card, feeding a correlation-heatmap card">
+  <img src="web/docs/screenshots/hero.png" width="92%" alt="DataCardForge: a 10 000 × 10 measurement file as a data card, feeding a correlation-heatmap card">
 </p>
 
-**Product / repository**: the product is *Data Workbench*; the repository is `DataCardForge`.
+**Product and repository**: both are named **DataCardForge**.
 **Author & provenance**: `teglaven` · GPL-3.0 · see [`PROVENANCE.md`](PROVENANCE.md) for the
 verifiable author identity, timeline and commit anchors.
 **Verified state** (last verified 2026-10-31): 581 frontend unit tests (14 opt-in
@@ -433,7 +433,7 @@ Both documents have a Chinese version: [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-C
 
 ## License
 
-Data Workbench is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License version 3 (GPL-3.0)**, as published by the Free Software Foundation.
+DataCardForge is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License version 3 (GPL-3.0)**, as published by the Free Software Foundation.
 
 The full license text is available in the [LICENSE](LICENSE) file.
 

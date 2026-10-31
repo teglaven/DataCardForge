@@ -2,7 +2,7 @@
 
 **English** | [中文](CONTRIBUTING.zh-CN.md)
 
-Thanks for looking. Data Workbench (repository name: `DataCardForge`) is an early
+Thanks for looking. DataCardForge is an early
 experimental project maintained by one person, so the fastest way to get a change merged is
 to keep it small and to show the gate output.
 

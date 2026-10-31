@@ -187,7 +187,7 @@ export default function App() {
     try {
       const snapshot = toSnapshot();
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-      const name = `data-workbench-${stamp}.json`;
+      const name = `datacardforge-${stamp}.json`;
       const bytes = downloadText(name, JSON.stringify(snapshot), 'application/json');
       setStatus(t('status.exported', { name, size: formatBytes(bytes) }));
     } catch (error) {
@@ -247,7 +247,7 @@ export default function App() {
       if (!container) continue;
       try {
         const label = card.config.sources[0]?.label ?? `chart-${card.id}`;
-        const safeName = `data-workbench-${card.config.type}-${label}`.replace(
+        const safeName = `datacardforge-${card.config.type}-${label}`.replace(
           /[^\w.-]+/g, '_',
         );
         await exportChart(container, 'svg', {

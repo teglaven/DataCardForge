@@ -1,9 +1,9 @@
 {
-  "name": "data-workbench-web",
+  "name": "datacardforge-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Data Workbench — web frontend (card-based data matrix workbench)",
+  "description": "DataCardForge — web frontend (card-based data matrix workbench)",
   "license": "GPL-3.0-only",
   "homepage": "https://teglaven.github.io/DataCardForge/",
   "repository": {

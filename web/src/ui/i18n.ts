@@ -11,7 +11,7 @@ export type Locale = 'zh' | 'en';
 
 const dictionaries = {
   zh: {
-    'app.title': 'Data Workbench — 数据矩阵工作台',
+    'app.title': 'DataCardForge — 数据矩阵工作台',
     'menu.file': '文件',
     'menu.view': '视图',
     'menu.language': '语言',
@@ -343,7 +343,7 @@ const dictionaries = {
   },
 
   en: {
-    'app.title': 'Data Workbench — Data Matrix Workbench',
+    'app.title': 'DataCardForge — Data Matrix Workbench',
     'menu.file': 'File',
     'menu.view': 'View',
     'menu.language': 'Language',

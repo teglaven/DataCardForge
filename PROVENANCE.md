@@ -5,7 +5,7 @@
 ## 一、权属
 | 项 | 值 |
 |---|---|
-| 项目名 | Data Workbench（仓库名 `DataCardForge`） |
+| 项目名 | DataCardForge |
 | 作者 / 著作权人 | **teglaven** `<57093716+teglaven@users.noreply.github.com>` |
 | GitHub | <https://github.com/teglaven> |
 | 许可证 | GPL-3.0（见 [`LICENSE`](LICENSE)） |

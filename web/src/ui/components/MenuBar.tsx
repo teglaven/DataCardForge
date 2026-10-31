@@ -111,7 +111,7 @@ export function MenuBar({
 
   return (
     <div className="menubar" ref={rootRef}>
-      <span className="menubar__brand">Data Workbench</span>
+      <span className="menubar__brand">DataCardForge</span>
       {menu(
         'file',
         t('menu.file'),

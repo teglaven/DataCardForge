@@ -126,7 +126,7 @@ try {
   }
 
   const title = await page.title();
-  check('document title is localised', title.includes('Data Workbench'), title);
+  check('document title is localised', title.includes('DataCardForge'), title);
   check('menus are rendered', (await page.locator('.menubar__trigger').count()) >= 3);
 
   // ── 2. load a real 10 000 × 10 measurement file ──────────────────────

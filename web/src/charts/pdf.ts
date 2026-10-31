@@ -333,8 +333,8 @@ export async function pngToPdf(
   writer.define(catalogId, `<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
   writer.define(
     infoId,
-    `<< /Title (${escapePdfText(options.title ?? 'Data Workbench chart')}) ` +
-      `/Producer (Data Workbench) /Creator (Data Workbench) >>`,
+    `<< /Title (${escapePdfText(options.title ?? 'DataCardForge chart')}) ` +
+      `/Producer (DataCardForge) /Creator (DataCardForge) >>`,
   );
 
   return writer.finish(catalogId, infoId);

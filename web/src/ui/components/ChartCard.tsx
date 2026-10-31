@@ -774,7 +774,7 @@ function exportBaseName(card: ChartCardModel): string {
     .replace(/[^\p{L}\p{N}._-]+/gu, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 80);
-  return `data-workbench-${safe || 'chart'}`;
+  return `datacardforge-${safe || 'chart'}`;
 }
 
 /** Re-exported so tests and the matrix card can share one definition of "drawable". */

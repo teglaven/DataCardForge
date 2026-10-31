@@ -2,7 +2,7 @@
 
 [English](CONTRIBUTING.md) | **中文**
 
-感谢你愿意看这个项目。Data Workbench（仓库名 `DataCardForge`）是一个由一个人维护的早期试验项目，
+感谢你愿意看这个项目。DataCardForge 是一个由一个人维护的早期试验项目，
 所以让改动被合入最快的方式是：**保持改动小，并且把门禁输出贴出来**。
 
 ## 基本规矩

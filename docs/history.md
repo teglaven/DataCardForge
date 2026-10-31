@@ -1,4 +1,4 @@
-# 项目演进史（Data Workbench / DataCardForge）
+# 项目演进史（DataCardForge）
 
 - **整理日期**：2026-10-17
 - **性质**：二次整理。本文**不产生新决策**，只把散落在 `decisions/`、`log/`、`lessons/`、`audits/` 里的碎片

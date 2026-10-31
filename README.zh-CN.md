@@ -1,4 +1,4 @@
-# Data Workbench — 数据矩阵工作台
+# DataCardForge — 数据矩阵工作台
 
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages 演示](https://img.shields.io/badge/%E6%BC%94%E7%A4%BA-%E5%89%8D%E7%AB%AF%E5%9C%A8%E7%BA%BF-2ea44f)](https://teglaven.github.io/DataCardForge/)
@@ -12,10 +12,10 @@
 > ⚠️ **早期试验项目**：截至 2026 年 10 月，本项目仍处于**早期试验阶段**，可用来体验功能、测试使用流程，但**强烈不建议**用于生产环境或正式的科研用途。
 
 <p align="center">
-  <img src="web/docs/screenshots/hero.png" width="92%" alt="Data Workbench：10000×10 测量文件作为数据卡，下游接一张相关性热力图卡">
+  <img src="web/docs/screenshots/hero.png" width="92%" alt="DataCardForge：10000×10 测量文件作为数据卡，下游接一张相关性热力图卡">
 </p>
 
-**产品与仓库**：产品名 *Data Workbench*，仓库名 `DataCardForge`。
+**产品与仓库**：两者同名 **DataCardForge**。
 **作者与权属**：`teglaven` · GPL-3.0 · 身份、时间线与提交锚点见 [`PROVENANCE.md`](PROVENANCE.md)。
 **当前实测状态**（2026-10-31 实测）：前端 581 个单元测试（14 个 opt-in 跳过）· 后端 8 个 ctest（4 个 opt-in）· 端到端 102 项检查，全绿。
 **尚未完成**：函数卡是半成品；连线的 hover 与断线编辑仍在路上——两者都在
@@ -396,7 +396,7 @@ GitHub Pages——也就是上面那个在线演示。它需要一次性开关�
 
 ## 许可证
 
-Data Workbench 是自由软件：您可以依据自由软件基金会（Free Software Foundation）发布的 **GNU 通用公共许可证第 3 版（GPL-3.0）** 之条款，重新分发和/或修改本软件。
+DataCardForge 是自由软件：您可以依据自由软件基金会（Free Software Foundation）发布的 **GNU 通用公共许可证第 3 版（GPL-3.0）** 之条款，重新分发和/或修改本软件。
 
 完整许可文本见 [LICENSE](LICENSE) 文件。
 
