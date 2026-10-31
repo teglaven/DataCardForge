@@ -7,12 +7,12 @@ B 方案：C++/Eigen 后端持计算，浏览器只是交互表面；函数卡�
 「关系枚举」卡（签名仍是 `builtin:linear-regression`）能自选 x/y 两列，列头带 `X : Y`。
 
 ## 上次收工点
-- HEAD: b1238cd（chore(scripts): find-term.sh —— 按词定位坐标）
-- 时间: 2026-10-31T15:18Z
+- HEAD: 5dbfff2（docs: 记录关系枚举的行/列轴分工与列宽拖拽）
+- 时间: 2026-10-31T15:24Z
 - 在做: 关系枚举收口。改名只动人看的部分；选列做成端口绑定（`setPortColumn` → 一次 PATCH，
-  同节点同边）；列头 = `<x> : <y> · 统计量`（slug→i18n 在前端）；顺带修掉表格横向滚动错位。
-  闸门：tsc 干净、vitest 567 passed / 14 skipped、ctest 8/8、build 干净、三单元 active。
-
+  同节点同边）；**行轴 = 关系、列轴 = 统计量**（slug→i18n 在前端），列宽可拖表头右缘，
+  非表达式签名改「计算说明」替代空编辑器；顺带修掉表格横向滚动错位。闸门：tsc 干净、
+  vitest 571 passed / 14 skipped、ctest 8/8、build 干净、三单元 active。
 ## 已冻结契约（改它要新决策）
 - 端口 = 稳定身份 portId（不做位置语义）
 - 列数契约 params.columnContract：宽度漂移即断流
