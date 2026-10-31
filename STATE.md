@@ -1,18 +1,18 @@
 # STATE — 一页项目状态
-<!-- 只保留最新状态；历史进 docs/docs/log/。由 agent 维护，人只读。 -->
+<!-- 只保留最新状态；历史进 docs/log/。由 agent 维护，人只读。 -->
 
 ## 现在是什么
 B 方案：C++/Eigen 后端持计算，浏览器只是交互表面；函数卡接口已稳定，交互还没收口。
 数据卡可换数据文件（「替换文件…」/ 拖到卡上），保存的工作区能当模板复用。
 「关系枚举」卡（签名仍是 `builtin:linear-regression`）能自选 x/y 两列，列头带 `X : Y`。
+**首发整理已提交（2026-10-31）**：AGENTS.md 已从全库历史移除（123 提交、SHA 全变）、`docs/docs`
+双层嵌套已拆平、README 中英数字对齐、dev server 默认回环。**尚未建仓库/推送。**
 
 ## 上次收工点
-- HEAD: 5dbfff2（docs: 记录关系枚举的行/列轴分工与列宽拖拽）
-- 时间: 2026-10-31T15:24Z
-- 在做: 关系枚举收口。改名只动人看的部分；选列做成端口绑定（`setPortColumn` → 一次 PATCH，
-  同节点同边）；**行轴 = 关系、列轴 = 统计量**（slug→i18n 在前端），列宽可拖表头右缘，
-  非表达式签名改「计算说明」替代空编辑器；顺带修掉表格横向滚动错位。闸门：tsc 干净、
-  vitest 571 passed / 14 skipped、ctest 8/8、build 干净、三单元 active。
+- HEAD: 3fc4451（首发整理后的 main）· 时间: 2026-10-31T15:52Z
+- 在做: 首发前整理。闸门：tsc 干净、vitest 573 passed / 14 skipped、ctest 8/8（4 opt-in 跳过）、
+  e2e 97/97 全绿、md 断链 0、无 systemd / lane / 本机路径残留。回滚：`work/pre-rewrite-history.bundle`。
+
 ## 已冻结契约（改它要新决策）
 - 端口 = 稳定身份 portId（不做位置语义）
 - 列数契约 params.columnContract：宽度漂移即断流
@@ -29,12 +29,12 @@ B 方案：C++/Eigen 后端持计算，浏览器只是交互表面；函数卡�
 - 多列对枚举（`builtin:relation-matrix`：行=列对、列=统计量，explicit）；行标签无传输通道
 
 ## 已知缺口（top 5）
-1. 摘要面板 P2 未开工（tasks/2026-10-29-summary-p2-panel.md，现已解锁）
+1. 摘要面板 P2 未开工（tasks/2026-10-29-summary-p2-panel.md）
 2. 函数卡：参数表单未按签名渲染；K>1 无输出选择器
-3. 前端 `web/src/core/stats.ts`（437 行）仍在算统计，待搬后端
-4. 性能门禁只有引擎层：HTTP 层、缓存命中/冷启动、CI 触发都未覆盖
+3. 前端 `web/src/core/stats.ts` 仍在算统计，待搬后端
+4. 性能门禁只盖引擎层；HTTP 层、缓存命中/冷启动、CI 触发未覆盖
 5. 多文件卡只能「换」不能追加/删除单个文件；全局无撤销栈；连线 hover / 断线编辑未做
 
 ## 下次开工第一件事（RESUME）
-先跑 `bash scripts/state-check.sh`，再按 tasks/2026-10-29-summary-p2-panel.md 开工摘要面板 P2。
-要「暴力枚举」多列对则先落 decisions/2026-10-31-relation-enum-card.md 的 `builtin:relation-matrix`。
+先跑 `bash scripts/state-check.sh`；首发整理已提交，下一步是建仓库/开 Pages/推 main（只推 main + tag，
+不要 --mirror，会连 9 个 lane-* 分支一起公开），之后按 tasks/2026-10-29-summary-p2-panel.md 开工 P2。
