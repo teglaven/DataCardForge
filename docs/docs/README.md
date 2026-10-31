@@ -8,7 +8,8 @@
 - 🧭 **项目演进史** (`history.md`) — 把决策/日志/踩坑/审计按因果链串成一条历史，含四个时代、四条螺旋线、教训清单与文档不一致盘点
   - [项目演进史（Data Workbench / DataCardForge）](history.md) ← **先读这篇再进各分册**
 - 📌 **决策记录** (`decisions/`) — 已经拍板、影响后续的方向性结论
-  - [数据卡可以换文件：换数据自动跟随，切文件仍显式重指向](decisions/2026-10-31-file-replacement.md) ← **最新：保存的工作区终于能当模板复用**
+  - [回归卡改名「关系枚举」：选列变成端口绑定，列头带上 X : Y](decisions/2026-10-31-relation-enum-card.md) ← **最新：卡片终于能选列，表格横向滚动对齐也修了**
+  - [数据卡可以换文件：换数据自动跟随，切文件仍显式重指向](decisions/2026-10-31-file-replacement.md) ← **保存的工作区终于能当模板复用**
   - [引擎层性能门禁：12 个用例、p50×3 预算、1.3× 回归护栏](decisions/2026-10-29-perf-gate.md) ← 把「变慢了」变成一个可执行的数字
   - [表达式列引用语法：名称可写、能带限定、全角可用](decisions/2026-10-28-expression-reference-syntax.md) ← 公式卡对带表头文件恢复可用
   - [端口级连线：边带 portId、端点落端口](decisions/2026-10-28-port-level-connections.md) ← 连线恢复为完整的依赖可视化（同日）
