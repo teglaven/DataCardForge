@@ -3,7 +3,7 @@
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages 演示](https://img.shields.io/badge/%E6%BC%94%E7%A4%BA-%E5%89%8D%E7%AB%AF%E5%9C%A8%E7%BA%BF-2ea44f)](https://teglaven.github.io/DataCardForge/)
 [![许可证](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-493%20unit%20%C2%B7%2079%20e2e-brightgreen)](web/tests)
+[![测试](https://img.shields.io/badge/tests-573%20unit%20%C2%B7%208%20ctest-brightgreen)](web/tests)
 
 **[English](README.md) | [中文](README.zh-CN.md)**
 
@@ -15,9 +15,10 @@
   <img src="web/docs/screenshots/hero.png" width="92%" alt="Data Workbench：10000×10 测量文件作为数据卡，下游接一张相关性热力图卡">
 </p>
 
+**产品与仓库**：产品名 *Data Workbench*，仓库名 `DataCardForge`。
 **作者与权属**：`teglaven` · GPL-3.0 · 身份、时间线与提交锚点见 [`PROVENANCE.md`](PROVENANCE.md)。
-**当前实测状态**（2026-10-28 实测）：前端 489 个单元测试（14 个 opt-in 跳过）· 后端 7 个 ctest（3 个 opt-in）· 端到端 73 项检查，全绿。
-**尚未完成**：函数卡是半成品；端口级连线已修复，hover/断线编辑仍在路上——两者都在
+**当前实测状态**（2026-10-31 实测）：前端 573 个单元测试（14 个 opt-in 跳过）· 后端 8 个 ctest（4 个 opt-in）· 端到端 97 项检查，全绿。
+**尚未完成**：函数卡是半成品；连线的 hover 与断线编辑仍在路上——两者都在
 [状态与已知缺口](#状态与已知缺口)里写清楚了。
 
 ## 试一下
@@ -25,22 +26,24 @@
 **浏览器里直接玩（无需安装）**——<https://teglaven.github.io/DataCardForge/> 是前端的静态部署。把
 [`docs/sampleData/1.txt`](docs/sampleData/1.txt) 拖进画布，右键列头 →「画图」即可。文件加载与 9 种图表
 在那里都能用；C++ 计算服务不在静态托管上，函数卡会显示「后端不可达」横幅——这是设计里的可见降级，不是故障。
+演示地址需要先在 **Settings → Pages → Source: GitHub Actions** 开启一次，否则打开是 404。
 
-**本地跑完整版（含计算后端）**——一条命令编译后端并起两个服务：
+**本地跑完整版（含计算后端）**——先装一次依赖，然后一条命令编译后端并起两个服务：
 
 ```bash
-./scripts/dev.sh          # 后端 :37811，Vite :5173
+cd web && npm install     # 克隆后执行一次
+./scripts/dev.sh          # 编译后端 → 后端 :37811 + Vite :5173
 ```
 
-前置：Node 22+、CMake 3.24+、C++17 编译器、Eigen 3.4 头文件
-（`sudo apt install build-essential cmake ninja-build libeigen3-dev`）。
+前置：Node 22.7+（按需 fuzz 门控需要 `--experimental-transform-types`）、CMake 3.24+、C++17 编译器、
+Eigen 3.4 头文件（`sudo apt install build-essential cmake ninja-build libeigen3-dev`）。
 
 ## 设计理念
 
 - **卡片模型**：所有东西都是卡片 —— 数据卡(文件) → 函数卡(变换) → 输出卡(绘图/导出)
 - **严格分离**：数据与行为分离，表永不改写，一切处理产出新卡片
 - **连线从属**：连线仅为数据依赖的可视化，常态低调（背景层），不干扰卡片布局与交互；卡片为主角，连线为配角
-- **后端持有计算（B 方案）**：所有数值/统计/矩阵计算在 **C++/Eigen 后端**执行；浏览器是**纯交互界面**（渲染、输入、布局）。后端不可达是**带重试按钮的可见状态**，绝不静默。这取代了早期的 T1 浏览器基线分层表，同时保留[兜底原则](docs/docs/decisions/2026-10-15-max-headroom-principle.md)三条契约：可见降级、跨层语义一致（差分夹具）、最坏情况有界。完整论证见 [决策记录](docs/docs/decisions/2026-10-17-backend-owns-compute.md)
+- **后端持有计算（B 方案）**：所有数值/统计/矩阵计算在 **C++/Eigen 后端**执行；浏览器是**纯交互界面**（渲染、输入、布局）。后端不可达是**带重试按钮的可见状态**，绝不静默。这取代了早期的 T1 浏览器基线分层表，同时保留[兜底原则](docs/decisions/2026-10-15-max-headroom-principle.md)三条契约：可见降级、跨层语义一致（差分夹具）、最坏情况有界。完整论证见 [决策记录](docs/decisions/2026-10-17-backend-owns-compute.md)
 - **列式矩阵**：行=样本(No.N)，列=变量(Pos.N)，连续内存存储，高性能
 - **可扩展**：算子系统 + 适配器接口，社区可贡献长尾功能
 
@@ -63,7 +66,7 @@
 └─────────────────────────────────────────────────────┘
 ```
 
-前端使用[协议 v1](docs/docs/architecture/backend-protocol-v1.md)：HTTP 上的 JSON 控制消息 + DCM2 二进制矩阵帧（窗口 + 整表形状）。长轮询事件流推送节点状态变更（dirty → computing → done | error），驱动四态指示灯。
+前端使用[协议 v1](docs/architecture/backend-protocol-v1.md)：HTTP 上的 JSON 控制消息 + DCM2 二进制矩阵帧（窗口 + 整表形状）。长轮询事件流推送节点状态变更（dirty → computing → done | error），驱动四态指示灯。
 
 ## 已实现功能
 
@@ -74,6 +77,9 @@
 - **标题行自动识别**：首行非纯数字时，作为每列标题（annotation）而非数据
 - 文件来源的表格默认**只读**，卡片文件行上的锁按钮可切换为可编辑；无法解析的单元格显示 `—`（不再静默变 0），非数值输入会被拒绝并给出提示而不是静默丢弃
 - 解析在 **Web Worker** 中进行，拖入万行文件不再冻结界面（无 Worker 环境自动回退到主线程）
+- **换掉卡片背后的数据文件**（2026-10-31）：卡片文件行里的「替换文件…」，或把文件拖到卡片上。
+  换文件是**数据变更**——下游函数卡与图表自动跟随并重算；多文件卡里**切换**文件是**视图变更**，
+  仍会先询问再重指向下游
 - 重新打开同一文件仅在**字节一致**（`size` + `lastModified`）时复用解析结果；同名但内容不同的文件会重新解析——绝不让旧测量数据顶着新标签出现
 - 加载的矩阵**自动注册到计算后端**（fire-and-forget，UI 不因网络阻塞）
 
@@ -104,7 +110,7 @@
   - **列引用写法**（2026-10-28）：`Pos.1`/`pos.1`（大小写不敏感）、裸注解名（`时间_秒`）、
     方括号逐字引用（`[地面速度_μm/s]`，名字含 `/`、空格、括号时唯一写法）、多输入端口限定
     （`A.pos.1`、`src.时间_秒`、`A.[…]`）；全角标点（`（）`/`，`/`×`/`／`/`－`）按 ASCII 等价物处理。
-    见[决策](docs/docs/decisions/2026-10-28-expression-reference-syntax.md)
+    见[决策](docs/decisions/2026-10-28-expression-reference-syntax.md)
 - **矩阵模式求值**：当任一输入变量声明为矩阵模式时，`*` 变为矩阵乘法；新增函数：`TRANSPOSE`、`DET`、`INV`、`SOLVE`、`MMUL`（显式矩阵乘）、`EMUL`（显式逐元素乘）。形状不匹配产生结构化 `shapeMismatch` 错误——绝不静默产出垃圾结果
 - **依赖图**：按端口的边、原子成环拒绝（N 条边要么全加要么全不加）、经 `resultOwner_` 映射的结果矩阵感知级联
 - **节点状态机**：dirty → computing → done | error，通过单调递增 seq 的事件流推送
@@ -134,7 +140,7 @@
     指针在卡片上时滚轮仍归卡片（表格滚动、图表缩放），**按住 Ctrl/⌘ 同样可缩放**，触控板捏合亦可
   - **平移**：中键拖动、**空格+左键拖动**、空白处左键拖动
   - 菜单 **视图 → 回到卡片** 一键适应内容（自动缩放并居中）；**平铺 / 层叠** 在可见区域内排布
-  - 详见[决策](docs/docs/decisions/2026-10-21-infinite-canvas.md)
+  - 详见[决策](docs/decisions/2026-10-21-infinite-canvas.md)
 - 卡片自由拖拽、缩放、层叠，另有**平铺 / 层叠 / 关闭全部**
 - 有下游依赖的表格/卡片**拒绝关闭**并提示，同时闪烁其连线
 - 运行时**中英切换**；**工作区持久化**（保存/恢复布局 + 依赖 + 数据）；表格导出 CSV
@@ -153,6 +159,8 @@
   旧结果（下游呈「失效」），自编辑走「扩展契约 / 解除锁定」
 - **结果可再流动**：右键函数卡结果列头 → 建图或「新建公式卡…」。函数卡的输出是普通矩阵，
   所以既能画图、也能喂给下一张函数卡（A → B 链式），重算后下游自动更新——数据流闭环
+- **结果预览 100 行**：函数卡默认只渲染结果前 100 行（帧里同时报告整表 10000 行的形状），
+  不再为了看一眼结果就把整张表铺出来
 - **求值不持锁**：慢函数不会冻结整个节点注册表（最大余量原则）
 - **签名可以完全不像公式卡**：`builtin:linear-regression` 是双单列端口、无表达式参数、
   输出形状由签名固定的函数（1 行 × 5 列），右键数据列「新建关系枚举卡…」即可。建好后输入区
@@ -192,6 +200,7 @@
 
 这个仓库对「什么算做完了」是明说的：数据卡与图表链路已完整并有门禁，卡片图这一层还在收尾。
 
+
 | 维度 | 状态 |
 |---|---|
 | 数据卡、虚拟滚动表格、9 种图表、导出、中英切换、工作区持久化 | **已完成**，有单元 + 端到端门禁 |
@@ -207,7 +216,7 @@
 **2026-10-28 收口的两件事**：列引用写法（此前带表头文件的列**一个名字都引用不了**，连 `Pos.N`
 退路都是坏的）与界面说明（帮助菜单 / 卡上 `?` / 悬停提示 / 可点列芯片）；顺带修好「一旦算出
 结果，公式区被结果网格挤成 11 px、表达式行消失」的布局塌陷。详见
-[日志](docs/docs/log/2026-10-28.md)与[语法决策](docs/docs/decisions/2026-10-28-expression-reference-syntax.md)。
+[日志](docs/log/2026-10-28.md)与[语法决策](docs/decisions/2026-10-28-expression-reference-syntax.md)。
 
 仍然缺的，也是它不能算「完成」的原因：
 
@@ -216,8 +225,8 @@
 - **多输出选择器（K > 1）**——卡片模型只有一个显示缓存，K > 1 的签名暂时只能看到第 0 个输出的表。
 - 三区之间的布局、间距、状态等交互细节。
 
-数据模型与契约是定死的（见 [`docs/docs/decisions/2026-10-27-card-contracts.md`](docs/docs/decisions/2026-10-27-card-contracts.md)、
-[`2026-10-26-card-schema-v2.md`](docs/docs/decisions/2026-10-26-card-schema-v2.md)），缺的是它上面的 UI。
+数据模型与契约是定死的（见 [`docs/decisions/2026-10-27-card-contracts.md`](docs/decisions/2026-10-27-card-contracts.md)、
+[`2026-10-26-card-schema-v2.md`](docs/decisions/2026-10-26-card-schema-v2.md)），缺的是它上面的 UI。
 请把函数卡当成**接口稳定、交互未收口**。
 
 ### 端口级连线（2026-10-28 已修复，几何于 2026-10-29 改判）
@@ -228,11 +237,11 @@ schema v2 把依赖升成信封、把绑定挪到端口之后，连线一度退�
 2026-10-29 改判了**几何**：端点不再落在端口上，而是两张卡片窗口的**中心**（卡片内被遮罩吞掉），
 整条线是一条三次贝塞尔，红蓝改成长/短流动虚线，箭头停在目标边框外。
 端口回归它本来的角色——数据身份与标签来源。见
-[卡心端点决策](docs/docs/decisions/2026-10-29-connection-center-anchors.md)。
+[卡心端点决策](docs/decisions/2026-10-29-connection-center-anchors.md)。
 
 仍然没做的：hover/点选单条线、删除单条线（断线等于改数据，需要撤回路，另立一项）、拖拽建线、
 端口圆点（`portAnchor` 是为它留的）。详见
-[决策记录](docs/docs/decisions/2026-10-28-port-level-connections.md)。
+[决策记录](docs/decisions/2026-10-28-port-level-connections.md)。
 
 ## 技术栈
 
@@ -292,18 +301,20 @@ npm test                  # 单元测试（vitest，含跨层夹具）
 ### 测试
 
 ```bash
-# 前端：typecheck + 489 个单元测试（含 81 个跨层差分夹具）
+# 前端：typecheck + 573 个单元测试（含 81 个跨层差分夹具、14 个 opt-in 跳过）
 cd web && npm run typecheck && npm test
 
-# 后端：7 个 ctest 用例（跨层夹具、矩阵算子、节点注册表、卡片夹具；另有 3 个按需门控，默认 Skipped）
+# 后端：8 个 ctest 用例（跨层夹具、矩阵算子、节点注册表、卡片夹具；另有 4 个按需门控，默认 Skipped）
 cd backend && ctest --test-dir build --output-on-failure
 
 # 按需门控：差分 fuzz（随机表达式 TS↔C++ 对拍）与 HTTP 畸形报文压测
 DC_RUN_FUZZ=1 ctest --test-dir build -R diff_fuzz --output-on-failure
 DC_RUN_STRESS=1 ctest --test-dir build -R http_stress --output-on-failure
 
-# 端到端冒烟（需先 npm run preview）
-node web/scripts/smoke.mjs http://127.0.0.1:4173
+# 端到端冒烟：97 项检查，跑在生产构建上
+cd web && npm run build && npx playwright install chromium   # 浏览器二进制，只需一次
+npx vite preview --port 4173 &                              # 起 web/dist
+node scripts/smoke.mjs http://127.0.0.1:4173
 ```
 
 ### CI
@@ -312,6 +323,10 @@ GitHub Actions 在每次 push/PR 时运行三个 job：
 1. **typecheck-and-test**：`npm ci` → typecheck → vitest → production build
 2. **backend-test**：`apt install toolchain` → cmake build → ctest（跨层夹具 + 节点注册表）
 3. **e2e-smoke**：Playwright Chromium 对 `vite preview` 做冒烟测试
+
+第四个 workflow [`.github/workflows/pages.yml`](.github/workflows/pages.yml) 在每次触及 `web/` 的 push 上把前端发布到
+GitHub Pages——也就是上面那个在线演示。它需要一次性开关：**Settings → Pages → Source: GitHub Actions**，
+否则演示链接是 404。
 
 ## 架构扩展点
 
@@ -368,7 +383,7 @@ GitHub Actions 在每次 push/PR 时运行三个 job：
 
 ## 致谢
 
-本项目由 **AI 编程助手**辅助开发（DeepSeek Harness / Claude 等 agent 工具，以及早期的 GitHub Copilot）。由作者完成的部分：需求定义、架构决策（见 [`docs/docs/decisions/`](docs/docs/decisions/)）、验收标准与测试门禁。本仓库不对「谁敲的字」作保证，只对**可复现性**负责——上面每一条功能声明都有对应的单元测试 / ctest / 端到端检查背书（见「测试」一节）。权属与时间线见 [`PROVENANCE.md`](PROVENANCE.md)。
+本项目由 **AI 编程助手**辅助开发（DeepSeek Harness / Claude 等 agent 工具，以及早期的 GitHub Copilot）。由作者完成的部分：需求定义、架构决策（见 [`docs/decisions/`](docs/decisions/)）、验收标准与测试门禁。本仓库不对「谁敲的字」作保证，只对**可复现性**负责——上面每一条功能声明都有对应的单元测试 / ctest / 端到端检查背书（见「测试」一节）。权属与时间线见 [`PROVENANCE.md`](PROVENANCE.md)。
 
 ## 许可证
 

@@ -3,7 +3,7 @@
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages demo](https://img.shields.io/badge/demo-live%20(front%20end)-2ea44f)](https://teglaven.github.io/DataCardForge/)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-493%20unit%20%C2%B7%2079%20e2e-brightgreen)](web/tests)
+[![Tests](https://img.shields.io/badge/tests-573%20unit%20%C2%B7%208%20ctest-brightgreen)](web/tests)
 
 **[English](README.md) | [中文](README.zh-CN.md)**
 
@@ -15,13 +15,13 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
   <img src="web/docs/screenshots/hero.png" width="92%" alt="Data Workbench: a 10 000 × 10 measurement file as a data card, feeding a correlation-heatmap card">
 </p>
 
+**Product / repository**: the product is *Data Workbench*; the repository is `DataCardForge`.
 **Author & provenance**: `teglaven` · GPL-3.0 · see [`PROVENANCE.md`](PROVENANCE.md) for the
 verifiable author identity, timeline and commit anchors.
-**Verified state** (last verified 2026-10-28): 489 frontend unit tests · 7 backend ctest cases
-(3 opt-in) · end-to-end smoke checks — all green.
-**Not finished yet**: function cards are a work in progress; per-port connections were repaired on
-2026-10-28 and hover/edge-editing are still missing — both are spelled out under
-[Status & known gaps](#status--known-gaps).
+**Verified state** (last verified 2026-10-31): 573 frontend unit tests (14 opt-in
+skipped) · 8 backend ctest cases (4 opt-in) · 97 end-to-end smoke checks — all green.
+**Not finished yet**: function cards are a work in progress; hover and edge-editing of connections
+are still missing — both are spelled out under [Status & known gaps](#status--known-gaps).
 
 ## Try it
 
@@ -29,14 +29,18 @@ verifiable author identity, timeline and commit anchors.
 static site. Drag [`docs/sampleData/1.txt`](docs/sampleData/1.txt) onto the canvas, then right-click a column
 header → *Draw chart*. File loading and all nine chart types work there; the C++ compute service does not,
 so function cards show the "backend unreachable" banner — that is the designed visible degradation, not a bug.
+The demo URL only starts serving after Pages is enabled once: **Settings → Pages → Source: GitHub Actions**.
 
-**Locally, with the compute backend** — one command builds the C++ service and starts both servers:
+**Locally, with the compute backend** — install once, then one command builds the C++ service and
+starts both servers:
 
 ```bash
-./scripts/dev.sh          # backend on :37811, Vite on :5173
+cd web && npm install     # once, after cloning
+./scripts/dev.sh          # builds backend → backend :37811 + Vite :5173
 ```
 
-Requirements: Node 22+, CMake 3.24+, a C++17 compiler and the Eigen 3.4 headers
+Requirements: Node 22.7+ (the opt-in fuzz gate needs `--experimental-transform-types`), CMake 3.24+,
+a C++17 compiler and the Eigen 3.4 headers
 (`sudo apt install build-essential cmake ninja-build libeigen3-dev`).
 
 ## Design Philosophy
@@ -44,7 +48,7 @@ Requirements: Node 22+, CMake 3.24+, a C++17 compiler and the Eigen 3.4 headers
 - **Card model**: everything is a card — data card (file) → function card (transform) → output card (plot / export)
 - **Strict separation**: data and behavior are separated; tables are never mutated; every transformation produces a new card
 - **Connection subordination**: connections are only the visualization of data dependencies, normally kept low-key (background layer), and never interfere with card layout or interaction — cards are the protagonists, connections the supporting cast
-- **Backend-owns-compute (B-plan)**: all numeric / statistical / matrix computation runs in the **C++/Eigen backend**; the browser is a **pure interaction surface** (rendering, input, layout). The backend being unreachable is a **visible state with a retry button**, never silent. This supersedes the earlier T1-browser-baseline tier table while preserving the three contracts of the [maximum-headroom principle](docs/docs/decisions/2026-10-15-max-headroom-principle.md): visible degradation, cross-tier semantic consistency (differential fixtures), bounded worst-case. Full reasoning: [decision record](docs/docs/decisions/2026-10-17-backend-owns-compute.md)
+- **Backend-owns-compute (B-plan)**: all numeric / statistical / matrix computation runs in the **C++/Eigen backend**; the browser is a **pure interaction surface** (rendering, input, layout). The backend being unreachable is a **visible state with a retry button**, never silent. This supersedes the earlier T1-browser-baseline tier table while preserving the three contracts of the [maximum-headroom principle](docs/decisions/2026-10-15-max-headroom-principle.md): visible degradation, cross-tier semantic consistency (differential fixtures), bounded worst-case. Full reasoning: [decision record](docs/decisions/2026-10-17-backend-owns-compute.md)
 - **Column-oriented matrix**: rows = samples (`No.N`), columns = variables (`Pos.N`), contiguous storage, high performance
 - **Extensible**: computation system + adapter interfaces — the community can contribute long-tail features
 
@@ -67,13 +71,17 @@ Requirements: Node 22+, CMake 3.24+, a C++17 compiler and the Eigen 3.4 headers
 └─────────────────────────────────────────────────────┘
 ```
 
-The frontend speaks [protocol v1](docs/docs/architecture/backend-protocol-v1.md): JSON control messages over HTTP plus DCM2 binary frames for dense-matrix windows (window + full shape). Long-poll event stream pushes node state changes (dirty → computing → done | error) to drive the four-state status lamps.
+The frontend speaks [protocol v1](docs/architecture/backend-protocol-v1.md): JSON control messages over HTTP plus DCM2 binary frames for dense-matrix windows (window + full shape). Long-poll event stream pushes node state changes (dirty → computing → done | error) to drive the four-state status lamps.
 
 ## Implemented Features
 
 ### File Loading
 - **File → Open Data Files**, **right-click the empty area**, or **drop files onto the canvas**
 - Multiple files create only **one card**; a selector at the top of the card switches the displayed file
+- **Replace the data behind a card** (2026-10-31): *Replace file…* in the card's file row, or drop a
+  file onto the card. Replacing is a **data change** — dependent function cards and charts follow and
+  recompute on their own; *switching* the file of a multi-file card is a **view change** and still
+  asks before re-pointing dependents
 - Supports TXT / CSV / TSV / DAT / XLSX; CSV parsing handles quoted fields and sniffs the delimiter
 - **Automatic header detection**: if the first row is not purely numeric it is treated as column titles (annotations) rather than data
 - File-backed tables start **read-only**; the lock button in the card's file row unlocks editing. Unparseable cells show `—` instead of being silently turned into 0, and a value that is not a number is refused with an explanation rather than dropped
@@ -110,7 +118,7 @@ The backend holds **authoritative copies** of all data, dependency graphs, and c
     (`时间_秒`), bracket-quoted verbatim names (`[地面速度_μm/s]` — the only spelling when a name
     contains `/`, a space or parentheses), and port qualification for multi-input cards
     (`A.pos.1`, `src.时间_秒`, `A.[…]`). Full-width punctuation (`（）`, `，`, `×`, `／`, `－`) is
-    accepted as its ASCII equivalent. See [the decision record](docs/docs/decisions/2026-10-28-expression-reference-syntax.md)
+    accepted as its ASCII equivalent. See [the decision record](docs/decisions/2026-10-28-expression-reference-syntax.md)
 - **Matrix-mode evaluation**: when any input variable is declared matrix-mode, `*` becomes matrix multiplication; additional functions: `TRANSPOSE`, `DET`, `INV`, `SOLVE`, `MMUL` (explicit matmul), `EMUL` (explicit element-wise multiply). Shape mismatches produce structured `shapeMismatch` errors — never silent garbage
 - **Dependency graph**: per-port edges, atomic cycle refusal (N edges either all register or none), result-matrix-aware cascade via `resultOwner_` map
 - **Node state machine**: dirty → computing → done | error, pushed via monotonic-seq event stream
@@ -140,11 +148,47 @@ The backend holds **authoritative copies** of all data, dependency graphs, and c
     zoom), while **Ctrl/Cmd+wheel zooms there too** — and so does a trackpad pinch
   - **Pan**: middle-drag, **space+left drag**, or a left drag on the bare canvas
   - **View → Reset View** fits the whole workflow (auto zoom + centre); **Tile/Cascade** lay out
-    inside the visible area — see the [decision](docs/docs/decisions/2026-10-21-infinite-canvas.md)
+    inside the visible area — see the [decision](docs/decisions/2026-10-21-infinite-canvas.md)
 - Cards drag, resize and stack freely, plus **Tile / Cascade / Close All**
 - A table that still feeds a chart **refuses to close**, and its connections blink to explain why
 - Runtime **Chinese/English switching**, **workspace persistence** (layout + dependencies + data), and CSV export of the current table
 - **Backend availability banner**: when the compute backend is unreachable or version-mismatched, a visible alert bar appears with a retry button — never a blank screen
+
+### Function cards (schema v2, 2026-10-27)
+- **Dependencies live in the envelope**: `inputs[]` is the single dependency representation, so the
+  graph rebuilds in one pass with zero card-type knowledge (v1 rebuilt it only from chart cards, so
+  function-card dependencies were silently lost)
+- **One node, K outputs**: a signature declares its ports and output count; `builtin:expression-columns`
+  computes a whole wide table from one node instead of v1's "one node per formula column"
+- **Inputs are explicit matrices**: switching the file inside a data card never silently changes a
+  function card's input. The card shows a **pending offer** with a column-difference preview and one
+  confirmation (batch capable); only on confirm does the graph change. The offer is a **yellow
+  gradient with a slow flash** — only the gradient and the outer glow move, the text never blinks, and
+  `prefers-reduced-motion` keeps the yellow and the ring while dropping the motion
+- **Column-count contract**: naming an output column locks its width; upstream width drift makes the
+  backend cut the flow (`columnContractViolation`) and clear the stale result (dependents show
+  "invalid"); editing the contract yourself goes through *extend* / *unlock*
+- **Results flow onward**: right-click a result column header → draw a chart, or *New formula card…*.
+  A function card's output is an ordinary matrix, so it can be plotted or fed into the next card
+  (A → B chain) and recomputes automatically when anything upstream changes
+- **Result preview**: a function card previews the first 100 rows of its result (the full
+  10 000-row shape is reported in the frame) instead of rendering the whole table
+- **Evaluation does not hold the lock**: a slow function never freezes the whole node registry
+- **A signature need not look like a formula card at all**: `builtin:linear-regression` has two
+  single-column ports, no expression parameters, and a shape fixed by the signature (1 × 5). Create it
+  from a data column via *New relation-enumeration card…*. Both input rows then carry a **column
+  dropdown**, so x and y can be any two columns of that table — picking a column is a **binding**, not
+  a parameter, and recomputes immediately. The result table splits its axes: **rows are the relation**
+  (`oil_pressure_MPa : thrust_kN`), **columns are the statistics** (slope / intercept / r / R² / n,
+  full relation name on hover), and column widths can be dragged at the header's right edge. There is
+  no empty formula area — a *How this is computed* panel takes its place
+- **Cross-tier judge**: `web/tests/fixtures/cards/*.json` is run by both the TS and the C++ side; with
+  `DC_RUN_INTEGRATION=1` a real-backend gate runs as well
+- **The manual lives in the UI** (2026-10-28): the Help menu and the `?` on the formula zone open the
+  same reference (function cheat-sheet / column-reference syntax / examples / common errors);
+  *available columns* are clickable chips that insert `Pos.N` at the cursor, and hovering for 1 s shows
+  the reference at the pointer. The reference and the engine's function table are the same source — a
+  test asserts the two function sets are equal, so the manual cannot drift
 
 ## Screenshots
 
@@ -172,6 +216,7 @@ Every image below is real headless-Chromium output of the production build, not 
 This repository is intentionally honest about what is finished: the table/chart path is complete and
 gated by tests, while the card-graph layer is still being closed out.
 
+
 | Area | State |
 |---|---|
 | Data cards, virtualised table, 9 chart types, exports, i18n, workspace persistence | **Done**, covered by unit + end-to-end gates |
@@ -190,8 +235,8 @@ function card into the next one, plotting a function card's output, single-colum
 addressable column name at all — even the documented `Pos.N` fallback was broken) and where the
 reference lives in the UI (Help menu / `?` on the card / a 1 s hover tooltip at the pointer /
 clickable column chips). A layout collapse that hid the formula row as soon as a card produced
-numbers was fixed at the same time. See the [log](docs/docs/log/2026-10-28.md) and the
-[syntax decision](docs/docs/decisions/2026-10-28-expression-reference-syntax.md).
+numbers was fixed at the same time. See the [log](docs/log/2026-10-28.md) and the
+[syntax decision](docs/decisions/2026-10-28-expression-reference-syntax.md).
 
 A file switch still never re-points a function card silently (schema v2), so the card shows a
 **pending** offer instead — and that offer is now a flashing yellow gradient box. It used to be a
@@ -209,8 +254,8 @@ What is still missing, and why it is not "done":
 - Interaction polish (layout, spacing, states) around the three panes.
 
 The data model and the contracts are settled (see
-[`docs/docs/decisions/2026-10-27-card-contracts.md`](docs/docs/decisions/2026-10-27-card-contracts.md),
-[`2026-10-26-card-schema-v2.md`](docs/docs/decisions/2026-10-26-card-schema-v2.md)); what is missing is
+[`docs/decisions/2026-10-27-card-contracts.md`](docs/decisions/2026-10-27-card-contracts.md),
+[`2026-10-26-card-schema-v2.md`](docs/decisions/2026-10-26-card-schema-v2.md)); what is missing is
 UI on top of it. Treat the function card as **API-stable, UX-incomplete**.
 
 ### Port-level connections (repaired 2026-10-28, geometry revised 2026-10-29)
@@ -224,12 +269,12 @@ selecting a card labels its lines with the port identity.
 centres (the mask swallows the inside of each card), the route is a single cubic Bézier, red/blue are
 long/short flowing dashes, and the arrowhead parks outside the target frame. Ports are back to what
 they were — data identity and the label's source. See the
-[centre-endpoint decision](docs/docs/decisions/2026-10-29-connection-center-anchors.md).
+[centre-endpoint decision](docs/decisions/2026-10-29-connection-center-anchors.md).
 
 Still missing: hover/selection of a single line, deleting a line (disconnecting means editing data and
 wants an undo path — tracked separately), dragging a new line, and port dots (`portAnchor` is reserved
 for those). See the
-[decision record](docs/docs/decisions/2026-10-28-port-level-connections.md).
+[decision record](docs/decisions/2026-10-28-port-level-connections.md).
 
 ## Tech Stack
 
@@ -292,15 +337,17 @@ npm test                  # unit tests (vitest, includes cross-tier fixtures)
 # Frontend: typecheck + unit tests (count printed by vitest; includes 81 cross-tier differential fixtures)
 cd web && npm run typecheck && npm test
 
-# Backend: 7 ctest cases (cross-tier fixtures, matrix operators, node registry, card fixtures; 3 further gates are opt-in and Skipped by default)
+# Backend: 8 ctest cases (cross-tier fixtures, matrix operators, node registry, card fixtures; 4 further gates are opt-in and Skipped by default)
 cd backend && ctest --test-dir build --output-on-failure
 
 # Opt-in gates: differential fuzz (random TS↔C++ cross-check) and HTTP malformed-request stress
 DC_RUN_FUZZ=1 ctest --test-dir build -R diff_fuzz --output-on-failure
 DC_RUN_STRESS=1 ctest --test-dir build -R http_stress --output-on-failure
 
-# End-to-end smoke (run `npm run preview` first)
-node web/scripts/smoke.mjs http://127.0.0.1:4173
+# End-to-end smoke: 97 checks against a production build
+cd web && npm run build && npx playwright install chromium   # browser binary, once
+npx vite preview --port 4173 &                              # serve web/dist
+node scripts/smoke.mjs http://127.0.0.1:4173
 ```
 
 ### CI
@@ -311,7 +358,8 @@ GitHub Actions runs three jobs on every push/PR:
 3. **e2e-smoke**: Playwright Chromium against `vite preview`
 
 A fourth workflow, [`.github/workflows/pages.yml`](.github/workflows/pages.yml), publishes the front end to
-GitHub Pages on every push that touches `web/` — that is what serves the live demo above.
+GitHub Pages on every push that touches `web/` — that is what serves the live demo above. It needs a
+one-time switch: **Settings → Pages → Source: GitHub Actions**, otherwise the demo link 404s.
 
 ## Architecture Extension Points
 
@@ -370,7 +418,7 @@ GitHub Pages on every push that touches `web/` — that is what serves the live 
 
 ## Acknowledgements
 
-This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class tooling, and earlier GitHub Copilot). Authored by the maintainer: the requirements, the architecture decisions in [`docs/docs/decisions/`](docs/docs/decisions/), the acceptance criteria and the test gates. The repository does not claim "it was all typed by hand" — it claims that **every feature statement above is reproduced by the suites listed under Tests** (489 unit / 7 ctest / 73 end-to-end checks). Ownership and timeline: [`PROVENANCE.md`](PROVENANCE.md).
+This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class tooling, and earlier GitHub Copilot). Authored by the maintainer: the requirements, the architecture decisions in [`docs/decisions/`](docs/decisions/), the acceptance criteria and the test gates. The repository does not claim "it was all typed by hand" — it claims that **every feature statement above is reproduced by the suites listed under Tests** (573 unit / 8 ctest / 97 end-to-end checks). Ownership and timeline: [`PROVENANCE.md`](PROVENANCE.md).
 
 ## License
 
