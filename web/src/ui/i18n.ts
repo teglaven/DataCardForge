@@ -228,7 +228,16 @@ const dictionaries = {
     'formula.contractClear': '解除锁定',
     'formula.error.columnContractViolation': '列数契约被破坏（锁定 {expected} 列，实际 {actual} 列）',
     'menu.newFormula': '新建公式卡…',
-    'menu.newRegression': '新建回归卡…',
+    'menu.newRelationEnum': '新建关系枚举卡…',
+    'status.needTwoColumns': '「{type}」至少需要 2 列数据，该表只有 {have} 列',
+    'relation.card': '关系枚举',
+    'relation.pair': '{x} : {y}',
+    'relation.column': '取列',
+    'relation.stat.slope': '斜率',
+    'relation.stat.intercept': '截距',
+    'relation.stat.r': '相关系数 r',
+    'relation.stat.r2': '决定系数 R²',
+    'relation.stat.n': '样本数 n',
 
     // 帮助（公式 / 函数说明）：菜单项、卡片上的「?」与悬停提示共用同一份文案。
     // 签名（Pos.1、SUM(c)…）是代码，保持字面量；这里只有散文，因此两个语言都齐。
@@ -528,7 +537,16 @@ const dictionaries = {
     'formula.error.columnContractViolation':
       'Column contract broken ({expected} locked, {actual} produced)',
     'menu.newFormula': 'New Formula Card…',
-    'menu.newRegression': 'New Regression Card…',
+    'menu.newRelationEnum': 'New Relation Enumeration Card…',
+    'status.needTwoColumns': '"{type}" needs at least 2 columns; this table has {have}',
+    'relation.card': 'Relation enumeration',
+    'relation.pair': '{x} : {y}',
+    'relation.column': 'Column',
+    'relation.stat.slope': 'Slope',
+    'relation.stat.intercept': 'Intercept',
+    'relation.stat.r': 'Correlation r',
+    'relation.stat.r2': 'R² (goodness of fit)',
+    'relation.stat.n': 'Sample count n',
 
     // Help (formula / function reference): the menu entries, the card's "?" and the hover
     // tooltips all read these same strings.

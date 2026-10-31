@@ -448,7 +448,7 @@ describe('wheel zoom of the whole workbench', () => {
 
 // ── card menus are wired to the store (the seam no component test reaches) ──────
 describe('card context menus drive the store', () => {
-  it('creates a regression card from a data column pair via the menu', async () => {
+  it('creates a relation-enumeration card from a data column pair via the menu', async () => {
     // jsdom's navigator.language is en-US; pin the locale the assertions read.
     store().setLocale('zh');
     const mat = new MatrixData();
@@ -467,7 +467,7 @@ describe('card context menus drive the store', () => {
     });
 
     const items = [...document.querySelectorAll<HTMLButtonElement>('.context-menu__item')];
-    const regression = items.find((item) => item.textContent?.includes('新建回归卡'));
+    const regression = items.find((item) => item.textContent?.includes('新建关系枚举卡'));
     expect(regression).toBeDefined();
     expect(regression!.disabled).toBe(false);
     await act(async () => {
@@ -488,7 +488,7 @@ describe('card context menus drive the store', () => {
     }
   });
 
-  it('disables the regression entry on the last column (no pair to take)', async () => {
+  it('disables the relation entry when the table has fewer than two columns', async () => {
     store().setLocale('zh');
     const matrixCardId = store().addMatrixCard([{ name: 'a.csv', matrix: matrix([1, 2, 3]) }]);
     store().setBounds(matrixCardId, { x: 0, y: 0, width: 640, height: 420 });
@@ -501,9 +501,26 @@ describe('card context menus drive the store', () => {
       );
     });
     const items = [...document.querySelectorAll<HTMLButtonElement>('.context-menu__item')];
-    const regression = items.find((item) => item.textContent?.includes('新建回归卡'));
+    const regression = items.find((item) => item.textContent?.includes('新建关系枚举卡'));
     expect(regression).toBeDefined();
     expect(regression!.disabled).toBe(true);
+  });
+
+  it('pairs the LAST column with the previous one (the party is a starting point)', () => {
+    // The pair is a default, not a rule: the previous column is a valid partner, and the
+    // card's own port selectors take over afterwards.
+    store().setLocale('zh');
+    const mat = new MatrixData();
+    mat.appendColumn('Pos.1', [1, 2, 3]);
+    mat.appendColumn('Pos.2', [4, 5, 6]);
+    const matrixCardId = store().addMatrixCard([{ name: 'a.csv', matrix: mat }]);
+    const created = store().addRelationEnumCard(matrixCardId, 1);
+    expect(created).not.toBeNull();
+    const card = store().cards.find((entry) => entry.id === created);
+    if (!card || !('inputs' in card)) throw new Error('no card inputs');
+    expect(
+      card.inputs.map((input) => (input.target.type === 'cell' ? input.target.column : -1)),
+    ).toEqual([1, 0]);
   });
 });
 

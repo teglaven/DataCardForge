@@ -120,7 +120,7 @@ export function CardCanvas({
   const dismissRepoint = useWorkspace((s) => s.dismissRepoint);
   const applyRepointsForOwner = useWorkspace((s) => s.applyRepointsForOwner);
   const renameOutputColumn = useWorkspace((s) => s.renameOutputColumn);
-  const addRegressionCard = useWorkspace((s) => s.addRegressionCard);
+  const addRelationEnumCard = useWorkspace((s) => s.addRelationEnumCard);
   const setColumnContract = useWorkspace((s) => s.setColumnContract);
   const view = useWorkspace((s) => s.view);
   const setView = useWorkspace((s) => s.setView);
@@ -500,8 +500,8 @@ export function CardCanvas({
                 const id = addFormulaCard(card.id);
                 if (id !== null) select(id);
               }}
-              onOpenRegression={(column) => {
-                const id = addRegressionCard(card.id, column);
+              onOpenRelationEnum={(column) => {
+                const id = addRelationEnumCard(card.id, column);
                 if (id !== null) select(id);
               }}
             />
@@ -525,7 +525,9 @@ export function CardCanvas({
             const column = entry.target.type === 'cell' ? entry.target.column : undefined;
             const label = [
               sourceName ?? `#${entry.target.matrixId}`,
-              column !== undefined ? `col ${column + 1}` : '',
+              column !== undefined
+                ? (matrix?.columnLabel(column) || matrix?.column(column).posName || `col ${column + 1}`)
+                : '',
             ]
               .filter(Boolean)
               .join(' · ');
@@ -533,6 +535,13 @@ export function CardCanvas({
               portId: entry.portId,
               mode: entry.target.type === 'cell' ? 'cell' : 'matrix',
               label,
+              matrixId: entry.target.matrixId,
+              column,
+              // Every column of the bound matrix, so a cell port can be re-bound from the
+              // card itself ("choose the column" used to be a creation-time decision).
+              columns: matrix
+                ? matrix.columns().map((c, index) => c.annotation || c.posName || `Pos.${index + 1}`)
+                : [],
               rows: matrix?.rowCount() ?? 0,
               cols: matrix?.columnCount() ?? 0,
               missing: !matrix,
@@ -607,7 +616,7 @@ export function CardCanvas({
       dismissRepoint,
       applyRepointsForOwner,
       renameOutputColumn,
-      addRegressionCard,
+      addRelationEnumCard,
       setColumnContract,
       dependencies,
       bringToFront,

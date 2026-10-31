@@ -1641,13 +1641,13 @@ describe('restore does not leak derived matrices', () => {
   });
 });
 
-// ── the second signature: a regression card (two cell ports, no expressions) ────
-describe('regression card', () => {
+// ── the second signature: a relation-enumeration card (two cell ports, no expressions) ──
+describe('relation-enumeration card', () => {
   it('binds two consecutive columns as cell ports and sends them as such', async () => {
     const stub = stubBackend({ nodeResult: [[2, 0, 1, 1, 4]], nodeNames: ['Pos.1 slope', 'Pos.2 intercept', 'Pos.3 r', 'Pos.4 r2', 'Pos.5 n'] });
     try {
       const srcId = await loadSource([[1, 2], [2, 4], [3, 6], [4, 8]], ['X', 'Y']);
-      const id = store().addRegressionCard(srcId, 0)!;
+      const id = store().addRelationEnumCard(srcId, 0)!;
       expect(id).not.toBeNull();
       const card = store().cards.find((c) => c.id === id) as FunctionCardModel;
       expect(card.signatureId).toBe(REGRESSION_SIGNATURE);
@@ -1680,7 +1680,47 @@ describe('regression card', () => {
     const stub = stubBackend({});
     try {
       const srcId = await loadSource([[1], [2]], ['A']);
-      expect(store().addRegressionCard(srcId, 0)).toBeNull();
+      expect(store().addRelationEnumCard(srcId, 0)).toBeNull();
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('re-binds a cell port to another column (a binding, not a parameter)', async () => {
+    const stub = stubBackend({});
+    const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+    try {
+      const srcId = await loadSource(
+        [[1, 2, 3], [2, 4, 6], [3, 6, 9]],
+        ['X', 'Y', 'Z'],
+      );
+      const id = store().addRelationEnumCard(srcId, 0)!;
+      await tick();
+      store().setPortColumn(id, 'x', 2);
+      await tick();
+
+      const card = store().cards.find((c) => c.id === id) as FunctionCardModel;
+      const x = card.inputs.find((input) => input.portId === 'x')!;
+      expect(x.target.type === 'cell' ? x.target.column : -1).toBe(2);
+      // Params stay empty: which column feeds a port is data flow, not a setting.
+      expect(card.params.formulas).toBeUndefined();
+
+      // Out-of-range columns and unknown ports are no-ops, never a silent rebind to 0.
+      store().setPortColumn(id, 'x', 99);
+      store().setPortColumn(id, 'nope', 1);
+      const after = store().cards.find((c) => c.id === id) as FunctionCardModel;
+      const stillX = after.inputs.find((input) => input.portId === 'x')!;
+      expect(stillX.target.type === 'cell' ? stillX.target.column : -1).toBe(2);
+
+      const patch = stub.calls.find((call) => call.method === 'PATCH');
+      expect(patch).toBeDefined();
+      const body = JSON.parse(patch!.body ?? '{}') as {
+        inputs: Array<{ portId: string; mode: string; columnIndex?: number }>;
+      };
+      // One PATCH carries the new binding; the node itself is not recreated.
+      expect(body.inputs.find((input) => input.portId === 'x')).toEqual(
+        expect.objectContaining({ mode: 'cell', columnIndex: 2 }),
+      );
     } finally {
       stub.restore();
     }

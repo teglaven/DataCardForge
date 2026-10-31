@@ -36,8 +36,8 @@ interface MatrixCardProps {
   onOpenChart: (columnIndex: number, type: ChartTypeId) => number | null;
   /** New function card reading this table, created from the clicked column. */
   onOpenFormula: (column: number) => void;
-  /** Regression card from this column and the next one (two cell ports). */
-  onOpenRegression: (column: number) => void;
+  /** Relation-enumeration card from this column and its neighbour (two cell ports). */
+  onOpenRelationEnum: (column: number) => void;
   onActivate: () => void;
   /** True while a file is being dragged over this card (it would replace its data). */
   dropTarget?: boolean;
@@ -60,7 +60,7 @@ export function MatrixCard({
   onCloseBlocked,
   onOpenChart,
   onOpenFormula,
-  onOpenRegression,
+  onOpenRelationEnum,
   onActivate,
   dropTarget = false,
   onReplaceFile,
@@ -285,21 +285,20 @@ export function MatrixCard({
             type="button"
             className="context-menu__item"
             title={
-              cols - menu.column >= 2
-                ? t('menu.newRegression')
-                : t('status.needTrailingColumns', {
-                    type: t('menu.newRegression'),
-                    n: 2,
-                    have: cols - menu.column,
+              cols >= 2
+                ? t('menu.newRelationEnum')
+                : t('status.needTwoColumns', {
+                    type: t('menu.newRelationEnum'),
+                    have: cols,
                   })
             }
-            disabled={cols - menu.column < 2}
+            disabled={cols < 2}
             onClick={() => {
-              onOpenRegression(menu.column);
+              onOpenRelationEnum(menu.column);
               setMenu(null);
             }}
           >
-            {t('menu.newRegression')}
+            {t('menu.newRelationEnum')}
           </button>
         </Popup>
       ) : null}

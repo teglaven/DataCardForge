@@ -28,6 +28,7 @@ import { registerPort, unregisterPort, type AnchorSide } from '../cardMetrics.ts
 import type { FunctionCardModel, NodeStatus } from '../types.ts';
 import type { MessageKey } from '../i18n.ts';
 import { CHART_TYPE_ORDER, chartTypeDef, minimumColumns, type ChartTypeId } from '../../charts/chartTypes.ts';
+import { REGRESSION_SIGNATURE } from '../migrate.ts';
 import { CardShell } from './CardShell.tsx';
 import { HoverHelp, useHoverHelp } from './HoverHelp.tsx';
 import { Popup } from './Popup.tsx';
@@ -36,12 +37,34 @@ import { VirtualTable } from './VirtualTable.tsx';
 /** How long to wait after the last keystroke before re-sending each formula to the backend. */
 const FORMULA_DEBOUNCE_MS = 250;
 
+/**
+ * Readable names for the relation signature's five output columns.
+ *
+ * The backend sends stable slugs (`slope`, `intercept`, `r`, `r2`, `n`) because it must not
+ * write user-facing prose; the card maps them to i18n here. `n` is the one that used to be
+ * a bare letter with no explanation — it is the number of rows that actually took part in
+ * the fit, which is what a user comparing two relations needs to know.
+ */
+const RELATION_STAT_KEYS: Record<string, MessageKey> = {
+  slope: 'relation.stat.slope',
+  intercept: 'relation.stat.intercept',
+  r: 'relation.stat.r',
+  r2: 'relation.stat.r2',
+  n: 'relation.stat.n',
+};
+
 /** One resolved input port, as the left zone displays it. */
 export interface ResolvedInput {
   portId: string;
   mode: 'matrix' | 'cell';
   /** Human-readable source, e.g. `b.txt` or `b.txt · column 2`. */
   label: string;
+  /** The matrix this port reads (needed to re-bind a cell port). */
+  matrixId?: number;
+  /** Bound column for a `cell` port; `undefined` for a `matrix` port. */
+  column?: number;
+  /** Column labels of the bound matrix — the options a cell port can be re-bound to. */
+  columns?: string[];
   rows: number;
   cols: number;
   /** True when the referenced matrix is gone (a dangling reference after a hand edit). */
@@ -109,6 +132,8 @@ export function FormulaCard({
   // own, so "recompute" is exactly one push — the same call the expression editor makes.
   const recomputeFormula = useWorkspace((s) => s.recomputeFormula);
   const loadFullResult = useWorkspace((s) => s.loadFullResult);
+  // Re-bind one cell port to another column: a binding change, not a parameter change.
+  const setPortColumn = useWorkspace((s) => s.setPortColumn);
   /**
    * Explanations sit behind a ~1 s rest (`HoverHelp`), never on a native `title`: the card
    * is dense, and instant browser tooltips fire on every accidental pass-over.
@@ -280,15 +305,45 @@ export function FormulaCard({
 
   const rows = resultMatrix?.rowCount() ?? 0;
   const cols = resultMatrix?.columnCount() ?? 0;
+  // ── relation enumeration: the pair IS the horizontal axis ────────────────────────────
+  // The transport has no row-label channel (`Matrix` carries column annotations only), so
+  // "which two columns does this number describe?" can only be answered on the column axis.
+  // Every output header therefore carries the pair: `A : B · 斜率`. Bare slugs (`n`) told a
+  // reader nothing, and a fixed pair left the header unable to say what it was about.
+  const isRelation = card.signatureId === REGRESSION_SIGNATURE;
+  const pairNames = inputs
+    .filter((entry) => entry.mode === 'cell')
+    .map((entry) =>
+      entry.column !== undefined
+        ? (entry.columns?.[entry.column] ?? `Pos.${entry.column + 1}`)
+        : entry.label,
+    );
+  const pairLabel =
+    pairNames.length >= 2 ? t('relation.pair', { x: pairNames[0], y: pairNames[1] }) : '';
+  const relationColumnLabel =
+    isRelation && pairLabel && resultMatrix
+      ? (index: number): string => {
+          // The backend's annotation is the stable slug (`slope`…); a frame may prefix it
+          // with `Pos.N`. Strip that before looking the readable name up.
+          const raw = resultMatrix.columnLabel(index).replace(/^Pos\.\d+\s+/, '');
+          const key = RELATION_STAT_KEYS[raw];
+          return key ? `${pairLabel} · ${t(key)}` : `${pairLabel} · ${raw}`;
+        }
+      : undefined;
   const title = t('card.formula', {
-    name: draft[0]?.name || formulas?.[0]?.name || t('card.unlabeled'),
+    name:
+      isRelation && pairLabel
+        ? `${t('relation.card')} ${pairLabel}`
+        : draft[0]?.name || formulas?.[0]?.name || t('card.unlabeled'),
   });
   // The card mirrors only the first screenful; the frame header carries the true height,
   // so the badge must report the stored table, not the cache.
   const totalRows = card.result?.totalRows ?? rows;
   const badge = expressionShaped
     ? `${(formulas ?? []).length} ${t('formula.columns')} · ${totalRows} ${t('formula.rows')}`
-    : `${card.signatureId.replace(/^builtin:/, '')} · ${totalRows} ${t('formula.rows')}`;
+    : isRelation && pairLabel
+      ? `${t('relation.card')} · ${pairLabel}`
+      : `${card.signatureId.replace(/^builtin:/, '')} · ${totalRows} ${t('formula.rows')}`;
   const state: NodeStatus['state'] | 'idle' | 'stale' = invalidated
     ? 'stale'
     : (card.node?.state ?? 'idle');
@@ -334,11 +389,33 @@ export function FormulaCard({
                     >
                       {input.mode === 'matrix' ? t('formula.modeMatrix') : t('formula.modeCell')}
                     </span>
-                    <span
-                      className={`formula-card__port-src${input.missing ? ' formula-card__port-src--missing' : ''}`}
-                    >
-                      {input.missing ? t('formula.inputMissing') : input.label}
-                    </span>
+                    {input.missing ? (
+                      <span className="formula-card__port-src formula-card__port-src--missing">
+                        {t('formula.inputMissing')}
+                      </span>
+                    ) : input.mode === 'cell' && input.columns && input.columns.length > 0 ? (
+                      // A cell port names ONE column, and the user chooses which one. The pair
+                      // used to be fixed at creation ("this column and the next"), which made
+                      // the card rigid for every table whose interesting pair is not adjacent.
+                      // The options are that matrix's columns, in column order.
+                      <select
+                        className="formula-card__port-column"
+                        aria-label={t('relation.column')}
+                        title={input.label}
+                        value={input.column ?? 0}
+                        onChange={(event) =>
+                          setPortColumn(card.id, input.portId, Number(event.target.value))
+                        }
+                      >
+                        {input.columns.map((name, index) => (
+                          <option key={`${index}:${name}`} value={index}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="formula-card__port-src">{input.label}</span>
+                    )}
                     {!input.missing && input.rows > 0 ? (
                       <span className="formula-card__port-shape">
                         {input.rows}×{input.cols}
@@ -625,6 +702,7 @@ export function FormulaCard({
                     matrix={resultMatrix}
                     readOnly
                     rowLabel={(n) => t('table.rowHeader', { n })}
+                    columnLabel={relationColumnLabel}
                     onHeaderContextMenu={(event, column) => {
                       event.preventDefault();
                       // The card owns its own menu: without this the event also reaches

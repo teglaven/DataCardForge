@@ -315,14 +315,28 @@ interface WorkspaceState {
    */
   addFormulaCard: (sourceCardId: number, matrixId?: number) => number | null;
   /**
-   * Create a regression card from two consecutive columns of the source's current table.
+   * Create a relation-enumeration card from two columns of the source's current table.
    *
-   * The second signature exists to prove the card model is not expression-shaped: two
-   * declared ports (x, y), no formula parameters, an output whose shape the signature
-   * fixes. It binds one COLUMN per port (`mode: 'cell'`), which is why the cell port mode
-   * had to become real.
+   * Backed by `builtin:linear-regression` (the published signature id never changes; only
+   * the human-facing name did). The second signature exists to prove the card model is not
+   * expression-shaped: two declared ports (x, y), no formula parameters, an output whose
+   * shape the signature fixes. It binds one COLUMN per port (`mode: 'cell'`), which is why
+   * the cell port mode had to become real.
+   *
+   * The clicked column becomes `x` and its neighbour `y` (the previous one when the clicked
+   * column is last) — a starting pair, not a restriction: both ports can be re-bound from
+   * the card (`setPortColumn`), which is the "choose the columns" affordance the card was
+   * missing when the pair was hard-wired at creation.
    */
-  addRegressionCard: (sourceCardId: number, columnIndex: number) => number | null;
+  addRelationEnumCard: (sourceCardId: number, columnIndex: number) => number | null;
+  /**
+   * Re-bind ONE cell port of a function card to another column of the same matrix.
+   *
+   * Column choice is a BINDING, not a parameter: the parameter belongs to the signature
+   * (`params` is empty for this signature), while "which column feeds port x" is data flow.
+   * Same node, same dependency edge — only `columnIndex` changes, then one push re-computes.
+   */
+  setPortColumn: (cardId: number, portId: string, columnIndex: number) => void;
   /** Add or update a formula column. One node ⇒ one PATCH, whatever the column count. */
   setFormula: (cardId: number, index: number, name: string, expression: string) => void;
   /** Remove a formula column (keeps at least one; no node is created or deleted). */
@@ -2310,7 +2324,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       void syncFunctionCard(cardId);
     },
 
-    addRegressionCard(sourceCardId, columnIndex) {
+    addRelationEnumCard(sourceCardId, columnIndex) {
       const state = get();
       const sourceCard = state.cards.find((c) => c.id === sourceCardId);
       if (!sourceCard || isChartCard(sourceCard)) return null;
@@ -2318,9 +2332,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       if (matrixId === null) return null;
       const matrix = state.matrices.get(matrixId);
       if (!matrix) return null;
-      // Two consecutive columns, like a scatter chart takes a pair — the product's
-      // existing idiom for "this column and the one after it".
-      if (columnIndex < 0 || columnIndex + 1 >= matrix.columnCount()) return null;
+      // A relation needs two columns to relate. The clicked column is `x`; `y` is its
+      // neighbour (previous one at the right edge) — the card's own port selectors then
+      // take over, so this default is a starting point rather than a rule.
+      if (matrix.columnCount() < 2) return null;
+      if (columnIndex < 0 || columnIndex >= matrix.columnCount()) return null;
+      const yIndex = columnIndex + 1 < matrix.columnCount() ? columnIndex + 1 : columnIndex - 1;
 
       const inputs: PortConnection[] = [
         {
@@ -2329,7 +2346,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         },
         {
           portId: REGRESSION_PORT_Y,
-          target: { type: 'cell', cardId: sourceCardId, matrixId, column: columnIndex + 1 },
+          target: { type: 'cell', cardId: sourceCardId, matrixId, column: yIndex },
         },
       ];
       const cardId = state.nextCardId;
@@ -2382,6 +2399,38 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       revealCard({ ...spot, ...size });
       void syncFunctionCard(cardId);
       return cardId;
+    },
+
+    setPortColumn(cardId, portId, columnIndex) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isFormulaCard(card)) return;
+      const input = card.inputs.find((entry) => entry.portId === portId);
+      if (!input || input.target.type !== 'cell') return;
+      const matrix = state.matrices.get(input.target.matrixId);
+      if (!matrix || columnIndex < 0 || columnIndex >= matrix.columnCount()) return;
+      if (input.target.column === columnIndex) return;
+
+      // Only the column changes: same card, same node, same edge. The column is a BINDING
+      // (data flow), never a parameter — `params` stays empty for this signature.
+      const inputs = card.inputs.map((entry): PortConnection => {
+        if (entry.portId !== portId || entry.target.type !== 'cell') return entry;
+        return {
+          ...entry,
+          target: {
+            type: 'cell',
+            cardId: entry.target.cardId,
+            matrixId: entry.target.matrixId,
+            column: columnIndex,
+          },
+        };
+      });
+      set({
+        cards: state.cards.map((entry) =>
+          entry.id === cardId ? { ...entry, inputs } : entry,
+        ),
+      });
+      void syncFunctionCard(cardId);
     },
 
     refreshDependentsOf(cardId) {

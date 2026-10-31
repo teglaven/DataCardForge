@@ -1363,6 +1363,31 @@ body {
   color: var(--danger);
 }
 
+/* Cell-port column chooser: the column a single-column port reads. It is a binding, so it
+   lives in the inputs zone next to the port id — not in the parameter area. */
+.formula-card__port-column {
+  flex: 1 1 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.formula-card__port-column:hover {
+  border-color: var(--accent);
+}
+
+.formula-card__port-column:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .formula-card__port-shape {
   flex: 0 0 auto;
   font-family: var(--mono);
