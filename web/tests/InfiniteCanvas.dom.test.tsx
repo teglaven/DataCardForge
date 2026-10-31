@@ -28,7 +28,7 @@ import {
 } from '../src/ui/cardMetrics.ts';
 import { MatrixData } from '../src/core/MatrixData.ts';
 import { useWorkspace } from '../src/ui/workspaceStore.ts';
-import { CardCanvas, isInteractivePress } from '../src/ui/components/CardCanvas.tsx';
+import { CardCanvas, isInteractivePress, matrixCardDropTargetId } from '../src/ui/components/CardCanvas.tsx';
 
 // React 19 wants this set so act() works outside its test renderer.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -63,7 +63,13 @@ function stubRect(
     }) as DOMRect;
 }
 
-async function mountCanvas(): Promise<HTMLElement> {
+interface CanvasSpies {
+  onFilesDropped?: (files: File[]) => void;
+  onFilesDroppedOnCard?: (cardId: number, files: File[]) => void;
+  onPickReplaceFile?: (cardId: number) => void;
+}
+
+async function mountCanvas(spies: CanvasSpies = {}): Promise<HTMLElement> {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -71,7 +77,13 @@ async function mountCanvas(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <StrictMode>
-        <CardCanvas onNewTable={() => {}} onFilesDropped={() => {}} onContextMenu={() => {}} />
+        <CardCanvas
+          onNewTable={() => {}}
+          onFilesDropped={spies.onFilesDropped ?? (() => {})}
+          onFilesDroppedOnCard={spies.onFilesDroppedOnCard ?? (() => {})}
+          onPickReplaceFile={spies.onPickReplaceFile ?? (() => {})}
+          onContextMenu={() => {}}
+        />
       </StrictMode>,
     );
   });
@@ -492,5 +504,53 @@ describe('card context menus drive the store', () => {
     const regression = items.find((item) => item.textContent?.includes('新建回归卡'));
     expect(regression).toBeDefined();
     expect(regression!.disabled).toBe(true);
+  });
+});
+
+describe('replacing a data file from the card', () => {
+  it('classifies a drop on a data card as a replacement target', () => {
+    // The hit test is the whole difference between "replace this card's data" and "create
+    // another card"; jsdom cannot synthesise the gesture, so the rule itself is tested.
+    const card = document.createElement('div');
+    card.className = 'card card--matrix';
+    card.dataset.cardId = '7';
+    const cell = document.createElement('span');
+    card.appendChild(cell);
+    document.body.appendChild(card);
+    expect(matrixCardDropTargetId(cell)).toBe(7);
+    expect(matrixCardDropTargetId(card)).toBe(7);
+
+    const chart = document.createElement('div');
+    chart.className = 'card card--chart';
+    chart.dataset.cardId = '9';
+    document.body.appendChild(chart);
+    expect(matrixCardDropTargetId(chart)).toBeNull();
+
+    // A card without the id attribute must not be guessed at.
+    const nameless = document.createElement('div');
+    nameless.className = 'card card--matrix';
+    document.body.appendChild(nameless);
+    expect(matrixCardDropTargetId(nameless)).toBeNull();
+
+    expect(matrixCardDropTargetId(document.body)).toBeNull();
+    expect(matrixCardDropTargetId(null)).toBeNull();
+  });
+
+  it('offers a replace control on the card and asks the app for a file', async () => {
+    const picked: number[] = [];
+    const matrixCardId = store().addMatrixCard([{ name: 'a.csv', matrix: matrix([1, 2, 3]) }]);
+    store().setBounds(matrixCardId, { x: 0, y: 0, width: 640, height: 420 });
+
+    const host = await mountCanvas({ onPickReplaceFile: (id) => picked.push(id) });
+    const button = host.querySelector<HTMLButtonElement>('.matrix-card__replace');
+    expect(button).not.toBeNull();
+    expect(button!.getAttribute('aria-label')).toBeTruthy();
+
+    await act(async () => {
+      button!.click();
+    });
+    // The card identifies itself; the picker + parse stay in App (file ingestion has one
+    // owner, and a DOM test must not open a real dialog).
+    expect(picked).toEqual([matrixCardId]);
   });
 });

@@ -118,6 +118,71 @@ export default function App() {
     await ingestFiles(files);
   }, [ingestFiles]);
 
+  /**
+   * Replace the data of an existing card — the operation a data card never had.
+   *
+   * `mode: 'set'` is a drop on the card (the dropped files become its file set);
+   * `mode: 'file'` is the card's「替换文件…」control (only the shown file changes).
+   *
+   * Any parse failure aborts the whole replacement: applying half a new file set while
+   * the rest of the card keeps its old numbers would leave the user unable to tell which
+   * data is on screen (and there is no undo).
+   */
+  const replaceCardFiles = useCallback(
+    async (cardId: number, files: File[], mode: 'set' | 'file') => {
+      if (files.length === 0) return;
+      const { loaded, failures } = await parseFiles(files);
+      for (const failure of failures) {
+        showToast('error', t('dialog.loadFailedBody', { name: failure.name, error: failure.error }));
+      }
+      if (failures.length > 0 || loaded.length === 0) return;
+
+      const state = useWorkspace.getState();
+      const card = state.cards.find((entry) => entry.id === cardId);
+      if (!card || !isMatrixCard(card)) return;
+      if (mode === 'file' && loaded.length !== 1) return;
+
+      const replaced = state.replaceCardSources(
+        cardId,
+        loaded,
+        mode === 'file' ? card.activeSource : undefined,
+      );
+      if (!replaced) return;
+
+      if (loaded.length === 1) {
+        const only = loaded[0];
+        setStatus(
+          t('status.fileReplaced', {
+            name: only.name,
+            rows: only.matrix.rowCount(),
+            cols: only.matrix.columnCount(),
+          }),
+        );
+      } else {
+        setStatus(t('status.fileReplacedMany', { count: loaded.length }));
+      }
+    },
+    [showToast, t],
+  );
+
+  /** Files dropped on a data card replace that card's data (dropping on canvas still
+   * creates a card — see `ingestFiles`). */
+  const onFilesDroppedOnCard = useCallback(
+    (cardId: number, files: File[]) => void replaceCardFiles(cardId, files, 'set'),
+    [replaceCardFiles],
+  );
+
+  /** The card's replace control: pick one file and swap the file the card is showing. */
+  const onPickReplaceFile = useCallback(
+    (cardId: number) => {
+      void (async () => {
+        const files = await pickFiles(false);
+        if (files.length > 0) await replaceCardFiles(cardId, files, 'file');
+      })();
+    },
+    [replaceCardFiles],
+  );
+
   const onSaveWorkspace = useCallback(() => {
     try {
       const snapshot = toSnapshot();
@@ -288,6 +353,8 @@ export default function App() {
       <CardCanvas
         onNewTable={() => void onNewTable()}
         onFilesDropped={(files: File[]) => void ingestFiles(files)}
+        onFilesDroppedOnCard={onFilesDroppedOnCard}
+        onPickReplaceFile={onPickReplaceFile}
         onContextMenu={onCanvasContextMenu}
       />
       <StatusBar message={status} cardCount={cards.length} />

@@ -36,6 +36,9 @@ const dictionaries = {
     'backend.retry': '重试连接',
     'status.loaded': '已加载 {name}（{rows} 行 × {cols} 列）',
     'status.loadedMany': '已加载 {count} 个文件',
+    'status.fileReplaced':
+      '已替换为 {name}（{rows} 行 × {cols} 列）— 下游图表与公式卡已用新数据重算',
+    'status.fileReplacedMany': '已替换为 {count} 个文件 — 下游图表与公式卡已用新数据重算',
     'status.chartCreated': '已创建图表：{name}',
     'status.closeBlocked': '无法关闭：其他卡片依赖它，请先关闭这些卡片',
     'status.exported': '已导出 {name}（{size}）',
@@ -55,12 +58,15 @@ const dictionaries = {
     'empty.hint': '点击按钮或右键打开数据文件，也可以把 txt / csv / tsv / xlsx 拖到这里',
     'empty.button': '打开数据文件…',
     'empty.dropHint': '松开即可导入文件',
+    'empty.dropHintReplace': '松开即可用这些文件替换「{name}」的数据',
+    'empty.dropHintReplaceMultiple': '松开即可用这些文件替换这张卡的 {n} 个文件',
 
     'card.matrix': '{name} — {rows}×{cols}',
     'card.matrixMulti': '{name} 等 {count} 个文件 — {rows}×{cols}',
     'card.chart': '{type} — {name}',
     'card.unlabeled': '未标注',
     'card.close': '关闭',
+    'matrix.replaceFile': '替换文件…',
 
     'table.rowHeader': 'No.{n}',
     'table.readOnly': '只读',
@@ -328,6 +334,9 @@ const dictionaries = {
     'backend.retry': 'Retry connection',
     'status.loaded': 'Loaded {name} ({rows} rows × {cols} cols)',
     'status.loadedMany': 'Loaded {count} files',
+    'status.fileReplaced':
+      'Replaced with {name} ({rows} rows × {cols} cols) — dependent charts and cards now run on the new data',
+    'status.fileReplacedMany': 'Replaced with {count} files — dependent charts and cards now run on the new data',
     'status.chartCreated': 'Created chart: {name}',
     'status.closeBlocked': 'Cannot close: other cards depend on it. Close them first.',
     'status.exported': 'Exported {name} ({size})',
@@ -347,12 +356,15 @@ const dictionaries = {
     'empty.hint': 'Open data files with the button or right-click, or drop txt / csv / tsv / xlsx here',
     'empty.button': 'Open Data Files…',
     'empty.dropHint': 'Release to import the files',
+    'empty.dropHintReplace': 'Release to replace the data of “{name}” with these files',
+    'empty.dropHintReplaceMultiple': 'Release to replace this card’s {n} files with these',
 
     'card.matrix': '{name} — {rows}×{cols}',
     'card.matrixMulti': '{name} and {count} more files — {rows}×{cols}',
     'card.chart': '{type} — {name}',
     'card.unlabeled': 'Unlabeled',
     'card.close': 'Close',
+    'matrix.replaceFile': 'Replace file…',
 
     'table.rowHeader': 'No.{n}',
     'table.readOnly': 'read-only',

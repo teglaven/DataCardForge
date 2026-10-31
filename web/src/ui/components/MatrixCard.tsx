@@ -39,6 +39,14 @@ interface MatrixCardProps {
   /** Regression card from this column and the next one (two cell ports). */
   onOpenRegression: (column: number) => void;
   onActivate: () => void;
+  /** True while a file is being dragged over this card (it would replace its data). */
+  dropTarget?: boolean;
+  /**
+   * Ask the app to pick ONE file and replace the active one — the control the card was
+   * missing: before it existed, a data card's file could never change, which is why a
+   * saved workspace could not be reused as a template for a new day's data.
+   */
+  onReplaceFile: () => void;
   /** Columns of the displayed matrix that feed the currently selected chart. */
   sourceColumns?: readonly number[];
 }
@@ -54,6 +62,8 @@ export function MatrixCard({
   onOpenFormula,
   onOpenRegression,
   onActivate,
+  dropTarget = false,
+  onReplaceFile,
   sourceColumns = [],
 }: MatrixCardProps) {
   const { t } = useTranslator();
@@ -90,6 +100,7 @@ export function MatrixCard({
       title={title}
       badge={badge}
       active={active}
+      dropTarget={dropTarget}
       closeBlocked={closeBlocked}
       closeLabel={t('card.close')}
       onActivate={onActivate}
@@ -98,61 +109,92 @@ export function MatrixCard({
       onBounds={(bounds) => setBounds(card.id, bounds)}
     >
       <div className="matrix-card">
-        {card.sources.length > 1 ? (
-          <select
-            className="matrix-card__selector card__control"
-            value={card.activeSource}
-            onChange={(event) => setActiveSource(card.id, Number(event.target.value))}
-            title={activeSourceName}
-            aria-label={activeSourceName}
-          >
-            {card.sources.map((source, index) => (
-              <option key={source.name} value={index}>
-                {source.name}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <div className="matrix-card__single-file" title={activeSourceName}>
-            {activeSourceName}
-          </div>
-        )}
-
-        {/* Lock / unlock. Without this the whole cell-editing path was unreachable: every
-            matrix card was created read-only and nothing in the UI could change that. */}
-        <button
-          type="button"
-          className={`matrix-card__lock card__control${
-            card.readOnly ? '' : ' matrix-card__lock--open'
-          }`}
-          title={card.readOnly ? t('table.editable') : t('table.readOnly')}
-          aria-label={card.readOnly ? t('table.editable') : t('table.readOnly')}
-          aria-pressed={!card.readOnly}
-          onClick={() => setEditable(card.id, card.readOnly)}
-        >
-          {/* Inline SVG, not an emoji: a font without the glyph would render a blank box. */}
-          {card.readOnly ? (
-            <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M4.5 7V5a3.5 3.5 0 1 1 7 0v2"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-              />
-              <rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" />
-            </svg>
+        {/* File row: which file is shown, the one control that changes it, and the lock.
+            Before the replace control existed the file was frozen for the card's lifetime. */}
+        <div className="matrix-card__bar">
+          {card.sources.length > 1 ? (
+            <select
+              className="matrix-card__selector card__control"
+              value={card.activeSource}
+              onChange={(event) => setActiveSource(card.id, Number(event.target.value))}
+              title={activeSourceName}
+              aria-label={activeSourceName}
+            >
+              {card.sources.map((source, index) => (
+                <option key={source.name} value={index}>
+                  {source.name}
+                </option>
+              ))}
+            </select>
           ) : (
+            <div className="matrix-card__single-file" title={activeSourceName}>
+              {activeSourceName}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="matrix-card__replace card__control"
+            title={t('matrix.replaceFile')}
+            aria-label={t('matrix.replaceFile')}
+            onClick={() => onReplaceFile()}
+          >
+            {/* Inline SVG, not an emoji: a font without the glyph would render a blank box. */}
             <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
               <path
-                d="M11.5 1.9l2.6 2.6L5.6 13H3v-2.6z"
+                d="M3.2 6.6a5 5 0 0 1 8.7-2.1M12.8 9.4a5 5 0 0 1-8.7 2.1"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <path
+                d="M12.6 1.6v3h-3M3.4 14.4v-3h3"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
                 strokeLinejoin="round"
               />
             </svg>
-          )}
-        </button>
+          </button>
+
+          {/* Lock / unlock. Without this the whole cell-editing path was unreachable: every
+              matrix card was created read-only and nothing in the UI could change that. */}
+          <button
+            type="button"
+            className={`matrix-card__lock card__control${
+              card.readOnly ? '' : ' matrix-card__lock--open'
+            }`}
+            title={card.readOnly ? t('table.editable') : t('table.readOnly')}
+            aria-label={card.readOnly ? t('table.editable') : t('table.readOnly')}
+            aria-pressed={!card.readOnly}
+            onClick={() => setEditable(card.id, card.readOnly)}
+          >
+            {/* Inline SVG, not an emoji: a font without the glyph would render a blank box. */}
+            {card.readOnly ? (
+              <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M4.5 7V5a3.5 3.5 0 1 1 7 0v2"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M11.5 1.9l2.6 2.6L5.6 13H3v-2.6z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </button>
+        </div>
 
         {matrix && cols > 0 ? (
           <VirtualTable

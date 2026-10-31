@@ -39,6 +39,7 @@ import {
   type ChartCardModel,
   type FunctionCardModel,
   type MatrixCardModel,
+  type MatrixEntry,
   type MatrixSnapshot,
   type FileIdentity,
   type NodeStatus,
@@ -259,6 +260,23 @@ interface WorkspaceState {
   addMatrixCard: (
     entries: Array<{ name: string; matrix: MatrixData; identity?: FileIdentity }>,
   ) => number;
+  /**
+   * Replace a data card's file(s) without touching the card itself.
+   *
+   * `index` replaces ONE source slot — the card's「替换文件…」control, which always acts on
+   * the active file. Omitted, the entries become the card's whole file set (a drop).
+   *
+   * This is a DATA change, not a view change (`setActiveSource` is the view change, and the
+   * two must not be conflated). Charts are views and follow the new numbers. Function cards
+   * are frozen to explicit matrices (v2), so their input is rewritten to the corresponding
+   * new matrix of the same card in the same step: "this table now holds these numbers" is
+   * exactly what the user asked for, and the cell-edit cascade (PATCH → recompute) is the
+   * precedent — the column contract still stops a shape drift with a visible error.
+   *
+   * Returns false for a non-data card or invalid arguments; a partial parse must be
+   * aborted by the caller, never applied here.
+   */
+  replaceCardSources: (cardId: number, entries: MatrixEntry[], index?: number) => boolean;
   addChartCard: (matrixCardId: number, columnIndex: number, chartType?: ChartTypeId) => number | null;
   removeCard: (id: number) => boolean;
   closeAllCards: () => void;
@@ -402,6 +420,14 @@ let toastCounter = 0;
 /** Singleton transport client + local→server matrix id map (B-plan registration). */
 const backendClient = new BackendClient();
 const backendMatrixIds = new Map<number, number>();
+/**
+ * Uploads already on their way, by local matrix id.
+ *
+ * Two paths legitimately race: a file load registers its parse, and a reconnect registers
+ * everything still missing. Without this map both would POST the same table and the loser's
+ * server copy would leak — the same coalescing `syncingCards` does for function nodes.
+ */
+const matrixUploads = new Map<number, Promise<number | null>>();
 
 /** Highest backend event `seq` already applied; the long-poll resumes after it. */
 let lastEventSeq = 0;
@@ -554,6 +580,35 @@ async function syncFunctionCard(cardId: number): Promise<void> {
     syncingCards.delete(cardId);
     if (resyncRequested.delete(cardId)) void syncFunctionCard(cardId);
   }
+}
+
+/**
+ * Wait until no card push is in flight or requested — i.e. the server's node bindings have
+ * caught up with the store.
+ *
+ * Needed before releasing a server-side matrix: the backend refuses `DELETE /api/matrices`
+ * while a node still reads it (`hasDependents`, HTTP 409), and a 409 is a failed request
+ * the browser logs as a console error. Awaiting `syncFunctionCard` is not enough on its own
+ * because a coalesced call returns immediately and schedules one more push. Bounded, so a
+ * wedged backend cannot hang a caller; on timeout the caller keeps the server copy instead.
+ */
+async function waitForCardPushes(timeoutMs = 5000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (syncingCards.size === 0 && resyncRequested.size === 0) return;
+    await sleep(40);
+  }
+}
+
+/**
+ * Release a server-side matrix copy, ignoring a refusal.
+ *
+ * The backend refuses the delete while a node still reads the matrix; by the time this is
+ * called the readers have been re-bound, so a refusal can only come from a failed PATCH.
+ * The copy then leaks (invisible), instead of retrying behind the user's back.
+ */
+function releaseServerMatrix(serverId: number): void {
+  void backendClient.deleteMatrix(serverId);
 }
 
 async function pushFunctionCard(cardId: number): Promise<void> {
@@ -914,6 +969,29 @@ function ownerCardOfMatrix(cards: CardModel[], matrixId: number): CardModel | nu
 }
 
 /**
+ * Does anything in the workspace still read this matrix?
+ *
+ * The one rule behind every "is it safe to drop this parse" decision: a source slot, a
+ * chart column, a function card's frozen input, or a function card's display cache. The
+ * identity cache is deliberately *not* a reference — it is a parse accelerator, and keeping
+ * a matrix alive for it would leak one parse per replaced file.
+ */
+function isMatrixReferenced(cards: CardModel[], matrixId: number): boolean {
+  for (const card of cards) {
+    if (isMatrixCard(card)) {
+      if (card.sources.some((source) => source.matrixId === matrixId)) return true;
+    } else if (isChartCard(card)) {
+      if (card.config.sources.some((source) => source.matrixId === matrixId)) return true;
+      if (card.config.xAxisSource?.matrixId === matrixId) return true;
+    } else if (isFormulaCard(card)) {
+      if (card.displayMatrixId === matrixId) return true;
+      if (card.inputs.some((input) => input.target.matrixId === matrixId)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Rebuild a chart card's `inputs[]` from its display config.
  *
  * Charts are the one kind whose dependency *edges* are per-column, and the column dock can
@@ -1010,8 +1088,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
    * express, since its `SourceRef` captured a matrix id.
    *
    * A line keeps its previous data when the new file no longer has that column.
+   *
+   * `retiredMatrixIds` covers file *replacement*: the old matrix is no longer one of the
+   * card's slots, but a chart may still hold it, and that chart must follow the new file
+   * exactly like a switch does. Only this card's dependents are visited, so a matrix that
+   * is also a source of another card is never re-pointed behind that card's back.
    */
-  const refreshDependentsOf = (ownerCardId: number): void => {
+  const refreshDependentsOf = (
+    ownerCardId: number,
+    retiredMatrixIds: readonly number[] = [],
+  ): void => {
     const state = get();
     const owner = state.cards.find((c) => c.id === ownerCardId);
     if (!owner) return;
@@ -1027,6 +1113,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     if (isMatrixCard(owner)) {
       activeMatrixId = owner.sources[owner.activeSource]?.matrixId;
       matrixIds = new Set(owner.sources.map((source) => source.matrixId));
+      for (const retired of retiredMatrixIds) matrixIds.add(retired);
     } else if (isFormulaCard(owner)) {
       activeMatrixId = owner.displayMatrixId;
       matrixIds = new Set([owner.displayMatrixId]);
@@ -1122,6 +1209,175 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       return matrix ? card.displayMatrixId : null;
     }
     return null;
+  };
+
+  /**
+   * Resolve local matrix ids for freshly parsed files.
+   *
+   * The byte-identity cache is reused rather than re-parsed (the same bytes opened twice
+   * share one matrix), but sharing is always *read-only*: a later replacement hands the
+   * changed card a fresh id instead of writing through the alias. That is what makes
+   * `replaceCardSources` safe with two cards that happen to hold the same file.
+   */
+  const allocateMatrices = (
+    entries: MatrixEntry[],
+  ): {
+    matrices: Map<number, MatrixData>;
+    matrixIdByIdentity: Map<string, number>;
+    nextMatrixId: number;
+    ids: number[];
+  } => {
+    const state = get();
+    const matrices = new Map(state.matrices);
+    const matrixIdByIdentity = new Map(state.matrixIdByIdentity);
+    let nextMatrixId = state.nextMatrixId;
+    const ids: number[] = [];
+
+    for (const entry of entries) {
+      const key = entry.identity ? identityKey(entry.identity) : null;
+      const existing = key !== null ? matrixIdByIdentity.get(key) : undefined;
+      if (existing !== undefined && matrices.has(existing)) {
+        ids.push(existing);
+        continue;
+      }
+      const matrixId = nextMatrixId++;
+      matrices.set(matrixId, entry.matrix);
+      if (key !== null) matrixIdByIdentity.set(key, matrixId);
+      ids.push(matrixId);
+    }
+
+    return { matrices, matrixIdByIdentity, nextMatrixId, ids };
+  };
+
+  /**
+   * Upload one local table to the backend, coalescing concurrent attempts.
+   *
+   * Fire-and-forget like the original inline block: a file load must never wait on the
+   * network, and a failure flips the banner (`registerMatrixWithBackend` does that). The
+   * workspace generation is captured so an upload that started before a `reset` /
+   * `loadSnapshot` cannot bind its server id to an id that now names different bytes —
+   * the server copy is released instead.
+   */
+  const registerUploadedMatrix = (
+    matrixId: number,
+    name: string,
+    matrix: MatrixData,
+  ): Promise<number | null> => {
+    const inFlight = matrixUploads.get(matrixId);
+    if (inFlight) return inFlight;
+
+    const epoch = workspaceEpoch;
+    const columns = matrix.columns().map((column) => ({
+      posName: column.posName,
+      annotation: column.annotation,
+      data: column.data,
+    }));
+    const task = get()
+      .registerMatrixWithBackend(name, columns)
+      .then((serverId) => {
+        if (serverId === null) return null;
+        if (epoch !== workspaceEpoch || !get().matrices.has(matrixId)) {
+          // The workspace was replaced while this upload ran: the local id now means
+          // something else (or nothing), so the server copy has no reader.
+          void backendClient.deleteMatrix(serverId);
+          return null;
+        }
+        backendMatrixIds.set(matrixId, serverId);
+        // A function card created while this table was still uploading has been waiting
+        // for exactly this id; nothing else retries its binding.
+        syncUnboundReadersOfMatrix(matrixId);
+        return serverId;
+      })
+      .finally(() => {
+        matrixUploads.delete(matrixId);
+      });
+    matrixUploads.set(matrixId, task);
+    return task;
+  };
+
+  /**
+   * Drop a local matrix once nothing reads it, including its server-side copy.
+   *
+   * Called after every operation that can orphan a parse (file replacement, a function
+   * card applying a re-point). The guard is `isMatrixReferenced`, so a matrix that is
+   * still a source slot, a chart column, or a frozen function input survives — including
+   * the shared-parse case, where another card still points at the same id.
+   */
+  const pruneMatrixIfUnreferenced = (matrixId: number): void => {
+    const state = get();
+    if (!state.matrices.has(matrixId)) return;
+    if (isMatrixReferenced(state.cards, matrixId)) return;
+
+    const matrices = new Map(state.matrices);
+    matrices.delete(matrixId);
+    const matrixIdByIdentity = new Map(state.matrixIdByIdentity);
+    for (const [key, id] of matrixIdByIdentity) {
+      if (id === matrixId) matrixIdByIdentity.delete(key);
+    }
+    // Release the server-side copy too, otherwise the backend grows without bound as a
+    // template is re-filled with fresh data. The id is dropped first so a later reconnect
+    // cannot hand out an id the server no longer has.
+    const backendId = backendMatrixIds.get(matrixId);
+    if (backendId !== undefined) {
+      backendMatrixIds.delete(matrixId);
+      void backendClient.deleteMatrix(backendId);
+    }
+    set({ matrices, matrixIdByIdentity });
+  };
+
+  /**
+   * Re-point every function card that reads one of `oldToNew`'s keys.
+   *
+   * This is the *data* half of a file replacement: the card's input is frozen to an
+   * explicit matrix (v2), so it must be rewritten when that matrix's bytes are replaced —
+   * but it is rewritten to the corresponding new matrix of the *same card*, never to
+   * "whatever it shows now". Returns the affected card ids so the caller can PATCH them
+   * once the new matrices have server ids.
+   */
+  const repointReadersOf = (ownerCardId: number, oldToNew: Map<number, number>): number[] => {
+    if (oldToNew.size === 0) return [];
+    const state = get();
+    const affected: number[] = [];
+    const cards = state.cards.map((card) => {
+      if (!isFormulaCard(card)) return card;
+      let changed = false;
+      const inputs = card.inputs.map((input) => {
+        if (input.target.cardId !== ownerCardId) return input;
+        const nextMatrixId = oldToNew.get(input.target.matrixId);
+        if (nextMatrixId === undefined) return input;
+        changed = true;
+        return { ...input, target: { ...input.target, matrixId: nextMatrixId } };
+      });
+      if (!changed) return card;
+      affected.push(card.id);
+      return { ...card, inputs };
+    });
+    if (affected.length > 0) set({ cards });
+    return affected;
+  };
+
+  /**
+   * Register every uploaded table the server has not seen yet, then re-push function cards.
+   *
+   * Nothing else retries a registration that failed while the backend was down, so without
+   * this a table loaded (or a file replaced) during an outage would leave its function
+   * cards bound to the old numbers forever — with no banner once the connection is back.
+   */
+  const ensureUploadedMatricesRegistered = async (): Promise<void> => {
+    const derivedIds = new Set(
+      get()
+        .cards.filter(isFormulaCard)
+        .map((card) => card.displayMatrixId),
+    );
+    const ordered = [...get().matrices.entries()]
+      .filter(([localId]) => !derivedIds.has(localId) && !backendMatrixIds.has(localId))
+      .sort((a, b) => a[0] - b[0]);
+    for (const [localId, matrix] of ordered) {
+      await registerUploadedMatrix(localId, `#${localId}`, matrix);
+    }
+    for (const card of get().cards) {
+      if (isFormulaCard(card)) void syncFunctionCard(card.id);
+    }
   };
 
   /**
@@ -1270,42 +1526,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // Reuse an already-parsed matrix only when the *bytes* match; allocate a new id
       // otherwise. An entry without an identity (a programmatically built table, or a
       // restored snapshot) is never shared — it gets its own matrix.
-      const matrices = new Map(state.matrices);
-      const matrixIdByIdentity = new Map(state.matrixIdByIdentity);
-      let nextMatrixId = state.nextMatrixId;
-      const sources: Array<{ name: string; matrixId: number }> = [];
-
-      for (const entry of entries) {
-        const key = entry.identity ? identityKey(entry.identity) : null;
-        if (key !== null) {
-          const existing = matrixIdByIdentity.get(key);
-          if (existing !== undefined && matrices.has(existing)) {
-            sources.push({ name: entry.name, matrixId: existing });
-            continue;
-          }
-        }
-        const matrixId = nextMatrixId++;
-        matrices.set(matrixId, entry.matrix);
-        if (key !== null) matrixIdByIdentity.set(key, matrixId);
-        sources.push({ name: entry.name, matrixId });
-
-        // Register server-side too (B-plan: the backend holds the authoritative copy).
-        // Fire-and-forget: file loading must never wait on the network; a failed
-        // registration flips `backend` to offline and the banner appears.
-        void (async () => {
-          const columns = entry.matrix.columns().map((c) => ({
-            posName: c.posName,
-            annotation: c.annotation,
-            data: c.data,
-          }));
-          const id = await get().registerMatrixWithBackend(entry.name, columns);
-          if (id !== null) {
-            backendMatrixIds.set(matrixId, id);
-            // A function card created while this table was still uploading has been waiting
-            // for exactly this id; nothing else retries its binding.
-            syncUnboundReadersOfMatrix(matrixId);
-          }
-        })();
+      const allocated = allocateMatrices(entries);
+      const sources = allocated.ids.map((matrixId, index) => ({
+        name: entries[index].name,
+        matrixId,
+      }));
+      // Register server-side too (B-plan: the backend holds the authoritative copy).
+      // Fire-and-forget: file loading must never wait on the network; a failed
+      // registration flips `backend` to offline and the banner appears.
+      for (let index = 0; index < entries.length; ++index) {
+        void registerUploadedMatrix(allocated.ids[index], entries[index].name, entries[index].matrix);
       }
 
       // Cascade placement, so stacked cards do not land exactly on top of each other.
@@ -1336,14 +1566,147 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       set({
         cards: [...state.cards, card],
-        matrices,
-        matrixIdByIdentity,
+        matrices: allocated.matrices,
+        matrixIdByIdentity: allocated.matrixIdByIdentity,
         nextCardId: cardId + 1,
-        nextMatrixId,
+        nextMatrixId: allocated.nextMatrixId,
         selectedId: cardId,
       });
       revealCard({ ...matrixSpot, ...matrixSize });
       return cardId;
+    },
+
+    /**
+     * A data card's file change — the operation the card never had.
+     *
+     * Deliberately NOT "mutate the matrix in place": two cards may share one parse
+     * (`allocateMatrices`), and writing through that alias would change the other card's
+     * numbers. Every replacement therefore allocates a new local id and moves this card's
+     * own references onto it; the old matrix is released only once nothing reads it.
+     */
+    replaceCardSources(cardId, entries, index) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || !isMatrixCard(card)) return false;
+      if (entries.length === 0) return false;
+      if (index !== undefined) {
+        // The UI's「替换文件…」control always acts on the file the card is showing; a
+        // replacement of a hidden slot would change numbers the user cannot see.
+        if (index !== card.activeSource || index < 0 || index >= card.sources.length) {
+          return false;
+        }
+        if (entries.length !== 1) return false;
+      }
+
+      const allocated = allocateMatrices(entries);
+      const previous = card.sources;
+      const nextSources =
+        index === undefined
+          ? entries.map((entry, entryIndex) => ({
+              name: entry.name,
+              matrixId: allocated.ids[entryIndex],
+            }))
+          : previous.map((source, sourceIndex) =>
+              sourceIndex === index
+                ? { name: entries[0].name, matrixId: allocated.ids[0] }
+                : source,
+            );
+
+      // Old → new: which matrix each formula card's frozen input must move to. The button
+      // path replaces one slot, so the pairing is explicit; a drop replaces the whole set,
+      // so it pairs by slot order and sends any unpaired old slot to the new first file
+      // (the card now holds this set of files and nothing else).
+      const oldToNew = new Map<number, number>();
+      if (index === undefined) {
+        const activeId = allocated.ids[0];
+        previous.forEach((source, sourceIndex) => {
+          const target = allocated.ids[sourceIndex] ?? activeId;
+          if (!oldToNew.has(source.matrixId) && source.matrixId !== target) {
+            oldToNew.set(source.matrixId, target);
+          }
+        });
+      } else if (previous[index].matrixId !== allocated.ids[0]) {
+        oldToNew.set(previous[index].matrixId, allocated.ids[0]);
+      }
+
+      // Names stay unique inside one card, otherwise the file selector shows two identical
+      // entries and the user cannot tell which file they are looking at.
+      const taken = new Set<string>();
+      const deduped = nextSources.map((source) => {
+        let name = source.name;
+        if (taken.has(name)) {
+          const dot = source.name.lastIndexOf('.');
+          let counter = 2;
+          while (taken.has(name)) {
+            name =
+              dot > 0
+                ? `${source.name.slice(0, dot)} (${counter})${source.name.slice(dot)}`
+                : `${source.name} (${counter})`;
+            counter += 1;
+          }
+        }
+        taken.add(name);
+        return { ...source, name };
+      });
+
+      set({
+        cards: state.cards.map((entry) =>
+          entry.id === cardId && isMatrixCard(entry)
+            ? {
+                ...entry,
+                sources: deduped,
+                activeSource: index === undefined ? 0 : index,
+              }
+            : entry,
+        ),
+        matrices: allocated.matrices,
+        matrixIdByIdentity: allocated.matrixIdByIdentity,
+        nextMatrixId: allocated.nextMatrixId,
+        // A pending offer names a matrix that no longer means what it used to; the
+        // replacement is the newer intent.
+        repointOffers: state.repointOffers.filter(
+          (offer) =>
+            !oldToNew.has(offer.fromMatrixId) && !oldToNew.has(offer.toMatrixId),
+        ),
+      });
+
+      // Charts are views: they follow the file the card now shows.
+      refreshDependentsOf(cardId, [...oldToNew.keys()]);
+      // Function cards are frozen references: re-point the ones that read the replaced
+      // matrix, then push them once the new content has a server-side id.
+      const readers = repointReadersOf(cardId, oldToNew);
+      const uploads: Array<Promise<number | null>> = [];
+      for (let entryIndex = 0; entryIndex < entries.length; ++entryIndex) {
+        const matrixId = allocated.ids[entryIndex];
+        if (backendMatrixIds.has(matrixId)) continue;
+        uploads.push(registerUploadedMatrix(matrixId, entries[entryIndex].name, entries[entryIndex].matrix));
+      }
+      // The replaced matrices are already unreferenced *locally*, but their server copies
+      // are still bound by the function nodes until the re-point PATCHes land — deleting
+      // them now would be refused (409) and leave the copy behind anyway. So the local
+      // parse goes immediately, and the server copy goes once the readers have re-bound.
+      const retiredServerIds: number[] = [];
+      for (const retiredId of oldToNew.keys()) {
+        const serverId = backendMatrixIds.get(retiredId);
+        if (serverId !== undefined) {
+          backendMatrixIds.delete(retiredId);
+          retiredServerIds.push(serverId);
+        }
+        // Nothing reads the replaced matrices any more unless a card elsewhere shared the
+        // parse or a function card was left alone; in that case they stay alive.
+        pruneMatrixIfUnreferenced(retiredId);
+      }
+
+      const syncReaders = async () => {
+        await Promise.all(readers.map((readerId) => syncFunctionCard(readerId)));
+        // The re-point must be ON THE SERVER before the old copy is released, otherwise
+        // the backend refuses the delete (409) and the copy stays behind anyway.
+        await waitForCardPushes();
+        for (const serverId of retiredServerIds) releaseServerMatrix(serverId);
+      };
+      if (uploads.length === 0) void syncReaders();
+      else void Promise.all(uploads).then(() => syncReaders());
+      return true;
     },
 
     addChartCard(ownerCardId, columnIndex, chartType) {
@@ -1519,7 +1882,38 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     },
 
     closeAllCards() {
-      set((state) => ({
+      const state = get();
+      // The backend has no way to notice that the user closed a card, so "close all" has to
+      // say so: release every node, then every uploaded table. Skipping this left the whole
+      // compute graph behind, and a reopened workspace inherited nodes that still read the
+      // old matrices — those leaks also refuse the `DELETE /api/matrices` a file
+      // replacement needs. Nodes go first and are awaited: a matrix cannot be deleted while
+      // one of them reads it.
+      const nodeIds: number[] = [];
+      const serverMatrixIds: number[] = [];
+      for (const card of state.cards) {
+        if (isFormulaCard(card)) {
+          const nodeId = card.node?.nodeId ?? -1;
+          if (nodeId > 0) nodeIds.push(nodeId);
+        } else if (isMatrixCard(card)) {
+          for (const source of card.sources) {
+            const serverId = backendMatrixIds.get(source.matrixId);
+            if (serverId !== undefined) {
+              backendMatrixIds.delete(source.matrixId);
+              serverMatrixIds.push(serverId);
+            }
+          }
+        }
+      }
+      matrixUploads.clear();
+      void (async () => {
+        // A push that started before the close may still create a node; it deletes its own
+        // node when it notices the card is gone, so wait for it before releasing matrices.
+        await waitForCardPushes();
+        for (const nodeId of nodeIds) await backendClient.deleteNode(nodeId);
+        for (const serverId of serverMatrixIds) releaseServerMatrix(serverId);
+      })();
+      set({
         cards: [],
         matrices: new Map(),
         matrixIdByIdentity: new Map(),
@@ -1527,7 +1921,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         blockedCardId: null,
         blockNonce: state.blockNonce + 1,
         dependencies: new DependencyGraph(),
-      }));
+        repointOffers: [],
+      });
     },
 
     setBounds(id, bounds) {
@@ -2023,7 +2418,18 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         repointOffers: state.repointOffers.filter((entry) => entry.cardId !== cardId),
       });
       // One PATCH: the node is told about its new input, exactly like an explicit re-wire.
-      void syncFunctionCard(cardId);
+      // The old matrix is released only after that PATCH settles — the server refuses a
+      // DELETE while the node still reads it (and the browser logs the 409).
+      void (async () => {
+        try {
+          await syncFunctionCard(cardId);
+        } catch {
+          // The banner already carries an unreachable backend; the local prune below is
+          // still correct because nothing in the workspace reads the old matrix any more.
+        }
+        await waitForCardPushes();
+        pruneMatrixIfUnreferenced(offer.fromMatrixId);
+      })();
     },
 
     applyRepointsForOwner(ownerCardId) {
@@ -2045,7 +2451,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         cards,
         repointOffers: state.repointOffers.filter((offer) => offer.ownerCardId !== ownerCardId),
       });
-      for (const cardId of byCard.keys()) void syncFunctionCard(cardId);
+      void (async () => {
+        try {
+          await Promise.all([...byCard.keys()].map((cardId) => syncFunctionCard(cardId)));
+        } catch {
+          // Same as above: freeing the old parses does not depend on the network.
+        }
+        await waitForCardPushes();
+        for (const offer of targets) pruneMatrixIfUnreferenced(offer.fromMatrixId);
+      })();
     },
 
     dismissRepoint(cardId) {
@@ -2265,6 +2679,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         // The event stream is the only way results reach the browser; re-arm it whenever we
         // (re)connect so a reconnect after an outage resumes pushing node states.
         get().startBackendEventLoop();
+        // Tables loaded (or files replaced) while the backend was down have no server id,
+        // and nothing else retries them: upload them now and re-push the function cards.
+        void ensureUploadedMatricesRegistered();
       } else if (info.error?.startsWith('protocol-mismatch')) {
         stopEventLoop();
         set({ backend: { state: 'mismatch', error: info.error } });
@@ -2435,13 +2852,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           .sort((a, b) => a[0] - b[0]);
         for (const [localId, matrix] of ordered) {
           if (backendMatrixIds.has(localId)) continue;
-          const columns = matrix.columns().map((col) => ({
-            posName: col.posName,
-            annotation: col.annotation,
-            data: col.data,
-          }));
-          const serverId = await get().registerMatrixWithBackend(`#${localId}`, columns);
-          if (serverId !== null) backendMatrixIds.set(localId, serverId);
+          await registerUploadedMatrix(localId, `#${localId}`, matrix);
         }
         for (const card of restored) {
           if (isFormulaCard(card)) void syncFunctionCard(card.id);
@@ -2457,6 +2868,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // that inherits the same id.
       syncingCards.clear();
       resyncRequested.clear();
+      // Uploads started for the previous workspace must not bind their server ids to the
+      // new workspace's local ids; `registerUploadedMatrix` releases the copy on settle.
+      matrixUploads.clear();
       workspaceEpoch += 1;
       lastEventSeq = 0;
       stopEventLoop();

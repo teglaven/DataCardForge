@@ -436,6 +436,20 @@ body {
   gap: 3px;
 }
 
+/* File row: the file the card shows, the control that replaces it, and the lock. */
+.matrix-card__bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.matrix-card__bar .matrix-card__selector,
+.matrix-card__bar .matrix-card__single-file {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .matrix-card__selector,
 .matrix-card__single-file {
   flex: 0 0 auto;
@@ -446,6 +460,37 @@ body {
   background: var(--surface-alt);
   border: 1px solid var(--border);
   border-radius: 5px;
+}
+
+/* Replace the active file. This is the control the card was missing: without it a data
+   card's file was frozen for the card's lifetime, so a saved workspace could not be
+   reused as a template for a new dataset. */
+.matrix-card__replace {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.matrix-card__replace:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* A file is dragged over a data card: dropping it replaces that card's data.
+   Dashed + halo, not a solid line: an active card already draws a solid accent border,
+   and a solid target outline on top of it is invisible. */
+.card--drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -3px;
+  box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-active);
 }
 
 /* Lock / unlock state for the active file. Without a control for it the whole

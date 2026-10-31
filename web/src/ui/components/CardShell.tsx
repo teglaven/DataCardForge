@@ -22,6 +22,11 @@ interface CardShellProps {
   active: boolean;
   /** Extra classes appended to the card root (e.g. `card--chart`). */
   variant: string;
+  /**
+   * A file is being dragged over this card, which would *replace* its data (only data
+   * cards accept drops). The canvas owns the hit test; the shell only paints the state.
+   */
+  dropTarget?: boolean;
   onActivate: () => void;
   onClose: () => void;
   onCloseBlocked: () => void;
@@ -38,6 +43,7 @@ export function CardShell({
   badge,
   active,
   variant,
+  dropTarget = false,
   onActivate,
   onClose,
   onCloseBlocked,
@@ -66,7 +72,9 @@ export function CardShell({
 
   return (
     <Rnd
-      className={`card ${variant}${active ? ' card--active' : ''}`}
+      className={`card ${variant}${active ? ' card--active' : ''}${
+        dropTarget ? ' card--drop-target' : ''
+      }`}
       data-card-id={card.id}
       style={{ zIndex: card.z }}
       size={{ width: card.width, height: card.height }}

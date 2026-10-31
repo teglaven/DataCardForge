@@ -914,7 +914,126 @@ try {
   await closeLast('.card--formula');
   await page.waitForTimeout(400);
 
-  // ── 12. no runtime errors ───────────────────────────────────────────
+  // ── 12. a data card can change its file (workspace template reuse) ───
+  // The card used to freeze the file it was created from, so a saved workspace was a
+  // snapshot rather than a template: there was no way to point it at a new day's data.
+  // This drives the whole journey — pipeline, replace, save, reopen, replace again — and
+  // asserts that the *function card* re-ran (the chart reads its output, two hops away).
+  await clickMenu(page, 0, /Close All Cards|关闭全部卡片/);
+  await page.waitForSelector('.empty-state', { timeout: 15_000 });
+
+  await dropFilesOnCanvas(page, [sampleA]);
+  await page.waitForSelector('.card--matrix', { timeout: 25_000 });
+  await page.waitForTimeout(600);
+
+  await page.locator('.card--matrix .vtable__colhead').first().click({ button: 'right' });
+  await page.waitForSelector('.context-menu', { timeout: 5_000 });
+  await page
+    .locator('.context-menu__item')
+    .filter({ hasText: /New Formula Card|新建公式卡/ })
+    .last()
+    .click();
+  await page.waitForSelector('.card--formula', { timeout: 15_000 });
+  await page.waitForTimeout(1_800);
+
+  await page.locator('.card--formula .vtable__colhead').first().click({ button: 'right' });
+  await page.waitForSelector('.context-menu', { timeout: 5_000 });
+  await page
+    .locator('.context-menu__item')
+    .filter({ hasText: /^Line$|^折线图$/ })
+    .first()
+    .click();
+  await page.waitForSelector('.card--chart svg', { timeout: 25_000 });
+  await page.waitForTimeout(1_000);
+
+  const pipelineY = await readFirstSeriesPoint(page);
+  check(
+    'replace test: the data card → formula card → chart pipeline is in place',
+    pipelineY !== null,
+    String(pipelineY),
+  );
+
+  // The view follows each new card, which leaves the data card off-screen; frame the plane
+  // again so the control under test is actually reachable by a real click.
+  await clickMenu(page, 1, /Reset View|回到卡片/);
+  await page.waitForTimeout(600);
+
+  const cardCountBeforeReplace = await page.locator('.card--matrix').count();
+  const replaceChooser = page.waitForEvent('filechooser', { timeout: 20_000 }).catch(() => null);
+  await page.locator('.matrix-card__replace').first().click();
+  const replaceChooserResult = await replaceChooser;
+  check('the card opens a file picker from its replace control', replaceChooserResult !== null);
+  if (replaceChooserResult) await replaceChooserResult.setFiles(sampleB);
+  const replacedY = await waitForSeriesChange(page, pipelineY, 20_000);
+
+  check(
+    'replacing a file does not create another card',
+    (await page.locator('.card--matrix').count()) === cardCountBeforeReplace,
+    `${cardCountBeforeReplace} -> ${await page.locator('.card--matrix').count()}`,
+  );
+  const shownFile = await page.evaluate(() => {
+    const single = document.querySelector('.matrix-card__single-file');
+    if (single) return single.textContent;
+    const select = document.querySelector('.matrix-card__selector');
+    return select && select.options[select.selectedIndex]
+      ? select.options[select.selectedIndex].text
+      : '';
+  });
+  check('the card shows the new file', /2\.txt/.test(shownFile ?? ''), String(shownFile));
+  check(
+    'the dependent function card and chart follow the new file automatically',
+    pipelineY !== null && replacedY !== null && replacedY !== pipelineY,
+    `${String(pipelineY)} -> ${String(replacedY)}`,
+  );
+  const offerCount = await page.locator('.formula-card__repoint').count();
+  check(
+    'a replacement is a data change: no re-point offer appears',
+    offerCount === 0,
+    `${offerCount} offer(s)`,
+  );
+
+  // The actual template-reuse journey: save the pipeline, empty the workspace, reopen the
+  // saved file, and feed it different data again.
+  const workspacePath = await saveWorkspaceViaMenu(page, exportDir);
+  check('workspace save downloads a file', workspacePath !== null, String(workspacePath));
+
+  await clickMenu(page, 0, /Close All Cards|关闭全部卡片/);
+  await page.waitForSelector('.empty-state', { timeout: 15_000 });
+  const reopened = workspacePath ? await openWorkspaceViaMenu(page, workspacePath) : false;
+  check('the saved workspace reopens from disk', reopened);
+  await page.waitForSelector('.card--chart svg', { timeout: 25_000 });
+  await page.waitForTimeout(1_500);
+  const restoredCounts = await page.evaluate(() => ({
+    matrix: document.querySelectorAll('.card--matrix').length,
+    formula: document.querySelectorAll('.card--formula').length,
+    chart: document.querySelectorAll('.card--chart').length,
+  }));
+  check(
+    'the whole pipeline is restored',
+    restoredCounts.matrix === 1 && restoredCounts.formula === 1 && restoredCounts.chart === 1,
+    JSON.stringify(restoredCounts),
+  );
+  const restoredY = await readFirstSeriesPoint(page);
+  check(
+    'the restored chart still shows the replaced data',
+    restoredY !== null && replacedY !== null && restoredY === replacedY,
+    `${String(restoredY)} vs ${String(replacedY)}`,
+  );
+
+  await clickMenu(page, 1, /Reset View|回到卡片/);
+  await page.waitForTimeout(600);
+  const reuseChooser = page.waitForEvent('filechooser', { timeout: 20_000 }).catch(() => null);
+  await page.locator('.matrix-card__replace').first().click();
+  const reuseChooserResult = await reuseChooser;
+  if (reuseChooserResult) await reuseChooserResult.setFiles(sampleA);
+  const reusedY = await waitForSeriesChange(page, replacedY, 20_000);
+  check(
+    'a reopened template can be fed different data (the point of the fix)',
+    reusedY !== null && pipelineY !== null && reusedY === pipelineY,
+    `${String(reusedY)} vs ${String(pipelineY)}`,
+  );
+
+  // ── 13. no runtime errors ───────────────────────────────────────────
   const realErrors = consoleErrors.filter(
     (text) => !/favicon|ResizeObserver loop/i.test(text),
   );
@@ -1002,6 +1121,47 @@ async function switchToType(page, labelPart) {
       seriesTypes: option ? option.series.map((s) => s.type) : [],
     };
   });
+}
+
+/** Open a menubar menu (0 = File) and click the first item whose label matches. */
+async function clickMenu(page, menuIndex, pattern) {
+  await page.locator('.menubar__trigger').nth(menuIndex).click();
+  await page.waitForSelector('.menubar__item', { timeout: 5_000 });
+  await page.locator('.menubar__item').filter({ hasText: pattern }).first().click();
+  await page.waitForTimeout(200);
+}
+
+/** File → Save Workspace, returning the downloaded workspace file (null on failure). */
+async function saveWorkspaceViaMenu(page, dir) {
+  const downloadPromise = page.waitForEvent('download', { timeout: 20_000 }).catch(() => null);
+  await clickMenu(page, 0, /Save Workspace|保存工作区/);
+  const download = await downloadPromise;
+  if (!download) return null;
+  const target = path.join(dir, 'template.json');
+  await download.saveAs(target);
+  return fs.existsSync(target) ? target : null;
+}
+
+/** File → Open Workspace…, feeding the picker `filePath`. */
+async function openWorkspaceViaMenu(page, filePath) {
+  const chooserPromise = page.waitForEvent('filechooser', { timeout: 20_000 }).catch(() => null);
+  await clickMenu(page, 0, /Open Workspace|打开工作区/);
+  const chooser = await chooserPromise;
+  if (!chooser) return false;
+  await chooser.setFiles(filePath);
+  await page.waitForTimeout(900);
+  return true;
+}
+
+/** Poll the first chart point until it differs from `previous` (or the timeout wins). */
+async function waitForSeriesChange(page, previous, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const value = await readFirstSeriesPoint(page);
+    if (value !== null && value !== previous) return value;
+    await page.waitForTimeout(300);
+  }
+  return readFirstSeriesPoint(page);
 }
 
 /**

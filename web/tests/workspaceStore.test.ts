@@ -8,7 +8,7 @@
  *   - a matrix with dependents cannot be closed,
  *   - everything round-trips through the workspace snapshot.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MatrixData } from '../src/core/MatrixData.ts';
 import { useWorkspace } from '../src/ui/workspaceStore.ts';
@@ -19,7 +19,7 @@ import {
   type FunctionCardModel,
   type MatrixCardModel,
 } from '../src/ui/types.ts';
-import { decodeMatrixFrame } from '../src/backend/client.ts';
+import { BackendClient, decodeMatrixFrame, type PortBindingDto } from '../src/backend/client.ts';
 import { REGRESSION_SIGNATURE } from '../src/ui/migrate.ts';
 
 /**
@@ -1683,6 +1683,324 @@ describe('regression card', () => {
       expect(store().addRegressionCard(srcId, 0)).toBeNull();
     } finally {
       stub.restore();
+    }
+  });
+});
+
+/**
+ * "换文件" — the operation a data card never had.
+ *
+ * A saved workspace is only reusable as a template if its tables can be given a new day's
+ * data while the cards, the wiring and the formulas stay put. These tests lock the rules:
+ * the card is untouched, charts follow (they are views), function cards' frozen inputs
+ * follow the corresponding *slot* (data change, not a view change), the replaced matrix is
+ * released only when nothing reads it, and a shared parse is never written through.
+ */
+describe('replaceCardSources — a data card can change its file', () => {
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  interface Registration {
+    name: string;
+    matrixId: number;
+  }
+
+  /** Observe the transport instead of talking to a server. */
+  function stubBackend() {
+    let nextServerMatrix = 500;
+    const registrations: Registration[] = [];
+    const patches: Array<{
+      nodeId: number;
+      inputs?: PortBindingDto[];
+    }> = [];
+    const deletedMatrices: number[] = [];
+    const spies = [
+      vi.spyOn(BackendClient.prototype, 'registerMatrix').mockImplementation(async (name) => {
+        const matrixId = nextServerMatrix++;
+        registrations.push({ name, matrixId });
+        return { ok: true, matrixId, revision: 1 };
+      }),
+      vi.spyOn(BackendClient.prototype, 'createNode').mockImplementation(async () => ({
+        ok: true,
+        nodeId: 900,
+        state: 'dirty',
+        resultMatrixId: nextServerMatrix++,
+      })),
+      vi.spyOn(BackendClient.prototype, 'patchNode').mockImplementation(async (nodeId, patch) => {
+        patches.push({ nodeId, inputs: patch.inputs });
+        return { ok: true, nodeId, state: 'dirty' };
+      }),
+      vi.spyOn(BackendClient.prototype, 'deleteMatrix').mockImplementation(async (matrixId) => {
+        deletedMatrices.push(matrixId);
+        return { ok: true };
+      }),
+    ];
+    return {
+      registrations,
+      patches,
+      deletedMatrices,
+      restore: () => {
+        for (const spy of spies) spy.mockRestore();
+      },
+    };
+  }
+
+  let backend: ReturnType<typeof stubBackend> | null = null;
+  beforeEach(() => {
+    backend = stubBackend();
+  });
+  afterEach(() => {
+    backend?.restore();
+    backend = null;
+  });
+
+  const matrixCard = (cardId: number) =>
+    store().cards.find((card) => card.id === cardId) as MatrixCardModel;
+
+  it('swaps the file and leaves the card itself untouched', async () => {
+    const cardId = store().addMatrixCard([{ name: 'day1.txt', matrix: matrix([[1], [2]]) }]);
+    await tick();
+    const before = matrixCard(cardId);
+
+    expect(
+      store().replaceCardSources(cardId, [
+        { name: 'day2.txt', matrix: matrix([[9], [8]]) },
+      ]),
+    ).toBe(true);
+
+    const after = matrixCard(cardId);
+    expect(after.sources.map((source) => source.name)).toEqual(['day2.txt']);
+    expect(after.activeSource).toBe(0);
+    // Identity, geometry and the (empty) edge list do not move.
+    expect([after.x, after.y, after.width, after.height, after.z]).toEqual([
+      before.x,
+      before.y,
+      before.width,
+      before.height,
+      before.z,
+    ]);
+    expect(after.inputs).toEqual([]);
+    expect(store().matrices.get(after.sources[0].matrixId)!.cell(0, 0)).toBe(9);
+  });
+
+  it('re-points a dependent chart at the new file', async () => {
+    const cardId = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1, 2], [3, 4]], ['A', 'B']) },
+    ]);
+    const chartId = store().addChartCard(cardId, 0)!;
+    await tick();
+    const chartBefore = store().cards.find((card) => card.id === chartId) as ChartCardModel;
+    expect(chartBefore.config.sources[0].raw).toEqual([1, 3]);
+
+    store().replaceCardSources(cardId, [
+      { name: 'b.txt', matrix: matrix([[7, 8], [9, 10]], ['A', 'B']) },
+    ]);
+
+    const chart = store().cards.find((card) => card.id === chartId) as ChartCardModel;
+    const newMatrixId = matrixCard(cardId).sources[0].matrixId;
+    expect(chart.config.sources[0].matrixId).toBe(newMatrixId);
+    expect(chart.config.sources[0].raw).toEqual([7, 9]);
+    // The authoritative edge is re-derived from the config, never left stale.
+    expect(chart.inputs[0].target.matrixId).toBe(newMatrixId);
+  });
+
+  it('re-points a function card’s frozen input and recomputes it (no offer, no click)', async () => {
+    const cardId = store().addMatrixCard([{ name: 'a.txt', matrix: matrix([[1], [2]], ['A']) }]);
+    await tick();
+    const formulaId = store().addFormulaCard(cardId)!;
+    await tick();
+    const fnBefore = store().cards.find((card) => card.id === formulaId) as FunctionCardModel;
+    expect(fnBefore.node?.nodeId).toBe(900);
+
+    store().replaceCardSources(cardId, [{ name: 'b.txt', matrix: matrix([[5], [6]], ['A']) }]);
+    await tick();
+    await tick();
+
+    const fn = store().cards.find((card) => card.id === formulaId) as FunctionCardModel;
+    const newMatrixId = matrixCard(cardId).sources[0].matrixId;
+    // The input follows the same slot, and the graph edge still names the same data card.
+    expect(fn.inputs[0].target).toMatchObject({ cardId, matrixId: newMatrixId });
+    // A replacement is a data change: no yellow offer, no second confirmation.
+    expect(store().repointOffers).toHaveLength(0);
+    // One PATCH, bound to the *server* id of the new content.
+    const patch = backend!.patches.at(-1);
+    const serverId = backend!.registrations.find((entry) => entry.name === 'b.txt')!.matrixId;
+    expect(patch?.nodeId).toBe(900);
+    expect(patch?.inputs?.[0]).toMatchObject({ portId: 'src', sourceMatrixId: serverId });
+  });
+
+  it('replaces one slot of a multi-file card and keeps the other files', async () => {
+    const cardId = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1]]) },
+      { name: 'b.txt', matrix: matrix([[2]]) },
+    ]);
+    const keepId = matrixCard(cardId).sources[0].matrixId;
+    store().setActiveSource(cardId, 1);
+
+    expect(
+      store().replaceCardSources(cardId, [{ name: 'x.txt', matrix: matrix([[5]]) }], 1),
+    ).toBe(true);
+
+    const after = matrixCard(cardId);
+    expect(after.sources.map((source) => source.name)).toEqual(['a.txt', 'x.txt']);
+    expect(after.activeSource).toBe(1);
+    expect(after.sources[0].matrixId).toBe(keepId);
+    expect(store().matrices.has(keepId)).toBe(true);
+
+    // The control only ever replaces the file the card is showing.
+    expect(
+      store().replaceCardSources(cardId, [{ name: 'y.txt', matrix: matrix([[9]]) }], 0),
+    ).toBe(false);
+    expect(matrixCard(cardId).sources[0].name).toBe('a.txt');
+  });
+
+  it('releases a replaced matrix only when nothing reads it', async () => {
+    const cardId = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1]]) },
+      { name: 'b.txt', matrix: matrix([[2]]) },
+    ]);
+    const oldIds = matrixCard(cardId).sources.map((source) => source.matrixId);
+
+    store().replaceCardSources(cardId, [
+      { name: 'c.txt', matrix: matrix([[7]]) },
+      { name: 'd.txt', matrix: matrix([[8]]) },
+    ]);
+
+    // Nothing depends on this card, so both old parses are gone (and so are their
+    // identity-cache keys — a stale key would hand the next open the wrong bytes).
+    for (const oldId of oldIds) {
+      expect(store().matrices.has(oldId)).toBe(false);
+      expect([...store().matrixIdByIdentity.values()]).not.toContain(oldId);
+    }
+    expect(store().matrices.size).toBe(2);
+  });
+
+  it('leaves a formula of another slot alone, and keeps the matrix it reads', async () => {
+    const cardId = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1]]) },
+      { name: 'b.txt', matrix: matrix([[2]]) },
+    ]);
+    const aId = matrixCard(cardId).sources[0].matrixId;
+    const bId = matrixCard(cardId).sources[1].matrixId;
+    // A formula frozen to the *first* file while the card shows the second one.
+    const formulaId = store().addFormulaCard(cardId, aId)!;
+    store().setActiveSource(cardId, 1);
+    await tick();
+
+    expect(
+      store().replaceCardSources(cardId, [{ name: 'x.txt', matrix: matrix([[5]]) }], 1),
+    ).toBe(true);
+
+    const after = matrixCard(cardId);
+    expect(after.sources[0].matrixId).toBe(aId);
+    expect(after.sources[1].matrixId).not.toBe(bId);
+    // Only the replaced slot's readers move; slot 0 was not touched.
+    const fn = store().cards.find((card) => card.id === formulaId) as FunctionCardModel;
+    expect(fn.inputs[0].target.matrixId).toBe(aId);
+    // The replaced matrix is released; the one the formula still reads survives.
+    expect(store().matrices.has(bId)).toBe(false);
+    expect(store().matrices.has(aId)).toBe(true);
+  });
+
+  it('re-picking the same bytes is a no-op (same parse, new label)', async () => {
+    const identity = { size: 1024, lastModified: 1_700_000_000_000 };
+    const cardId = store().addMatrixCard([
+      { name: 'a.txt', matrix: matrix([[1]]), identity },
+    ]);
+    const matrixId = matrixCard(cardId).sources[0].matrixId;
+
+    expect(
+      store().replaceCardSources(cardId, [
+        { name: 'a-again.txt', matrix: matrix([[1]]), identity },
+      ]),
+    ).toBe(true);
+
+    const after = matrixCard(cardId);
+    expect(after.sources[0].name).toBe('a-again.txt');
+    expect(after.sources[0].matrixId).toBe(matrixId);
+    expect(store().matrices.size).toBe(1);
+  });
+
+  it('never writes through a shared parse: the other card keeps its numbers', async () => {
+    // Two cards opened from the same bytes share one matrix (an intentional parse cache).
+    // Replacing one of them must copy-on-write, never mutate the shared matrix.
+    const identity = { size: 4242, lastModified: 77 };
+    const first = store().addMatrixCard([{ name: 'a.txt', matrix: matrix([[1]]), identity }]);
+    const second = store().addMatrixCard([{ name: 'a.txt', matrix: matrix([[1]]), identity }]);
+    const sharedId = matrixCard(first).sources[0].matrixId;
+    expect(matrixCard(second).sources[0].matrixId).toBe(sharedId);
+
+    store().replaceCardSources(first, [{ name: 'a2.txt', matrix: matrix([[9]]) }]);
+
+    const replaced = matrixCard(first).sources[0].matrixId;
+    expect(replaced).not.toBe(sharedId);
+    expect(matrixCard(second).sources[0].matrixId).toBe(sharedId);
+    expect(store().matrices.get(sharedId)!.cell(0, 0)).toBe(1);
+    expect(store().matrices.get(replaced)!.cell(0, 0)).toBe(9);
+  });
+
+  it('round-trips through the snapshot', async () => {
+    const cardId = store().addMatrixCard([{ name: 'a.txt', matrix: matrix([[1]]) }]);
+    store().replaceCardSources(cardId, [{ name: 'b.txt', matrix: matrix([[9]]) }]);
+    const snapshot = store().toSnapshot();
+
+    store().reset();
+    store().loadSnapshot(snapshot);
+
+    const restored = matrixCard(cardId);
+    expect(restored.sources.map((source) => source.name)).toEqual(['b.txt']);
+    expect(store().matrices.get(restored.sources[0].matrixId)!.cell(0, 0)).toBe(9);
+  });
+
+  it('refuses a card that is not a data card', () => {
+    const cardId = store().addMatrixCard([{ name: 'a.txt', matrix: matrix([[1, 2]]) }]);
+    const chartId = store().addChartCard(cardId, 0)!;
+    expect(
+      store().replaceCardSources(chartId, [{ name: 'b.txt', matrix: matrix([[1]]) }]),
+    ).toBe(false);
+  });
+});
+
+describe('closeAllCards releases the compute graph', () => {
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  it('deletes the nodes before the uploaded tables', async () => {
+    // The backend cannot see a card disappear; if "close all" only cleared the browser, a
+    // reopened workspace inherited nodes that still read the old matrices — and those
+    // leaked readers refuse the DELETE a file replacement needs.
+    const calls: string[] = [];
+    const spies = [
+      vi.spyOn(BackendClient.prototype, 'registerMatrix').mockResolvedValue({
+        ok: true,
+        matrixId: 700,
+        revision: 1,
+      }),
+      vi.spyOn(BackendClient.prototype, 'createNode').mockResolvedValue({
+        ok: true,
+        nodeId: 900,
+        state: 'dirty',
+        resultMatrixId: 901,
+      }),
+      vi.spyOn(BackendClient.prototype, 'deleteNode').mockImplementation(async (nodeId) => {
+        calls.push(`node:${nodeId}`);
+        return { ok: true };
+      }),
+      vi.spyOn(BackendClient.prototype, 'deleteMatrix').mockImplementation(async (matrixId) => {
+        calls.push(`matrix:${matrixId}`);
+        return { ok: true };
+      }),
+    ];
+    try {
+      const cardId = store().addMatrixCard([{ name: 'a.txt', matrix: matrix([[1]]) }]);
+      await tick();
+      store().addFormulaCard(cardId);
+      await tick();
+      store().closeAllCards();
+      await tick();
+      await tick();
+      await tick();
+      expect(calls).toEqual(['node:900', 'matrix:700']);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
     }
   });
 });

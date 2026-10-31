@@ -69,13 +69,39 @@ export function isInteractivePress(target: EventTarget | null): boolean {
   return target.closest(INTERACTIVE) !== null;
 }
 
+/**
+ * The data card under a drop, or `null` when the drop landed on bare canvas.
+ *
+ * A file dropped on a data card means "this card should hold this file" — replacing its
+ * data — while a drop on empty canvas keeps creating a new card. The hit test is a pure
+ * function for the same reason `isInteractivePress` is: jsdom cannot synthesise a
+ * trustworthy drag gesture, so the real gesture is covered by the browser smoke test.
+ */
+export function matrixCardDropTargetId(target: EventTarget | null): number | null {
+  if (!(target instanceof Element)) return null;
+  const element = target.closest('.card--matrix[data-card-id]');
+  if (!(element instanceof HTMLElement)) return null;
+  const cardId = Number(element.dataset.cardId);
+  return Number.isFinite(cardId) ? cardId : null;
+}
+
 interface CardCanvasProps {
   onNewTable: () => void;
   onFilesDropped: (files: File[]) => void;
+  /** Files dropped *on* a data card: replace that card's data instead of creating one. */
+  onFilesDroppedOnCard: (cardId: number, files: File[]) => void;
+  /** The card's「替换文件…」control: pick one file and replace the shown one. */
+  onPickReplaceFile: (cardId: number) => void;
   onContextMenu: (event: React.MouseEvent) => void;
 }
 
-export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCanvasProps) {
+export function CardCanvas({
+  onNewTable,
+  onFilesDropped,
+  onFilesDroppedOnCard,
+  onPickReplaceFile,
+  onContextMenu,
+}: CardCanvasProps) {
   const { t } = useTranslator();
   const cards = useWorkspace((s) => s.cards);
   const matrices = useWorkspace((s) => s.matrices);
@@ -102,6 +128,8 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const worldRef = useRef<HTMLDivElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  /** Data card currently under a file drag; it would be replaced on drop. */
+  const [dropTargetId, setDropTargetId] = useState<number | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
@@ -458,9 +486,11 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
               sourceColumns={sourceColumns}
               active={active}
               closeBlocked={closeBlocked}
+              dropTarget={dropTargetId === card.id}
               onActivate={() => bringToFront(card.id)}
               onClose={() => handleClose(card.id)}
               onCloseBlocked={() => reportBlocked(card.id)}
+              onReplaceFile={() => onPickReplaceFile(card.id)}
               onOpenChart={(columnIndex, type) => {
                 const id = addChartCard(card.id, columnIndex, type);
                 if (id !== null) select(id);
@@ -586,10 +616,26 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
       addChartCard,
       addFormulaCard,
       select,
+      dropTargetId,
+      onPickReplaceFile,
     ],
   );
 
   // ── drag & drop ──────────────────────────────────────────────────────
+
+  /**
+   * Hint text for the current drag: empty canvas → import, data card → replace. A
+   * multi-file card is named by its file count, because a drop replaces the whole set
+   * (naming only the active file would promise a narrower change than the one that happens).
+   */
+  const dropHint = useMemo(() => {
+    if (dropTargetId === null) return t('empty.dropHint');
+    const card = cards.find((entry) => entry.id === dropTargetId);
+    if (!card || !isMatrixCard(card)) return t('empty.dropHint');
+    return card.sources.length > 1
+      ? t('empty.dropHintReplaceMultiple', { n: card.sources.length })
+      : t('empty.dropHintReplace', { name: card.sources[card.activeSource]?.name ?? '' });
+  }, [cards, dropTargetId, t]);
 
   const onDragEnter = (event: React.DragEvent) => {
     if (!event.dataTransfer?.types.includes('Files')) return;
@@ -602,20 +648,30 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
     if (!event.dataTransfer?.types.includes('Files')) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
+    // Tracked here, not in a per-card listener: one hit test keeps the drop path and the
+    // highlight in agreement (and avoids nested dragenter/leave depth counters).
+    const targetId = matrixCardDropTargetId(event.target);
+    setDropTargetId((current) => (current === targetId ? current : targetId));
   };
 
   const onDragLeave = () => {
     dragDepth.current = Math.max(0, dragDepth.current - 1);
-    if (dragDepth.current === 0) setDragActive(false);
+    if (dragDepth.current === 0) {
+      setDragActive(false);
+      setDropTargetId(null);
+    }
   };
 
   const onDrop = (event: React.DragEvent) => {
     dragDepth.current = 0;
     setDragActive(false);
+    setDropTargetId(null);
     const files = event.dataTransfer?.files;
     if (!files || files.length === 0) return;
     event.preventDefault();
-    onFilesDropped(Array.from(files));
+    const targetId = matrixCardDropTargetId(event.target);
+    if (targetId !== null) onFilesDroppedOnCard(targetId, Array.from(files));
+    else onFilesDropped(Array.from(files));
   };
 
   return (
@@ -670,9 +726,7 @@ export function CardCanvas({ onNewTable, onFilesDropped, onContextMenu }: CardCa
         <EmptyState onNewTable={onNewTable} dragActive={dragActive} />
       ) : null}
 
-      {dragActive ? (
-        <div className="canvas__drop-hint">{t('empty.dropHint')}</div>
-      ) : null}
+      {dragActive ? <div className="canvas__drop-hint">{dropHint}</div> : null}
     </div>
   );
 }

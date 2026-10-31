@@ -22,6 +22,7 @@
  */
 
 import type { SmoothingOptions } from '../core/Smoothing.ts';
+import type { MatrixData } from '../core/MatrixData.ts';
 import type { ChartConfig, ChartSource } from '../charts/chartModel.ts';
 import type { ChartTypeId } from '../charts/chartTypes.ts';
 
@@ -80,6 +81,19 @@ export interface FileIdentity {
 /** Cache key for a parse: the bytes, not the label. */
 export function identityKey(identity: FileIdentity): string {
   return `${identity.size}:${identity.lastModified}`;
+}
+
+/**
+ * One parsed file on its way into a matrix card: a drop, the picker, or a restored set.
+ *
+ * `identity` is the byte fingerprint used to reuse an identical parse (see
+ * `matrixIdByIdentity`); programmatically built tables and restored snapshots leave it out
+ * and therefore always get a matrix of their own.
+ */
+export interface MatrixEntry {
+  name: string;
+  matrix: MatrixData;
+  identity?: FileIdentity;
 }
 
 export interface MatrixCardModel extends CardBase {
