@@ -10,7 +10,7 @@ README 数字对齐、dev server 默认回环、摘要面板 P2 合入、版本�
 **尚未建仓库/推送。**
 
 ## 上次收工点
-- HEAD: 706716a（摘要面板 P2 + 发布整理）· 时间: 2026-10-31
+- HEAD: de4c47c（摘要面板 P2 + 发布整理 + 中英社区文件）· 时间: 2026-10-31
 - 在做: 摘要面板 P2 与发布准备（已提交）。闸门：tsc 干净、vitest 581 passed / 14 skipped、
   ctest 8/8（4 opt-in 跳过）、e2e 102/102。tag `v0.1.0` 在 706716a；回滚包 `work/pre-rewrite-history.bundle`。
 
