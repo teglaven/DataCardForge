@@ -27,6 +27,14 @@ export interface VirtualTableProps {
   readOnly: boolean;
   /** Row-number label builder, e.g. `No.12`. */
   rowLabel: (rowIndex1Based: number) => string;
+  /**
+   * Optional display override for a column header (the stored label stays authoritative).
+   *
+   * Used by cards whose header must say what the column *means* in context — the relation
+   * card prefixes every statistic with the pair it describes (`A : B · 斜率`) because the
+   * transport has no row-label channel to put that on.
+   */
+  columnLabel?: (columnIndex: number) => string | null;
   /** Right-click on a column header. */
   onHeaderContextMenu?: (event: React.MouseEvent, columnIndex: number) => void;
   /** Click on a column header (used to select / highlight a column). */
@@ -44,6 +52,7 @@ export function VirtualTable({
   matrix,
   readOnly,
   rowLabel,
+  columnLabel,
   onHeaderContextMenu,
   onHeaderClick,
   highlightColumn = null,
@@ -139,6 +148,9 @@ export function VirtualTable({
 
   const gridTemplate = `${ROW_HEADER_WIDTH}px ${columnWidths.map((w) => `${w}px`).join(' ')}`;
   const sourceSet = new Set(sourceColumns);
+  /** Header text: an override (card-specific meaning) wins over the stored label. */
+  const headerLabel = (c: number) =>
+    columnLabel?.(c) ?? (matrix.columnLabel(c) || matrix.column(c).posName);
 
   return (
     <div className="vtable">
@@ -146,7 +158,11 @@ export function VirtualTable({
       <div className="vtable__header" style={{ height: HEADER_HEIGHT }}>
         <div
           className="vtable__header-inner"
-          style={{ transform: `translateX(-${scrollLeft}px)`, gridTemplateColumns: gridTemplate }}
+          style={{
+            transform: `translateX(-${scrollLeft}px)`,
+            gridTemplateColumns: gridTemplate,
+            width: ROW_HEADER_WIDTH + totalWidth,
+          }}
         >
           <div className="vtable__corner" />
           {Array.from({ length: columnCount }, (_, c) => (
@@ -155,14 +171,12 @@ export function VirtualTable({
               className={`vtable__colhead${
                 highlightColumn === c ? ' vtable__colhead--highlight' : ''
               }${sourceSet.has(c) ? ' vtable__colhead--source' : ''}`}
-              title={matrix.columnLabel(c) || matrix.column(c).posName}
+              title={headerLabel(c)}
               onClick={() => onHeaderClick?.(c)}
               onContextMenu={(event) => onHeaderContextMenu?.(event, c)}
             >
               {/* A real box: `text-overflow` cannot act on an anonymous flex item. */}
-              <span className="vtable__colhead-label">
-                {matrix.columnLabel(c) || matrix.column(c).posName}
-              </span>
+              <span className="vtable__colhead-label">{headerLabel(c)}</span>
             </div>
           ))}
         </div>
@@ -173,6 +187,11 @@ export function VirtualTable({
           className="vtable__canvas"
           style={{ height: rowCount * ROW_HEIGHT, width: ROW_HEADER_WIDTH + totalWidth }}
         >
+          {/* Rows are NOT translated: `.vtable__viewport` scrolls natively, so the browser
+              already moves this canvas by `scrollLeft`. Translating rows here as well moved
+              the body twice as far as the header (which lives outside the scroller and needs
+              its own translate) — the "header and cells drift apart when you scroll right"
+              bug. The row-number column stays put via `position: sticky; left: 0`. */}
           {visibleRows.map((row) => (
             <div
               key={row}
@@ -181,7 +200,6 @@ export function VirtualTable({
                 top: row * ROW_HEIGHT,
                 height: ROW_HEIGHT,
                 gridTemplateColumns: gridTemplate,
-                transform: `translateX(-${scrollLeft}px)`,
                 width: ROW_HEADER_WIDTH + totalWidth,
               }}
             >
