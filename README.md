@@ -420,6 +420,17 @@ one-time switch: **Settings → Pages → Source: GitHub Actions**, otherwise th
 
 This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class tooling, and earlier GitHub Copilot). Authored by the maintainer: the requirements, the architecture decisions in [`docs/decisions/`](docs/decisions/), the acceptance criteria and the test gates. The repository does not claim "it was all typed by hand" — it claims that **every feature statement above is reproduced by the suites listed under Tests** (581 unit / 8 ctest / 102 end-to-end checks). Ownership and timeline: [`PROVENANCE.md`](PROVENANCE.md).
 
+## Contributing & security
+
+- **Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md) — GPL-3.0, DCO 1.1 (sign every commit
+  with `git commit -s`), the gates to run before a PR, and the contracts that must not break.
+- **Security**: [SECURITY.md](SECURITY.md) — how to report a vulnerability privately, and the
+  list of boundaries that are by design (no authentication, loopback only, no HTTPS) so that
+  they do not get filed as bugs.
+
+Both documents have a Chinese version: [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) ·
+[SECURITY.zh-CN.md](SECURITY.zh-CN.md).
+
 ## License
 
 Data Workbench is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License version 3 (GPL-3.0)**, as published by the Free Software Foundation.

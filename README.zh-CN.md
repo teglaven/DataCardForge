@@ -385,6 +385,15 @@ GitHub Pages——也就是上面那个在线演示。它需要一次性开关�
 
 本项目由 **AI 编程助手**辅助开发（DeepSeek Harness / Claude 等 agent 工具，以及早期的 GitHub Copilot）。由作者完成的部分：需求定义、架构决策（见 [`docs/decisions/`](docs/decisions/)）、验收标准与测试门禁。本仓库不对「谁敲的字」作保证，只对**可复现性**负责——上面每一条功能声明都有对应的单元测试 / ctest / 端到端检查背书（见「测试」一节）。权属与时间线见 [`PROVENANCE.md`](PROVENANCE.md)。
 
+## 参与贡献与安全
+
+- **参与贡献**：[CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) —— GPL-3.0、DCO 1.1
+  （每个提交用 `git commit -s` 签名）、提 PR 前要跑的门禁，以及不得破坏的契约。
+- **安全**：[SECURITY.zh-CN.md](SECURITY.zh-CN.md) —— 漏洞的私密报告方式，以及哪些行为是
+  设计边界（无鉴权、只绑回环、无 HTTPS），以免被误当作缺陷上报。
+
+两份文档都有英文版：[CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md)。
+
 ## 许可证
 
 Data Workbench 是自由软件：您可以依据自由软件基金会（Free Software Foundation）发布的 **GNU 通用公共许可证第 3 版（GPL-3.0）** 之条款，重新分发和/或修改本软件。
