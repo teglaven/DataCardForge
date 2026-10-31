@@ -5,13 +5,14 @@
 B 方案：C++/Eigen 后端持计算，浏览器只是交互表面；函数卡接口已稳定，交互还没收口。
 数据卡可换数据文件（「替换文件…」/ 拖到卡上），保存的工作区能当模板复用。
 「关系枚举」卡（签名仍是 `builtin:linear-regression`）能自选 x/y 两列，列头带 `X : Y`。
-**首发整理已提交（2026-10-31）**：AGENTS.md 已从全库历史移除（123 提交、SHA 全变）、`docs/docs`
-双层嵌套已拆平、README 中英数字对齐、dev server 默认回环。**尚未建仓库/推送。**
+**首发整理已提交（2026-10-31）**：AGENTS.md 出历史（123 提交、SHA 全变）、docs 双层拆平、
+README 数字对齐、dev server 默认回环、摘要面板 P2 合入、版本统一为 0.1.0（tag `v0.1.0`）。
+**尚未建仓库/推送。**
 
 ## 上次收工点
-- HEAD: 3fc4451（首发整理后的 main）· 时间: 2026-10-31T15:52Z
-- 在做: 首发前整理。闸门：tsc 干净、vitest 573 passed / 14 skipped、ctest 8/8（4 opt-in 跳过）、
-  e2e 97/97 全绿、md 断链 0、无 systemd / lane / 本机路径残留。回滚：`work/pre-rewrite-history.bundle`。
+- HEAD: 706716a（摘要面板 P2 + 发布整理）· 时间: 2026-10-31
+- 在做: 摘要面板 P2 与发布准备（已提交）。闸门：tsc 干净、vitest 581 passed / 14 skipped、
+  ctest 8/8（4 opt-in 跳过）、e2e 102/102。tag `v0.1.0` 在 706716a；回滚包 `work/pre-rewrite-history.bundle`。
 
 ## 已冻结契约（改它要新决策）
 - 端口 = 稳定身份 portId（不做位置语义）
@@ -24,17 +25,16 @@ B 方案：C++/Eigen 后端持计算，浏览器只是交互表面；函数卡�
 
 ## 探索中（可推翻，别当承诺）
 - 插件 C-ABI（C 头延后冻结）
-- 摘要面板 P2 前端 UI
 - 性能门禁阈值（3× / 1.3× 是首测拍的，见 decisions/2026-10-29-perf-gate.md）
 - 多列对枚举（`builtin:relation-matrix`：行=列对、列=统计量，explicit）；行标签无传输通道
 
 ## 已知缺口（top 5）
-1. 摘要面板 P2 未开工（tasks/2026-10-29-summary-p2-panel.md）
-2. 函数卡：参数表单未按签名渲染；K>1 无输出选择器
-3. 前端 `web/src/core/stats.ts` 仍在算统计，待搬后端
-4. 性能门禁只盖引擎层；HTTP 层、缓存命中/冷启动、CI 触发未覆盖
-5. 多文件卡只能「换」不能追加/删除单个文件；全局无撤销栈；连线 hover / 断线编辑未做
+1. 函数卡：参数表单未按签名渲染；K>1 无输出选择器
+2. 前端 `web/src/core/stats.ts` 仍在算统计，待搬后端
+3. 性能门禁只盖引擎层；HTTP 层、缓存命中/冷启动、CI 触发未覆盖
+4. 多文件卡只能「换」不能追加/删除单个文件；全局无撤销栈；连线 hover / 断线编辑未做
+5. Windows 版不在 Linux 交叉编译：发布后在 Windows 上编译，作为 Release 资产上传
 
 ## 下次开工第一件事（RESUME）
-先跑 `bash scripts/state-check.sh`；首发整理已提交，下一步是建仓库/开 Pages/推 main（只推 main + tag，
-不要 --mirror，会连 9 个 lane-* 分支一起公开），之后按 tasks/2026-10-29-summary-p2-panel.md 开工 P2。
+先跑 `bash scripts/state-check.sh`；建 GitHub 仓库、开 Pages，只推 main + `v0.1.0`（不要
+--mirror）；Windows 版在发布后到原生 Windows 机器上编。摘要面板已收口，别再当在途 lane。
