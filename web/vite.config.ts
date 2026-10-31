@@ -2,9 +2,13 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
+// The C++ compute backend port. `scripts/dev.sh <port>` exports this, so the /api proxy
+// follows the port the backend was actually started on instead of assuming the default.
+const backendPort = process.env.DC_BACKEND_PORT ?? '37811';
+
 export default defineConfig({
   // Sub-path deployments (GitHub Pages serves at /<repo>/) need every asset URL prefixed.
-  // Local dev and the systemd service keep the default '/'.
+  // Local dev and a persistent deployment keep the default '/'.
   base: process.env.VITE_BASE ?? '/',
   plugins: [react()],
   resolve: {
@@ -18,18 +22,18 @@ export default defineConfig({
     include: ['@e965/xlsx'],
   },
   server: {
-    // Bind every interface so the workbench is reachable from other machines on the LAN
-    // (requested 2026-10-21). NOTE the standing gap: the backend has NO authentication
-    // (backend-protocol-v1 "无鉴权…跨机部署前必须先补 token"), and this dev server
-    // proxies /api/* straight through — so anything that can reach this port gets full
-    // matrix/node API access. Keep it on a trusted network, or add a token first.
-    host: '0.0.0.0',
+    // Loopback by default. The backend has NO authentication (backend-protocol-v1:
+    // "无鉴权…跨机部署前必须先补 token") and this dev server proxies /api/* straight
+    // through, so binding every interface would hand the full matrix/node API to anything
+    // that can reach the port. Opt in deliberately when you want LAN access:
+    //   VITE_HOST=0.0.0.0 ./scripts/dev.sh      (or `npx vite --host 0.0.0.0`)
+    host: process.env.VITE_HOST ?? '127.0.0.1',
     // Vite rejects requests whose Host header is neither localhost nor an IP (DNS-rebinding
     // guard). LAN clients hitting http://<ip>:5173 pass; a hostname needs adding here.
     proxy: {
-      // B-plan: forward /api/* to the C++ compute backend (default port 37811).
+      // B-plan: forward /api/* to the C++ compute backend (DC_BACKEND_PORT, default 37811).
       '/api': {
-        target: 'http://127.0.0.1:37811',
+        target: `http://127.0.0.1:${backendPort}`,
         changeOrigin: true,
       },
     },
