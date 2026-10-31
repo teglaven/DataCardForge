@@ -4,7 +4,7 @@
 - **状态**：🚧 执行中（本文件先落盘，之后按本文件执行；聊天里的内容只作口头说明）
 - **产物**：`STATE.md`、`scripts/state-check.sh`、`AGENTS.md §0`、
   `backend/bench/bench_engine.cpp`、`backend/bench/budgets.json`、`backend/bench/baseline.json`、
-  `backend/CMakeLists.txt`、`docs/docs/decisions/2026-10-29-perf-gate.md`
+  `backend/CMakeLists.txt`、`docs/decisions/2026-10-29-perf-gate.md`
 - **一句话**：给「下一步」留一份可信的起点（STATE.md + 可执行闸门），
   给「变慢了」留一个可执行的数字（引擎层 p50/p95 性能门禁）。**不优化任何引擎代码。**
 
@@ -16,11 +16,11 @@
    **禁止** `git add -A`、`git commit -a`、`git stash`、`git checkout --`、删除或还原这些文件。
    它们不是本任务的。
 2. 编译只用 `cmake --build backend/build --target dc_bench`；**不整仓构建**、
-   **不重启 systemd 三单元**、**不碰** `backend/src/http_server.cpp`、`backend/src/nodes.cpp`、`web/**`。
-3. 只允许改/建这 8 个路径（外加 `docs/docs/README.md` 的 decisions 列表最多一行导航）：
+   **不重启前后端服务**、**不碰** `backend/src/http_server.cpp`、`backend/src/nodes.cpp`、`web/**`。
+3. 只允许改/建这 8 个路径（外加 `docs/README.md` 的 decisions 列表最多一行导航）：
    `STATE.md`、`scripts/state-check.sh`、`AGENTS.md`、`backend/bench/bench_engine.cpp`、
    `backend/bench/budgets.json`、`backend/CMakeLists.txt`、`backend/bench/baseline.json`（生成物）、
-   `docs/docs/decisions/2026-10-29-perf-gate.md`。
+   `docs/decisions/2026-10-29-perf-gate.md`。
 4. 与清单冲突的现状（`evaluate` 签名已变、函数名不存在、CMake 已有同名目标）：
    **停下，贴现状 + 建议，等裁决**，不自行改方案。
 
@@ -58,7 +58,7 @@ bash，`set -uo pipefail`，可执行，仓库根执行，单文件、≤60 行�
 - **大动作**四条定义：架构/契约改动、跨层改动、发布/公开动作、会话收尾。
 - **收工四条**：更新 STATE.md 四字段 → 提交正文加 `RESUME: <…>` → 跑 `scripts/state-check.sh`，
   非 0 不许收工 → 回复里给出三问答案。
-- 硬规则：STATE.md 只留最新状态（历史进 `docs/docs/log/`），文档与代码不同步时以 STATE.md 为当前真相。
+- 硬规则：STATE.md 只留最新状态（历史进 `docs/log/`），文档与代码不同步时以 STATE.md 为当前真相。
 - §0 末尾附可直接粘给任意 agent 的提示词代码块。
 
 ## 5. 性能门禁：`backend/bench/bench_engine.cpp`
@@ -103,7 +103,7 @@ bash，`set -uo pipefail`，可执行，仓库根执行，单文件、≤60 行�
 `add_test(NAME perf_gate COMMAND dc_bench)` + `SKIP_RETURN_CODE 101`；`dc_bench` 未设
 `DC_RUN_BENCH=1` 时 `return 101`。**不改** `.github/workflows/ci.yml`。
 
-## 8. 决策记录 `docs/docs/decisions/2026-10-29-perf-gate.md`
+## 8. 决策记录 `docs/decisions/2026-10-29-perf-gate.md`
 
 写清三件事：① 为什么是这 12 个用例（6×100000 是目标数据形状、512² 是 O(n³) 那一档、
 为什么先引擎层后 HTTP 层）；② 阈值来源（首测 p50×3 + 1.3× 相对护栏，机器噪声为什么用相对阈值）；

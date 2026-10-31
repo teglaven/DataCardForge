@@ -77,7 +77,7 @@ target_link_libraries(dc_card_fixture_run PRIVATE dc_core)
 add_test(NAME card_fixtures
   COMMAND dc_card_fixture_run ${CMAKE_SOURCE_DIR}/../web/tests/fixtures/cards/function-card.v2.json)
 
-# Engine-layer perf gate (docs/docs/decisions/2026-10-29-perf-gate.md): dc_bench calls
+# Engine-layer perf gate (docs/decisions/2026-10-29-perf-gate.md): dc_bench calls
 # ExprEngine::evaluate / evaluateMatrix directly — no HTTP, no server, no service restarts.
 # Opt-in like diff_fuzz / nodes_stress: without DC_RUN_BENCH=1 the binary itself exits 101 and
 # ctest records "Not Run" (SKIP_RETURN_CODE), so CI stays fast and deterministic. No Python
@@ -113,7 +113,7 @@ endif()
 # survives (the 2026-10-18 audit found std::stoul terminating the whole process from a
 # detached connection thread). Opt-in via DC_RUN_STRESS=1 so CI stays fast: without it
 # the script exits 101 and ctest records "Not Run" instead of a silent pass. It always
-# binds a throwaway port — never 37811, where the systemd service lives.
+# binds a throwaway port — never 37811, where the default service port lives.
 if(Python3_Interpreter_FOUND)
   # Node-registry concurrency (2026-10-27): evaluation no longer holds the registry lock,
   # so concurrent create / params-rewrite / window-read / delete must not deadlock, crash,

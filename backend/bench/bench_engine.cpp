@@ -1,4 +1,4 @@
-// dc_bench — 引擎层性能门禁（决策见 docs/docs/decisions/2026-10-29-perf-gate.md）。
+// dc_bench — 引擎层性能门禁（决策见 docs/decisions/2026-10-29-perf-gate.md）。
 //
 // 直接调 ExprEngine::evaluate（逐元素）与 ExprEngine::evaluateMatrix（矩阵），不经 HTTP、
 // 不起服务、不读真实数据文件：测的是「公式 + 数据 → 结果」这条路径本身，不是外面那层传输。

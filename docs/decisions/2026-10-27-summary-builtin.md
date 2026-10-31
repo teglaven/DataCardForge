@@ -6,7 +6,7 @@
 - **配套文档**：[端口语义规格 v1](../architecture/port-semantics-v1.md)、
   [后端协议 v1](../architecture/backend-protocol-v1.md)、
   [卡片数据结构 v2](./2026-10-26-card-schema-v2.md)、[函数卡的三个契约](./2026-10-27-card-contracts.md)
-- **基线**：本决策实施前的回滚点为快照分支 `lane-summary-p1-10281258`。
+- **基线**：本决策实施前打过一次本地分支快照作为回滚点（快照名不入库）。
 
 ## 核心表述
 

@@ -100,4 +100,4 @@ chart.getDataURL({ type: 'svg' | 'png' | 'jpeg' })// 类型定义中明确列出
 
 - 决策：[前端选型定为 Web](2026-10-14-frontend-web-chosen.md)（矢量导出为核心论据）
 - 模块：`web/src/charts/`、`web/src/core/stats.ts`
-- 文档：[`web/README.md`](../../../web/README.md)（图型表与导出说明）
+- 文档：[`web/README.md`](../../web/README.md)（图型表与导出说明）

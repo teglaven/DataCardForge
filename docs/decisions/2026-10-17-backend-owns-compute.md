@@ -91,7 +91,7 @@
 - `web/src/core/expression.ts`、`core/stats.ts`、`core/Smoothing.ts` → 冻结为差分基准
 - `web/tests/fixtures/xlayer/`（新建）→ 跨层共享夹具（先行）
 - `web/src/ui/components/VirtualTable.tsx` → 窗口化数据源改造
-- `docs/docs/architecture/backend-protocol-v1.md` → 协议规范
+- `docs/architecture/backend-protocol-v1.md` → 协议规范
 
 ## 未来影响
 

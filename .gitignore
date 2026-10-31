@@ -27,10 +27,10 @@ Thumbs.db
 npm-debug.log*
 
 # ── Private notes (Obsidian vault, never published) ────────────────────────
-docs/docs/private/
+docs/private/
 
 # ── Obsidian local state ────────────────────────────────────────────────────
-docs/docs/.obsidian/workspace*
+docs/.obsidian/workspace*
 
 # ── Local end-to-end test runtime (rootless Chromium + its .so deps) ───────
 # Reproducible machine-local scaffolding for scripts/smoke.mjs, never published.
@@ -43,16 +43,15 @@ web/.probe/
 
 # ── Local agent/audit scratch space (probe scripts, stress logs, build trials)
 # Never published: reproducible assets get promoted into backend/tests/ or
-# scripts/ before they count as a regression defence (see docs/docs/history.md
+# scripts/ before they count as a regression defence (see docs/history.md
 # §6.1-2 "可复跑 ≠ 在别人机器上能复跑").
 work/
 
 # ── 本机 agent 协议：不入库 ────────────────────────────────────────────────
-# AGENTS.md 含本机绝对路径、systemd 单元名与端口，属工作区协议而非项目产物。
+# 工作区协议文件（含本机路径与端口），属个人环境而非项目产物。
 AGENTS.md
 
 # ── 本机私有目录：不入库 ──────────────────────────────────────────────────
-# 内容与项目产物无关，写作时放在仓库外的目录里。
 private/
 
 # ── 临时探针：调试用，用完即删（真防线是 backend/tests/ 与 web/tests/ 的正式用例）──

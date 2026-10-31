@@ -18,7 +18,7 @@
 
 ## 三、AI 使用说明
 实现过程中使用了 AI 编程助手（DeepSeek Harness / Claude 类工具，早期另有 GitHub Copilot）。作者负责
-需求定义、架构决策（见 [`docs/docs/decisions/`](docs/docs/decisions/)）、验收标准与测试门禁，以及每一处
+需求定义、架构决策（见 [`docs/decisions/`](docs/decisions/)）、验收标准与测试门禁，以及每一处
 「否决方案及理由」的裁量；工具负责在这些约束下产出实现草稿与文档初稿。
 因此本项目的评价标准不是「谁敲的字」，而是**每个功能声明能否被测试复现**——测试数量以
 `cd web && npx vitest run` 与 `ctest --test-dir backend/build` 的实际输出为准，本文件不缓存数字。

@@ -21,7 +21,7 @@
 ```bash
 cd web && npx vitest run          # 必须全绿；当前因在途改动有 2 个失败，属上一条
 cd backend && ctest --test-dir build --output-on-failure
-systemctl --user is-active datacardforge-backend datacardforge-web datacardforge-build
+# 三个服务（前端 / 后端 / 构建）保持 active
 ```
 
 ## 目标（一句话）
@@ -40,7 +40,7 @@ systemctl --user is-active datacardforge-backend datacardforge-web datacardforge
 | `GET /api/signatures` 宣告 `compute: "auto" \| "explicit"` | 同上 |
 | 客户端方法 `createNode()` / `computeNode()` | `web/src/backend/client.ts`（约 267 / 331 行） |
 | 卡片夹具（`afterCreate` / `trigger` 字段）+ 真后端集成用例 | `web/tests/fixtures/cards/`、`web/tests/backendIntegration.test.ts` |
-| 决策记录 | `docs/docs/decisions/2026-10-27-summary-builtin.md` |
+| 决策记录 | `docs/decisions/2026-10-27-summary-builtin.md` |
 
 ## P2 范围
 
@@ -107,7 +107,7 @@ v1 **不做持久化**：面板开合、选中的统计量都是会话内状态�
 cd web && npx vitest run                                   # 全绿（新增 DOM 测试）
 cd backend && cmake --build build && ctest --test-dir build --output-on-failure
 cd web && node scripts/smoke.mjs http://127.0.0.1:4173      # 需先 npm run preview；新增下列检查
-systemctl --user is-active datacardforge-backend datacardforge-web datacardforge-build
+# 三个服务（前端 / 后端 / 构建）保持 active
 ```
 
 `smoke.mjs` 必须新增（端到端，真实后端）：

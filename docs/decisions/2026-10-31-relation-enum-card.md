@@ -23,7 +23,7 @@
 （`compute: "auto"`）**全部不变**。改的只有人看的部分：菜单、卡片标题、badge、i18n key
 （`menu.newRegression` → `menu.newRelationEnum`）。
 
-> id 是发布后的稳定身份（[port-semantics-v1](../architecture/port-semantics-v1.md:17) 「发布后永不改」）。
+> id 是发布后的稳定身份（[port-semantics-v1](../architecture/port-semantics-v1.md) §「id 发布后永不改」）。
 > 语义没变就不该换 id；换了 id 等于多一个签名，而能力并没有多一个。
 
 ### 二、选列 = 端口绑定，不是参数
@@ -37,7 +37,7 @@ setPortColumn(cardId, portId, columnIndex)
   → 一次 PATCH（同一个 node、同一条边；params 仍然为空）
 ```
 
-**为什么不是 `params`**：参数属于签名（[2026-10-27 契约](./2026-10-27-card-contracts.md:22)），
+**为什么不是 `params`**：参数属于签名（[2026-10-27 契约](./2026-10-27-card-contracts.md)），
 且"参数不产生也不删边"；而"哪个列喂哪个端口"是数据流，是绑定。把它做成参数会让卡片长得像
 表单、数据流长得像配置，两条路以后必然分叉。
 
@@ -91,7 +91,7 @@ slug→i18n 映射仍在前端（`RELATION_STAT_KEYS`），数据层与协议零
 - `npx vitest run`：**571 passed | 14 skipped**（新增 8：横向滚动 2、`setPortColumn` 1、末列配对 1、
   关系卡说明/行轴/选列 3、列宽拖拽 1）
 - `ctest --test-dir backend/build`：**8/8**（4 项 opt-in 照旧 skipped）
-- 三个 systemd 单元 active
+- 前后端与构建三个进程均 active
 
 ## 与会改变这些决定的信号
 
