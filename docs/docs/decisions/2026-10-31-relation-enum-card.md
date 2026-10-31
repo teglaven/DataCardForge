@@ -47,26 +47,28 @@ setPortColumn(cardId, portId, columnIndex)
 否决"多选列、一次枚举所有列对"：那是**新签名**（一卡一节点、K 与形状由签名定），需要后端 C++
 与 `card_fixtures`，不在本轮。见文末信号。
 
-### 三、列头承载关系：`<x> : <y> · 统计量`
+### 三、关系写在行轴，统计量写在列轴
 
-输出表的每个列头 = 这一对列 + 这个统计量的可读名：
+初版把 `<x> : <y>` 前缀到每个列头上（`A : B · 斜率`）。上线即被实测否掉：五列全变成
+`滑油压力_MPA : ...`，**截断后长得一模一样**，等于什么都没说。正确分工是：
 
-| 稳定 slug（后端发） | 显示（i18n） |
-|---|---|
-| `slope` | 斜率 |
-| `intercept` | 截距 |
-| `r` | 相关系数 r |
-| `r2` | 决定系数 R² |
-| `n` | 样本数 n |
+- **行轴 = 这一对关系**（`滑油压力_MPa：推力_kN`）。行标签本来就是卡提供的渲染函数
+  （`rowLabel(n)`），不是数据——把 `No.1` 换成"这一行真正描述的东西"不需要传输层有行标签
+  通道，`builtin:summary` 的"行 i ⇔ 目录第 i 项"也是同一类做法。
+- **列轴 = 统计量**：斜率 / 截距 / 相关系数 r / 决定系数 R² / 样本数 n。每个列头的 `title`
+  再带完整关系名（`滑油压力_MPa：推力_kN · 斜率`），截断也不丢上下文。
+- 行号列随之加宽（`rowHeaderWidth`，按关系名长度钳到 140–320px），否则关系名同样会被截。
 
-**为什么写在列轴上**：传输层只有列标签通道（`Matrix` 只带列 `annotation`，没有行标签），
-"这个数描述的是哪两列"只能挂在列轴上；将来若做"一行一对"，行身份仍然没有通道（`builtin:summary`
-是靠"行 i ⇔ 目录第 i 项 + 夹具逐值守卫"顶住的，一回事）。所以本轮先在列轴上把关系说清楚。
+slug→i18n 映射仍在前端（`RELATION_STAT_KEYS`），数据层与协议零改动；后端继续只发稳定 slug，
+**不写用户句子**（[backend-protocol-v1](../architecture/backend-protocol-v1.md) 结构化错误一节的口径）。
 
-实现是 `VirtualTable` 的可选 `columnLabel` 覆盖（卡片传入），数据层与协议零改动；
-后端继续只发稳定 slug，**不写用户句子**（[backend-protocol-v1](../architecture/backend-protocol-v1.md) 结构化错误一节的口径）。
+### 四、列宽可拖
 
-### 四、表格横向滚动：行不再二次平移
+`VirtualTable` 新增列宽拖拽：表头右缘 6px 手柄，按下后监听 window 的 mousemove（快速拖动离开
+手柄也跟得住），宽度钳在 48–600px。用户宽度与"按标签估算的默认宽度"分开存，换矩阵时清空。
+列宽是视图偏好：不进矩阵、不进 store、不产生任何数据变更。
+
+### 五、表格横向滚动：行不再二次平移
 
 根因：`.vtable__viewport` 本身是原生滚动容器（`overflow: auto`，canvas 带显式宽度），浏览器已经
 按 `scrollLeft` 平移了内容；而行元素又各自加了 `translateX(-scrollLeft)`，于是表体被平移两次、
@@ -77,16 +79,17 @@ setPortColumn(cardId, portId, columnIndex)
 ## 后果
 
 - 这张卡第一次有了"选择"：任意两列；不再需要"相邻"这个产品隐式约定。
-- 列头变长（`A : B · 决定系数 R²`），卡片更依赖横向滚动——所以第四条必须先修，否则是
-  "把不可用的表变得更不可用"。
+- "把关系写在列头"被实测否掉一次（五列截断后不可区分），关系改挂行轴——同一份信息，
+  换个轴就成立了，代价是行号列变宽。
+- 列头变短（只剩统计量），五列在 118px 的默认宽度下都能读全；更长的名字仍可拖宽。
 - 菜单语义变了：末列从"禁用"变成"与前一列配对"。测试同步（`InfiniteCanvas.dom.test`）。
 - 后端、协议、夹具、性能门禁均无改动；`ctest 8/8` 不变。
 
 ## 验证
 
 - `npx tsc --noEmit` 干净
-- `npx vitest run`：**567 passed | 14 skipped**（新增 4：VirtualTable 2、store `setPortColumn` 1、
-  末列配对 1）
+- `npx vitest run`：**571 passed | 14 skipped**（新增 8：横向滚动 2、`setPortColumn` 1、末列配对 1、
+  关系卡说明/行轴/选列 3、列宽拖拽 1）
 - `ctest --test-dir backend/build`：**8/8**（4 项 opt-in 照旧 skipped）
 - 三个 systemd 单元 active
 
