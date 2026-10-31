@@ -64,6 +64,26 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      # The smoke run exercises the *real* compute backend (summary panel, formula
+      # cards), so the C++ binary has to exist here too. Without it those checks would
+      # only ever prove the "backend unreachable" banner renders.
+      - name: Install C++ toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build libeigen3-dev
+
+      - name: Build compute backend
+        working-directory: .
+        run: |
+          cmake -S backend -B backend/build -G Ninja
+          cmake --build backend/build
+
+      - name: Start compute backend
+        working-directory: .
+        run: |
+          ./backend/build/dc_backend --port 37811 &
+          # Fail loudly: `curl ... && break || sleep` exits 0 after the last sleep.
+          curl -sf --retry 30 --retry-connrefused --retry-delay 1 \
+            http://127.0.0.1:37811/api/signatures > /dev/null
+
       - name: Install dependencies
         run: npm ci
 
@@ -80,9 +100,9 @@ jobs:
 
       - name: Wait for server
         run: |
-          for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:4173/ && break || sleep 1
-          done
+          # `curl ... && break || sleep 1` in a loop exits 0 after the 30th sleep, so a
+          # dead preview server used to surface as a smoke failure with a confusing cause.
+          curl -sf --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:4173/ > /dev/null
 
       - name: End-to-end smoke test
         run: node scripts/smoke.mjs http://127.0.0.1:4173
