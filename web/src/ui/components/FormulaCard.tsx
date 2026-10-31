@@ -32,7 +32,7 @@ import { REGRESSION_SIGNATURE } from '../migrate.ts';
 import { CardShell } from './CardShell.tsx';
 import { HoverHelp, useHoverHelp } from './HoverHelp.tsx';
 import { Popup } from './Popup.tsx';
-import { VirtualTable } from './VirtualTable.tsx';
+import { ROW_HEADER_WIDTH, VirtualTable } from './VirtualTable.tsx';
 
 /** How long to wait after the last keystroke before re-sending each formula to the backend. */
 const FORMULA_DEBOUNCE_MS = 250;
@@ -320,15 +320,22 @@ export function FormulaCard({
     );
   const pairLabel =
     pairNames.length >= 2 ? t('relation.pair', { x: pairNames[0], y: pairNames[1] }) : '';
-  const relationColumnLabel =
-    isRelation && pairLabel && resultMatrix
+  const relationStatName =
+    isRelation && resultMatrix
       ? (index: number): string => {
           // The backend's annotation is the stable slug (`slope`…); a frame may prefix it
           // with `Pos.N`. Strip that before looking the readable name up.
           const raw = resultMatrix.columnLabel(index).replace(/^Pos\.\d+\s+/, '');
           const key = RELATION_STAT_KEYS[raw];
-          return key ? `${pairLabel} · ${t(key)}` : `${pairLabel} · ${raw}`;
+          return key ? t(key) : raw;
         }
+      : undefined;
+  // The pair goes on the ROW axis (there is one row for now, and it is exactly this
+  // relationship), so each column header can be just the statistic it holds: five long
+  // `A : B · …` headers all truncated to the same `A : B · …` and told a reader nothing.
+  const relationColumnTitle =
+    isRelation && pairLabel && relationStatName
+      ? (index: number): string => `${pairLabel} · ${relationStatName(index)}`
       : undefined;
   const title = t('card.formula', {
     name:
@@ -470,7 +477,11 @@ export function FormulaCard({
             <section className="formula-card__formulas" aria-label={t('formula.zoneFormulas')}>
               <div className="formula-card__zone-title">
                 <span className="formula-card__zone-name">
-                  {expressionShaped ? t('formula.zoneFormulas') : t('formula.zoneParams')}
+                  {expressionShaped
+                    ? t('formula.zoneFormulas')
+                    : isRelation
+                      ? t('relation.zoneTitle')
+                      : t('formula.zoneParams')}
                 </span>
                 {/* The reference lives one click away from where it is needed. There is no
                     prop for this: the dialog is store state, so CardCanvas stays unaware.
@@ -491,11 +502,29 @@ export function FormulaCard({
                 </HoverHelp>
               </div>
               {!expressionShaped ? (
-                <p className="formula-card__no-params">
-                  {t('formula.noParams', { signature: card.signatureId.replace(/^builtin:/, '') })}
-                </p>
+                <div className="formula-card__signature-note">
+                  {isRelation ? (
+                    <>
+                      {/* The zone used to say only "no expressions" and then show an empty
+                          expression editor — a control that edits nothing. This card's
+                          "parameters" ARE explained here instead: what it computes, what each
+                          output column means, and where the inputs are changed. */}
+                      <p className="formula-card__no-params">{t('relation.zoneBody')}</p>
+                      <p className="formula-card__stat-note">{t('relation.statNote')}</p>
+                      <p className="formula-card__stat-note formula-card__stat-note--dim">
+                        {t('relation.zoneNote')}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="formula-card__no-params">
+                      {t('formula.noParams', {
+                        signature: card.signatureId.replace(/^builtin:/, ''),
+                      })}
+                    </p>
+                  )}
+                </div>
               ) : null}
-              {draft.map((formula, index) => (
+              {expressionShaped ? draft.map((formula, index) => (
                 <div
                   key={index}
                   className={`formula-card__row${error ? ' formula-card__row--error' : ''}`}
@@ -547,23 +576,25 @@ export function FormulaCard({
                     </button>
                   ) : null}
                 </div>
-              ))}
+              )) : null}
               {/* One tooltip per kind of control, rendered once: every row shares the same
                   sentence, and a hook cannot be called inside the map above. */}
               {nameHover.tooltip}
               {expressionHover.tooltip}
-              <button
-                type="button"
-                className="formula-card__add card__control"
-                {...addHover.anchorProps}
-                onClick={() => {
-                  const name = `Col${draft.length + 1}`;
-                  setDraft((rows) => [...rows, { name, expression: 'A' }]);
-                  setFormula(card.id, draft.length, name, 'A');
-                }}
-              >
-                + {t('formula.addColumn')}
-              </button>
+              {expressionShaped ? (
+                <button
+                  type="button"
+                  className="formula-card__add card__control"
+                  {...addHover.anchorProps}
+                  onClick={() => {
+                    const name = `Col${draft.length + 1}`;
+                    setDraft((rows) => [...rows, { name, expression: 'A' }]);
+                    setFormula(card.id, draft.length, name, 'A');
+                  }}
+                >
+                  + {t('formula.addColumn')}
+                </button>
+              ) : null}
               {addHover.tooltip}
               {error ? (
                 <p className="formula-card__error" role="alert">
@@ -701,8 +732,16 @@ export function FormulaCard({
                   <VirtualTable
                     matrix={resultMatrix}
                     readOnly
-                    rowLabel={(n) => t('table.rowHeader', { n })}
-                    columnLabel={relationColumnLabel}
+                    rowLabel={(n) =>
+                      isRelation && pairLabel ? pairLabel : t('table.rowHeader', { n })
+                    }
+                    rowHeaderWidth={
+                      isRelation && pairLabel
+                        ? Math.min(320, Math.max(ROW_HEADER_WIDTH, 32 + pairLabel.length * 8))
+                        : undefined
+                    }
+                    columnLabel={relationStatName}
+                    columnTitle={relationColumnTitle}
                     onHeaderContextMenu={(event, column) => {
                       event.preventDefault();
                       // The card owns its own menu: without this the event also reaches

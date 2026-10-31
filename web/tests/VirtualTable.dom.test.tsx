@@ -91,12 +91,35 @@ describe('virtual table horizontal scroll', () => {
     expect(header.style.transform).toBe('translateX(-0px)');
   });
 
-  it('prints a card-provided header override but keeps the stored label in the title', async () => {
+  it('prints a card-provided header override and uses columnTitle for the tooltip', async () => {
     const host = await mount(table(2), (index) => `X : Y · ${index}`);
 
     const headers = [...host.querySelectorAll<HTMLElement>('.vtable__colhead')];
     expect(headers.map((entry) => entry.textContent)).toEqual(['X : Y · 0', 'X : Y · 1']);
     // The override is presentation only; hovering still reveals the data's own label.
     expect(headers[0].title).toBe('X : Y · 0');
+  });
+
+  it('resizes a column by dragging the right edge of its header', async () => {
+    const host = await mount(table(2));
+    const header = host.querySelector<HTMLElement>('.vtable__header-inner')!;
+    const handles = host.querySelectorAll<HTMLElement>('.vtable__colresize');
+    expect(handles.length).toBe(2);
+
+    const widthsOf = () =>
+      header.style.gridTemplateColumns.split(' ').map((part) => Number.parseFloat(part));
+    const before = widthsOf();
+
+    await act(async () => {
+      handles[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 100 }));
+      window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 180 }));
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    });
+
+    const after = widthsOf();
+    // Header column 0 is `before[1]` (index 0 is the row-number column).
+    expect(after[1]).toBe(before[1] + 80);
+    // The neighbours are untouched: a drag resizes one column, not the grid.
+    expect(after[2]).toBe(before[2]);
   });
 });

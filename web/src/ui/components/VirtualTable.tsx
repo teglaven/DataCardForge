@@ -20,6 +20,9 @@ const ROW_HEIGHT = 22;
 const HEADER_HEIGHT = 26;
 const ROW_HEADER_WIDTH = 64;
 const COLUMN_WIDTH = 118;
+/** User-draggable bounds: below 48 a number is unreadable, above 600 it stops being a table. */
+const MIN_COLUMN_WIDTH = 48;
+const MAX_COLUMN_WIDTH = 600;
 const OVERSCAN = 8;
 
 export interface VirtualTableProps {
@@ -31,10 +34,14 @@ export interface VirtualTableProps {
    * Optional display override for a column header (the stored label stays authoritative).
    *
    * Used by cards whose header must say what the column *means* in context — the relation
-   * card prefixes every statistic with the pair it describes (`A : B · 斜率`) because the
-   * transport has no row-label channel to put that on.
+   * card shows the statistic's readable name here (the pair it belongs to lives on the row
+   * axis, see `columnTitle`).
    */
   columnLabel?: (columnIndex: number) => string | null;
+  /** Tooltip for a column header (defaults to what the header prints). */
+  columnTitle?: (columnIndex: number) => string | null;
+  /** Width of the row-number column. Cards can widen it when the row axis carries a name. */
+  rowHeaderWidth?: number;
   /** Right-click on a column header. */
   onHeaderContextMenu?: (event: React.MouseEvent, columnIndex: number) => void;
   /** Click on a column header (used to select / highlight a column). */
@@ -53,6 +60,8 @@ export function VirtualTable({
   readOnly,
   rowLabel,
   columnLabel,
+  columnTitle,
+  rowHeaderWidth = ROW_HEADER_WIDTH,
   onHeaderContextMenu,
   onHeaderClick,
   highlightColumn = null,
@@ -65,6 +74,12 @@ export function VirtualTable({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(320);
   const [columnWidths, setColumnWidths] = useState<number[]>([]);
+  /**
+   * Manual widths (drag the right edge of a header). Distances only change through a drag,
+   * so these are kept apart from the measured default: a table whose labels change (a
+   * re-bound port, a new result) still keeps the width the user chose.
+   */
+  const [userWidths, setUserWidths] = useState<Record<number, number>>({});
   const [editing, setEditing] = useState<{ row: number; col: number } | null>(null);
   /** Set by Escape so the unmounting input's `blur` does not commit the abandoned text. */
   const abandonedRef = useRef(false);
@@ -88,9 +103,21 @@ export function VirtualTable({
     setColumnWidths(measuredWidths);
   }, [measuredWidths]);
 
+  // A different table means different columns: widths measured for the old one would be a
+  // lie about the new one.
+  useEffect(() => {
+    setUserWidths({});
+  }, [matrix, columnCount]);
+
+  /** Width actually used: the user's drag wins over the measured default. */
+  const effectiveWidths = useMemo(
+    () => columnWidths.map((width, c) => userWidths[c] ?? width),
+    [columnWidths, userWidths],
+  );
+
   const totalWidth = useMemo(
-    () => columnWidths.reduce((sum, w) => sum + w, 0),
-    [columnWidths],
+    () => effectiveWidths.reduce((sum, width) => sum + width, 0),
+    [effectiveWidths],
   );
 
   // Track the viewport size so the virtual window adapts to card resizing.
@@ -146,11 +173,45 @@ export function VirtualTable({
     onCellChange?.(row, col, parseNumeric(text));
   };
 
-  const gridTemplate = `${ROW_HEADER_WIDTH}px ${columnWidths.map((w) => `${w}px`).join(' ')}`;
+  const gridTemplate = `${rowHeaderWidth}px ${effectiveWidths
+    .map((width) => `${width}px`)
+    .join(' ')}`;
   const sourceSet = new Set(sourceColumns);
   /** Header text: an override (card-specific meaning) wins over the stored label. */
   const headerLabel = (c: number) =>
     columnLabel?.(c) ?? (matrix.columnLabel(c) || matrix.column(c).posName);
+  /** Header tooltip: the override's full sentence when there is one, else the label. */
+  const headerTitle = (c: number) => columnTitle?.(c) ?? headerLabel(c);
+
+  /**
+   * Drag the right edge of a header to resize that column.
+   *
+   * The width is a view preference, not data: it lives in this component and deliberately
+   * does not touch the matrix or the store. Listeners are attached to the window so a fast
+   * drag that leaves the 6 px handle still tracks the pointer.
+   */
+  const dragRef = useRef<{ column: number; startX: number; startWidth: number } | null>(null);
+  const beginResize = (event: React.MouseEvent, column: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragRef.current = { column, startX: event.clientX, startWidth: effectiveWidths[column] };
+    const onMove = (move: MouseEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const next = Math.max(
+        MIN_COLUMN_WIDTH,
+        Math.min(MAX_COLUMN_WIDTH, drag.startWidth + move.clientX - drag.startX),
+      );
+      setUserWidths((previous) => ({ ...previous, [drag.column]: next }));
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   return (
     <div className="vtable">
@@ -161,7 +222,7 @@ export function VirtualTable({
           style={{
             transform: `translateX(-${scrollLeft}px)`,
             gridTemplateColumns: gridTemplate,
-            width: ROW_HEADER_WIDTH + totalWidth,
+            width: rowHeaderWidth + totalWidth,
           }}
         >
           <div className="vtable__corner" />
@@ -171,12 +232,19 @@ export function VirtualTable({
               className={`vtable__colhead${
                 highlightColumn === c ? ' vtable__colhead--highlight' : ''
               }${sourceSet.has(c) ? ' vtable__colhead--source' : ''}`}
-              title={headerLabel(c)}
+              title={headerTitle(c)}
               onClick={() => onHeaderClick?.(c)}
               onContextMenu={(event) => onHeaderContextMenu?.(event, c)}
             >
               {/* A real box: `text-overflow` cannot act on an anonymous flex item. */}
               <span className="vtable__colhead-label">{headerLabel(c)}</span>
+              {/* Drag the right edge to widen/narrow the column. The handler stops
+                  propagation so a resize never also selects the column. */}
+              <span
+                className="vtable__colresize"
+                aria-hidden
+                onMouseDown={(event) => beginResize(event, c)}
+              />
             </div>
           ))}
         </div>
@@ -185,7 +253,7 @@ export function VirtualTable({
       <div className="vtable__viewport" ref={viewportRef} onScroll={handleScroll}>
         <div
           className="vtable__canvas"
-          style={{ height: rowCount * ROW_HEIGHT, width: ROW_HEADER_WIDTH + totalWidth }}
+          style={{ height: rowCount * ROW_HEIGHT, width: rowHeaderWidth + totalWidth }}
         >
           {/* Rows are NOT translated: `.vtable__viewport` scrolls natively, so the browser
               already moves this canvas by `scrollLeft`. Translating rows here as well moved
@@ -200,7 +268,7 @@ export function VirtualTable({
                 top: row * ROW_HEIGHT,
                 height: ROW_HEIGHT,
                 gridTemplateColumns: gridTemplate,
-                width: ROW_HEADER_WIDTH + totalWidth,
+                width: rowHeaderWidth + totalWidth,
               }}
             >
               <div className="vtable__rowhead">{rowLabel(row + 1)}</div>

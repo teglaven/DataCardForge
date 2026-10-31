@@ -481,9 +481,10 @@ describe('a signature without expressions', () => {
     });
     const ports = [...host.querySelectorAll('.formula-card__port-id')].map((p) => p.textContent);
     expect(ports).toEqual(['x', 'y']);
-    // No formula editor, and it says why instead of showing an empty box.
+    // No formula editor, and it says what it computes instead of showing an empty box.
     expect(host.querySelectorAll('.formula-card__formula-row')).toHaveLength(0);
-    expect(host.textContent).toContain('此函数没有表达式参数');
+    expect(host.textContent).toContain('计算说明');
+    expect(host.textContent).toContain('一元线性拟合');
     // The parameter zone is still there — it just carries a statement, not an editor.
     expect(host.querySelector('.formula-card__formulas')).not.toBeNull();
   });
@@ -694,5 +695,96 @@ describe('result preview', () => {
     });
     const host = await mount(card, { resultMatrix: matrix(1, 100) });
     expect(host.querySelector('.formula-card__result-more')).toBeNull();
+  });
+});
+
+/**
+ * The relation-enumeration card is the one signature that is NOT expression-shaped. Its
+ * "parameter area" is an explanation, its row axis names the relationship, and its inputs
+ * are re-bindable from the card — three things the generic formula card never had to show.
+ */
+describe('relation-enumeration card', () => {
+  function relationSetup() {
+    const source = new MatrixData();
+    source.appendColumn('Pos.1', [1, 2, 3, 4]);
+    source.appendColumn('Pos.2', [2, 4, 6, 8]);
+    source.appendColumn('Pos.3', [0, 0, 0, 0]);
+    source.setColumnAnnotation(0, '滑油压力_MPa');
+    source.setColumnAnnotation(1, '推力_kN');
+    source.setColumnAnnotation(2, '温度_C');
+    const matrixCardId = store().addMatrixCard([{ name: 'a.csv', matrix: source }]);
+    const cardId = store().addRelationEnumCard(matrixCardId, 0)!;
+    const card = store().cards.find((entry) => entry.id === cardId) as FunctionCardModel;
+
+    // The backend's result: one row, five columns whose annotations are the stable slugs.
+    const result = new MatrixData();
+    const names = ['slope', 'intercept', 'r', 'r2', 'n'];
+    const values = [[-3.5], [45.6], [-0.01], [0.0001], [4]];
+    names.forEach((name, index) => {
+      result.appendColumn(`Pos.${index + 1}`, values[index]);
+      result.setColumnAnnotation(index, name);
+    });
+
+    const columns = ['滑油压力_MPa', '推力_kN', '温度_C'];
+    const inputs: ResolvedInput[] = [
+      {
+        portId: 'x',
+        mode: 'cell',
+        label: 'a.csv · 滑油压力_MPa',
+        column: 0,
+        columns,
+        rows: 4,
+        cols: 3,
+        missing: false,
+      },
+      {
+        portId: 'y',
+        mode: 'cell',
+        label: 'a.csv · 推力_kN',
+        column: 1,
+        columns,
+        rows: 4,
+        cols: 3,
+        missing: false,
+      },
+    ];
+    return { card, inputs, result };
+  }
+
+  it('explains what it computes instead of showing an empty expression editor', async () => {
+    const { card, inputs } = relationSetup();
+    const host = await mount(card, { inputs });
+    const zone = host.querySelector('.formula-card__formulas')!;
+    expect(zone.textContent).toContain('计算说明');
+    expect(zone.textContent).toContain('一元线性拟合');
+    expect(zone.textContent).toContain('决定系数 R²');
+    // No expression input and no "add formula column": the signature has no expressions,
+    // and a control that edits nothing is worse than no control.
+    expect(zone.querySelectorAll('input').length).toBe(0);
+    expect(zone.querySelector('.formula-card__add')).toBeNull();
+  });
+
+  it('names the relationship on the row axis and the statistics on the column axis', async () => {
+    const { card, inputs, result } = relationSetup();
+    const host = await mount(card, { inputs, resultMatrix: result });
+    const headers = [...host.querySelectorAll('.vtable__colhead-label')].map(
+      (element) => element.textContent,
+    );
+    expect(headers).toEqual(['斜率', '截距', '相关系数 r', '决定系数 R²', '样本数 n']);
+    expect(host.querySelector('.vtable__rowhead')!.textContent).toBe('滑油压力_MPa：推力_kN');
+  });
+
+  it('offers a column picker on every cell port', async () => {
+    const { card, inputs } = relationSetup();
+    const host = await mount(card, { inputs });
+    const selects = [...host.querySelectorAll<HTMLSelectElement>('.formula-card__port-column')];
+    expect(selects.length).toBe(2);
+    expect([...selects[0].options].map((option) => option.textContent)).toEqual([
+      '滑油压力_MPa',
+      '推力_kN',
+      '温度_C',
+    ]);
+    expect(selects[0].value).toBe('0');
+    expect(selects[1].value).toBe('1');
   });
 });

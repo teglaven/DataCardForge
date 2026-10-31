@@ -231,8 +231,14 @@ const dictionaries = {
     'menu.newRelationEnum': '新建关系枚举卡…',
     'status.needTwoColumns': '「{type}」至少需要 2 列数据，该表只有 {have} 列',
     'relation.card': '关系枚举',
-    'relation.pair': '{x} : {y}',
+    'relation.pair': '{x}：{y}',
     'relation.column': '取列',
+    'relation.zoneTitle': '计算说明',
+    'relation.zoneBody':
+      '本卡不做表达式计算：把左侧 x、y 各绑一列，做一元线性拟合 y = 斜率·x + 截距，输出 1 行 × 5 列。',
+    'relation.statNote':
+      '斜率：x 每增加 1，y 的平均变化量。截距：x = 0 时的 y。相关系数 r：−1…1 的线性相关强度（符号即方向）。决定系数 R²：y 的方差中能被 x 解释的比例。样本数 n：x、y 都有效的行数，缺值行不计。',
+    'relation.zoneNote': '换列改左侧端口的下拉；建图在结果列头右键。',
     'relation.stat.slope': '斜率',
     'relation.stat.intercept': '截距',
     'relation.stat.r': '相关系数 r',
@@ -542,6 +548,12 @@ const dictionaries = {
     'relation.card': 'Relation enumeration',
     'relation.pair': '{x} : {y}',
     'relation.column': 'Column',
+    'relation.zoneTitle': 'What this card computes',
+    'relation.zoneBody':
+      'No expressions here: it fits one straight line to the two bound columns (y = slope·x + intercept) and returns a single row of five statistics.',
+    'relation.statNote':
+      'Slope: change in y per unit of x. Intercept: y when x = 0. Correlation r: strength of the linear relationship (−1…1), sign = direction. R²: the share of y’s variance explained by x. Sample count n: rows where both values exist (rows with a missing value do not take part).',
+    'relation.zoneNote': 'Change the columns from the port selectors on the left; right-click a result header to chart it.',
     'relation.stat.slope': 'Slope',
     'relation.stat.intercept': 'Intercept',
     'relation.stat.r': 'Correlation r',

@@ -571,6 +571,23 @@ body {
   border-right: 1px solid var(--border);
   overflow: hidden;
   user-select: none;
+  position: relative;
+}
+
+/* Column-width handle: sits on the right border, invisible until the header is hovered.
+   A visible 6 px strip would read as a second separator; the resize cursor is the cue. */
+.vtable__colresize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.vtable__colresize:hover {
+  background: var(--accent-soft);
 }
 
 /* The label is a real box so `text-overflow` can apply: on `display: flex` the text is an
@@ -1289,6 +1306,26 @@ body {
   margin: 0;
   font-size: 11px;
   line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* Signature explanation block (non-expression cards): what the card computes and what each
+   output column means. Replaces the empty expression editor that used to sit here. */
+.formula-card__signature-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.formula-card__stat-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.formula-card__stat-note--dim {
   color: var(--text-dim);
 }
 
