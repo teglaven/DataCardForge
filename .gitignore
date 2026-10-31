@@ -53,6 +53,16 @@ AGENTS.md
 
 # ── 本机私有目录：不入库 ──────────────────────────────────────────────────
 # 内容与项目产物无关，写作时放在仓库外的目录里。
+
+# ── 工作区协议：本地文件，不入库 ──────────────────────────────────────────────
+# 长会话里用来自动恢复上下文的状态文件、agent 工具，以及描述它们的记录。
+# 它们描述的是"这台机器上的工作流"，不是产品的一部分；文件留在本地即可。
+STATE.md
+scripts/state-check.sh
+scripts/turnwatch.py
+scripts/find-term.sh
+docs/tasks/2026-10-29-state-and-perf-gate.md
+docs/lessons/2026-10-27-long-turn-budget.md
 private/
 
 # ── 临时探针：调试用，用完即删（真防线是 backend/tests/ 与 web/tests/ 的正式用例）──

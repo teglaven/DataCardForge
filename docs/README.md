@@ -33,7 +33,6 @@
 - ⚖️ **架构权衡** (`architecture/`) — 历史对比文档，结论多数已被决策追记取代；仅当想理解"为什么不选另一头"时阅读
   - [前端选型：ImGui vs Web](architecture/frontend-imgui-vs-web.md)（✅ 已收敛 → 选 Web，见 10-14 决策；对比表仍可复用）
 - 🕳️ **踩坑记录** (`lessons/`) — 实测中遇到的坑与规避方法
-  - [长回合的成本治理：提前发现与结构防治](lessons/2026-10-27-long-turn-budget.md) ← 成本治理规则 + 三条被否掉的方案
   - [ImPlot v1.1 API 大改](lessons/implot-v1.1-api.md)
   - [ImGui Docking 下 PushStyleColor 的坑](lessons/imgui-docking-pushstylecolor.md)
 - 🧾 **任务书** (`tasks/`) — 一次会话可完成的执行切片：前置条件、契约红线、验收命令
