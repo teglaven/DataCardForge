@@ -24,6 +24,7 @@ import { useTranslator, useWorkspace } from '../workspaceStore.ts';
 import type { MatrixCardModel } from '../types.ts';
 import { CardShell } from './CardShell.tsx';
 import { Popup } from './Popup.tsx';
+import { SummaryPanel } from './SummaryPanel.tsx';
 import { VirtualTable } from './VirtualTable.tsx';
 
 interface MatrixCardProps {
@@ -219,6 +220,10 @@ export function MatrixCard({
         ) : (
           <div className="matrix-card__empty">{t('empty.hint')}</div>
         )}
+        {/* 摘要: the card's own table summarised by the backend. Its state, its node and its
+            open flag live in the store (session-only), so the card model is untouched —
+            and it never computes by itself; the panel asks first. */}
+        <SummaryPanel card={card} />
       </div>
 
       {menu ? (

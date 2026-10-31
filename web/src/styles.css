@@ -31,6 +31,12 @@
   --on-warn: #ffffff;
   --shadow: 0 6px 18px rgba(20, 26, 38, 0.14);
   --shadow-active: 0 10px 28px rgba(20, 26, 38, 0.24);
+  /* Node-state colours (B-plan four-state lamp). Two consumers — the card's state light and
+     the summary panel — read these same values, so they can never disagree about what
+     "computing" or "done" looks like. Fixed in both themes on purpose: these tones read on
+     either surface (the panel tints them with its own alpha). */
+  --state-amber: #d99a1f;
+  --state-green: #2e9e57;
   --row-height: 22px;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -1953,12 +1959,12 @@ body {
 }
 
 .node-light--computing {
-  background: #d99a1f;
+  background: var(--state-amber);
   animation: node-pulse 1s ease-in-out infinite;
 }
 
 .node-light--done {
-  background: #2e9e57;
+  background: var(--state-green);
 }
 
 .node-light--error {
@@ -1980,6 +1986,262 @@ body {
   .node-light--computing {
     animation: none;
   }
+}
+
+/* The summary panel's own lamp: same four colours as the node light above, but a separate
+   class so a `.card--formula .node-light` lookup keeps describing the CARD's node state. */
+.summary-panel__lamp {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.summary-panel__lamp--notRequested {
+  background: var(--text-dim);
+}
+
+.summary-panel__lamp--computing {
+  background: var(--state-amber);
+  animation: node-pulse 1s ease-in-out infinite;
+}
+
+.summary-panel__lamp--done {
+  background: var(--state-green);
+}
+
+/* Stale is "invalidated", not "busy": a hollow ring, like the card's --stale light. */
+.summary-panel__lamp--stale {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+}
+
+.summary-panel__lamp--error {
+  background: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .summary-panel__lamp--computing {
+    animation: none;
+  }
+}
+
+/* ── Summary panel (摘要, `builtin:summary`) ────────────────────────────
+   A collapsible rail at the bottom of data cards and function cards. Its bars use the same
+   colours as the four-state lamp above, as a tint (so they work on both themes):
+   grey = 未请求, amber = 计算中 / 待重算, green = 有结果, red = 错误.
+   The panel's open state is its own — opening the summary must never move the chart card's
+   column dock, which answers a different question ("which columns to plot"). */
+.summary-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  font-size: 11px;
+  overflow: hidden;
+}
+
+.summary-panel--collapsed {
+  border-color: var(--border-strong);
+  background: var(--surface-alt);
+}
+
+.summary-panel__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 1px;
+  padding: 3px 8px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.summary-panel__toggle:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.summary-panel__label {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.summary-panel__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  min-height: 24px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+
+.summary-panel__bar--notRequested {
+  background: rgba(106, 114, 128, 0.12);
+}
+
+.summary-panel__bar--computing,
+.summary-panel__bar--stale {
+  /* --state-amber at 16% over the card surface. */
+  background: rgba(217, 154, 31, 0.16);
+}
+
+.summary-panel__bar--done {
+  /* --state-green at 14%. */
+  background: rgba(46, 158, 87, 0.14);
+}
+
+.summary-panel__bar--error {
+  background: rgba(200, 50, 50, 0.14);
+}
+
+.summary-panel__status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.summary-panel__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.summary-panel__actions .card__control {
+  font-size: 11px;
+  padding: 1px 7px;
+}
+
+.summary-panel__collapse {
+  font: inherit;
+  line-height: 1;
+  padding: 2px 6px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.summary-panel__collapse:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.summary-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 6px;
+  max-height: 220px;
+  overflow: hidden;
+}
+
+/* The table scrolls inside the panel: a wide summary must never stretch the card. */
+.summary-panel__table-wrap {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.summary-panel__table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.summary-panel__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  padding: 2px 6px;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.summary-panel__table .summary-panel__corner {
+  text-align: left;
+}
+
+.summary-panel__table tbody th {
+  position: sticky;
+  left: 0;
+  background: var(--surface-alt);
+  border-right: 1px solid var(--border);
+  padding: 1px 6px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.summary-panel__table td {
+  padding: 1px 6px;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.summary-panel__row:hover td,
+.summary-panel__row:hover th {
+  background: var(--accent-soft);
+}
+
+.summary-panel__stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 2px 0;
+}
+
+.summary-panel__stats-title {
+  color: var(--text-dim);
+}
+
+.summary-panel__stat-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--mono);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.summary-panel__stat-option input[type='checkbox'] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.summary-panel__banner,
+.summary-panel__empty,
+.summary-panel__error {
+  margin: 0;
+  padding: 2px 0;
+  color: var(--text-dim);
+}
+
+.summary-panel__error {
+  color: var(--danger);
 }
 
 

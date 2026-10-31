@@ -53,12 +53,24 @@ import {
   REGRESSION_SIGNATURE,
   chartPortId,
 } from './migrate.ts';
-import { portBindingsFor, REGRESSION_PORT_X, REGRESSION_PORT_Y } from './bindings.ts';
+import {
+  SOURCE_PORT,
+  portBindingsFor,
+  REGRESSION_PORT_X,
+  REGRESSION_PORT_Y,
+} from './bindings.ts';
 import { translatorFor, detectLocale, type Locale } from './i18n.ts';
 // Type-only: the store owns *whether* the reference is open, the content module owns what
 // is in it. Importing the type alone keeps the catalogue out of the store's runtime.
 import type { HelpSection } from './formulaHelp.ts';
-import { BackendClient, REQUIRED_CAPABILITIES, type NodeEvent, type SignatureDto } from '../backend/client.ts';
+import {
+  BackendClient,
+  REQUIRED_CAPABILITIES,
+  type DirtyReasonName,
+  type NodeEvent,
+  type NodeStateName,
+  type SignatureDto,
+} from '../backend/client.ts';
 
 export { lineColor };
 
@@ -72,6 +84,74 @@ export interface BackendStatus {
   protocol?: number;
   /** Structured detail for the banner (code-style, not user prose). */
   error?: string;
+}
+
+/**
+ * Statistic catalog of `builtin:summary`, in the backend's `summaryStatCatalog()` order
+ * (`backend/src/signature.cpp`) — the order IS the output row order
+ * (docs/decisions/2026-10-27-summary-builtin.md §一).
+ *
+ * The ids are stable identities: never renamed, never translated, never reordered. The
+ * panel prints them verbatim as row labels because the transport has no row-label channel;
+ * inventing Chinese names here would split row identity in two.
+ */
+export const SUMMARY_STATS = [
+  'n',
+  'nan',
+  'mean',
+  'sd',
+  'var',
+  'min',
+  'q1',
+  'median',
+  'q3',
+  'max',
+  'iqr',
+  'sem',
+] as const;
+
+export type SummaryStatId = (typeof SUMMARY_STATS)[number];
+
+/** The signature behind the 摘要 panel. Published id — frozen, like every signature id. */
+export const SUMMARY_SIGNATURE = 'builtin:summary';
+
+/** One summary table exactly as the backend returned it. */
+export interface SummaryResultTable {
+  /** Column labels: the selected input variables, in the source table's column order. */
+  columns: string[];
+  /** Row identity, catalog order: row `r` ⇔ `stats[r]`. */
+  stats: SummaryStatId[];
+  /** `rows[r][c]` — one value per (statistic, variable). No arithmetic happens here. */
+  rows: number[][];
+}
+
+/**
+ * Session-only state of one card's 摘要 panel.
+ *
+ * Deliberately NOT a card-model field: adding one would bump the card schema
+ * (docs/decisions/2026-10-26-card-schema-v2.md) plus migration plus fixtures for what is
+ * pure view state. The node id lives here too (lifecycle plan A: created on the first
+ * 计算), so nothing about the panel travels in the workspace snapshot.
+ */
+export interface SummaryPanelEntry {
+  /** Whether the panel is expanded on this card (independent of the chart's column dock). */
+  open: boolean;
+  /** Chosen subset of the catalog: always canonical (catalog order) and never empty. */
+  stats: SummaryStatId[];
+  /** The ONE backend node behind this panel; `null` until the first 计算. */
+  nodeId: number | null;
+  /** Local matrix the node is bound to; a new source means a new binding. */
+  boundMatrixId: number | null;
+  /** `idle` = no node yet; otherwise the backend's own state name. */
+  status: 'idle' | NodeStateName;
+  /** Present while `status === 'dirty'`: the backend's reason for it. */
+  reason?: DirtyReasonName;
+  /** Structured error identity, present while `status === 'error'`. */
+  code?: string;
+  /** Local wall-clock time of the last successful compute (no protocol field exists). */
+  computedAt: number | null;
+  /** The cached table; dropped whenever the backend says the numbers are stale. */
+  result: SummaryResultTable | null;
 }
 
 /**
@@ -375,6 +455,30 @@ interface WorkspaceState {
   renameOutputColumn: (cardId: number, index: number, name: string) => void;
   /** Extend/shrink the contract (the explicit way out of a self-edit violation). */
   setColumnContract: (cardId: number, columns: number | null) => void;
+
+  // ── summary panel (`builtin:summary`; session-only, plan A lazy node) ─
+  /**
+   * Per-card 摘要 state, keyed by card id. Never persisted and never on the card model:
+   * the panel's open state, its statistic filter and its node id are all session state.
+   */
+  summaries: Record<number, SummaryPanelEntry>;
+  /** Expand/collapse one card's 摘要 bar (its own state, not the column dock's). */
+  setSummaryOpen: (cardId: number, open: boolean) => void;
+  /**
+   * Toggle one catalog id in the panel's filter.
+   *
+   * `params.stats` is a FILTER, never a reordering: the subset is re-canonicalised to
+   * catalog order, an empty selection is refused (the backend answers `stats: []` with
+   * `badSignatureParams`) and an existing node is told about the change with one PATCH,
+   * which is what turns the panel into 待重算 / 参数已改.
+   */
+  toggleSummaryStat: (cardId: number, stat: SummaryStatId) => void;
+  /**
+   * The ONE trigger for `builtin:summary`: create this card's node on the first call,
+   * then `POST /api/nodes/{id}/compute` and pull the result table from the backend.
+   * There is no second entry point and no local arithmetic.
+   */
+  computeSummary: (cardId: number) => void;
 
   // ── view helpers ────────────────────────────────────────────────────
   tileCards: (viewportWidth: number, viewportHeight: number) => void;
@@ -757,6 +861,256 @@ function locateCardByNode(nodeId: number): number | null {
   }
   return null;
 }
+
+// ── summary panel (`builtin:summary`) ───────────────────────────────────────────────
+//
+// The panel is the frontend for a signature that computes NOTHING on creation: it is the
+// first `explicitCompute` signature, and `POST /api/nodes/{id}/compute` is its only
+// trigger (docs/decisions/2026-10-27-summary-builtin.md §四). Everything below is
+// plumbing around that single call — no number is ever produced in the browser.
+
+/** A fresh, empty panel entry (the whole catalog selected, closed, no node). */
+function emptySummaryEntry(): SummaryPanelEntry {
+  return {
+    open: false,
+    stats: [...SUMMARY_STATS],
+    nodeId: null,
+    boundMatrixId: null,
+    status: 'idle',
+    computedAt: null,
+    result: null,
+  };
+}
+
+/**
+ * Canonicalise a requested statistic subset.
+ *
+ * Unknown ids are dropped and the survivors snap back to CATALOG order — `params.stats`
+ * filters, it never reorders (row order is the row identity, decision §一). An empty
+ * selection would be `badSignatureParams` on the wire, so the whole catalog is the
+ * fallback rather than "0 rows".
+ */
+export function canonicalSummaryStats(requested: readonly string[]): SummaryStatId[] {
+  const wanted = new Set(requested.map((id) => id.toLowerCase()));
+  const ordered = SUMMARY_STATS.filter((id) => wanted.has(id));
+  return ordered.length > 0 ? [...ordered] : [...SUMMARY_STATS];
+}
+
+/**
+ * Parameters a summary node is created/patched with.
+ *
+ * `columns` is deliberately absent: the backend reads a missing `columns` as "every input
+ * column", which is the only column set this panel offers (决策 §五). `stats` always
+ * travels, because the row set the panel prints IS this filter — canonical and never empty.
+ */
+function summaryParams(stats: readonly SummaryStatId[]): Record<string, unknown> {
+  return { stats: [...stats] };
+}
+
+/** Merge one patch into a card's panel entry, creating it on first touch. */
+function patchSummary(cardId: number, patch: Partial<SummaryPanelEntry>): void {
+  useWorkspace.setState((state) => {
+    const card = state.cards.find((entry) => entry.id === cardId);
+    // The card can be closed while a compute is in flight; a card created later must never
+    // inherit the numbers of the one that died with the same id.
+    if (!card || (!isMatrixCard(card) && !isFormulaCard(card))) return {};
+    return {
+      summaries: {
+        ...state.summaries,
+        [cardId]: { ...emptySummaryEntry(), ...state.summaries[cardId], ...patch },
+      },
+    };
+  });
+}
+
+/** The matrix a card's panel summarises (data card: active file; function card: result). */
+interface SummarySource {
+  /** Local matrix id — the identity the panel's node binding is checked against. */
+  localMatrixId: number;
+  /** Name used for the exported file (a file name, or the signature's slug). */
+  name: string;
+  /** Server-side copy, `null` while it has no id yet (upload pending / never uploaded). */
+  serverMatrixId: number | null;
+}
+
+function summarySourceOf(card: CardModel): SummarySource | null {
+  if (isMatrixCard(card)) {
+    const source = card.sources[card.activeSource];
+    if (!source) return null;
+    return {
+      localMatrixId: source.matrixId,
+      name: source.name,
+      serverMatrixId: backendMatrixIdFor(source.matrixId),
+    };
+  }
+  if (isFormulaCard(card)) {
+    // A function card's table exists in the browser only as a display cache; the server id
+    // is the node's result matrix, which is exactly what `backendMatrixIdFor` resolves.
+    if (card.displayMatrixId < 0) return null;
+    return {
+      localMatrixId: card.displayMatrixId,
+      name: card.signatureId.replace(/^builtin:/, ''),
+      serverMatrixId:
+        card.node?.state === 'done' ? backendMatrixIdFor(card.displayMatrixId) : null,
+    };
+  }
+  return null;
+}
+
+/** The card whose panel owns `nodeId`, if any (the reverse of `SummaryPanelEntry.nodeId`). */
+function locateSummaryCardByNode(nodeId: number): number | null {
+  for (const [key, entry] of Object.entries(useWorkspace.getState().summaries)) {
+    if (entry.nodeId === nodeId) return Number(key);
+  }
+  return null;
+}
+
+/** True while the panel still describes the data it started computing over. */
+function summaryStillCurrent(cardId: number, localMatrixId: number): boolean {
+  const state = useWorkspace.getState();
+  const card = state.cards.find((entry) => entry.id === cardId);
+  if (!card) return false;
+  const source = summarySourceOf(card);
+  return source !== null && source.localMatrixId === localMatrixId;
+}
+
+/** Computes in flight per card: 计算 + 重算 pressed twice must not create two nodes. */
+const summaryComputing = new Set<number>();
+
+/**
+ * Read a summary node's result table.
+ *
+ * The node's authoritative status names the matrix (`GET /api/nodes/{id}`), so the panel
+ * never has to remember an id and a re-created node is simply re-read. The frame is
+ * column-major — one array per VARIABLE — and the rows are the catalog filter the backend
+ * applied, so this is a transpose, not arithmetic.
+ */
+async function fetchSummaryTable(
+  nodeId: number,
+  stats: readonly SummaryStatId[],
+): Promise<SummaryResultTable | null> {
+  const status = await backendClient.getNode(nodeId);
+  if (!status || status.state !== 'done' || status.resultMatrixId < 0) return null;
+  const frame = await backendClient.window(status.resultMatrixId, 0, SUMMARY_STATS.length);
+  if (!frame.ok) return null;
+  const rows = frame.rows ?? 0;
+  const columns = frame.columns ?? 0;
+  const data = frame.data ?? [];
+  const table: number[][] = [];
+  for (let r = 0; r < rows; ++r) {
+    table.push(data.map((column) => (r < column.length ? column[r] : NaN)));
+  }
+  return {
+    stats: stats.slice(0, rows),
+    // Column labels inherit the source columns verbatim (`Pos.1 A`, `Pos.7`).
+    columns: (frame.names ?? []).slice(0, columns),
+    rows: table,
+  };
+}
+
+/**
+ * Drop the node behind one panel and go back to 未请求.
+ *
+ * A node reads exactly ONE matrix. When the data under the panel is swapped (a file
+ * switch, a file replacement) or the card closes, keeping the node would leave it reading
+ * a matrix the store is about to release — which the backend refuses with 409, leaving the
+ * copy behind — and the next 计算 would summarise the wrong table. The returned promise
+ * resolves once the server let go, so callers that also release the matrix can order it.
+ */
+function releaseSummaryNode(cardId: number): Promise<void> | null {
+  const entry = useWorkspace.getState().summaries[cardId];
+  if (!entry) return null;
+  patchSummary(cardId, {
+    nodeId: null,
+    boundMatrixId: null,
+    status: 'idle',
+    reason: undefined,
+    code: undefined,
+    computedAt: null,
+    result: null,
+  });
+  if (entry.nodeId === null || entry.nodeId <= 0) return null;
+  return backendClient.deleteNode(entry.nodeId).then((result) => {
+    if (!result.ok && result.code === 'backendUnavailable') {
+      useWorkspace.setState({ backend: { state: 'offline', error: result.code } });
+    }
+  });
+}
+
+/** Release a panel's node if it has one (source change / card close). */
+function summarySourceChanged(cardId: number): Promise<void> | null {
+  const entry = useWorkspace.getState().summaries[cardId];
+  if (!entry || (entry.nodeId === null && entry.result === null && entry.status === 'idle')) {
+    return null;
+  }
+  return releaseSummaryNode(cardId);
+}
+
+/**
+ * Mirror one backend node event onto a card's panel.
+ *
+ * This is the ONLY way the panel learns that the numbers went stale: the backend marks the
+ * node `dirty` with a `reason` (and has already emptied the result matrix), so the cached
+ * table is dropped in the same step. A client-side diff would be a second opinion on a
+ * question the backend already answered.
+ */
+function applySummaryEvent(
+  cardId: number,
+  stateName: NodeStateName,
+  reason: DirtyReasonName | undefined,
+  code: string | undefined,
+): void {
+  if (stateName === 'dirty') {
+    patchSummary(cardId, {
+      status: 'dirty',
+      reason: reason ?? 'upstreamChanged',
+      code: undefined,
+      result: null,
+    });
+    return;
+  }
+  if (stateName === 'error') {
+    patchSummary(cardId, { status: 'error', code: code ?? 'internalError', result: null });
+    return;
+  }
+  if (stateName === 'computing') {
+    patchSummary(cardId, { status: 'computing', reason: undefined, code: undefined });
+    return;
+  }
+  patchSummary(cardId, { status: 'done', reason: undefined, code: undefined });
+  pullSummaryResult(cardId);
+}
+
+/**
+ * Pull a panel's table after a `done` event.
+ *
+ * Skipped when the panel already holds the numbers for this compute (the explicit path
+ * fetched them); any recompute passes through `dirty` first, which clears the cache, so
+ * "no cached table" is the exact condition under which a pull is needed.
+ */
+function pullSummaryResult(cardId: number): void {
+  const entry = useWorkspace.getState().summaries[cardId];
+  if (!entry || entry.nodeId === null || entry.result !== null) return;
+  const nodeId = entry.nodeId;
+  const stats = entry.stats;
+  void fetchSummaryTable(nodeId, stats).then((table) => {
+    const current = useWorkspace.getState().summaries[cardId];
+    if (!current || current.nodeId !== nodeId) return;
+    if (!table) {
+      // A `done` node whose table cannot be read is an error, never an empty table.
+      patchSummary(cardId, { status: 'error', code: 'internalError', result: null });
+      return;
+    }
+    patchSummary(cardId, {
+      status: 'done',
+      reason: undefined,
+      code: undefined,
+      computedAt: Date.now(),
+      result: table,
+    });
+  });
+}
+
 
 /** The server clamps one window request to this many rows (`maxWindowRows`). */
 const WINDOW_ROWS = 5000;
@@ -1686,6 +2040,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       // Charts are views: they follow the file the card now shows.
       refreshDependentsOf(cardId, [...oldToNew.keys()]);
+      // The 摘要 panel is frozen to the matrix it was computed over, exactly like a function
+      // card's input: the new numbers are a NEW table, so the panel goes back to 未请求 and
+      // asks again. Its node has to go before the old server copy is released, or the
+      // backend refuses that DELETE (409) because the node still reads it.
+      const summaryRelease = summarySourceChanged(cardId);
       // Function cards are frozen references: re-point the ones that read the replaced
       // matrix, then push them once the new content has a server-side id.
       const readers = repointReadersOf(cardId, oldToNew);
@@ -1716,6 +2075,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         // The re-point must be ON THE SERVER before the old copy is released, otherwise
         // the backend refuses the delete (409) and the copy stays behind anyway.
         await waitForCardPushes();
+        if (summaryRelease) await summaryRelease;
         for (const serverId of retiredServerIds) releaseServerMatrix(serverId);
       };
       if (uploads.length === 0) void syncReaders();
@@ -1835,8 +2195,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const cards = state.cards.filter((c) => c.id !== id);
       const matrices = new Map(state.matrices);
       const matrixIdByIdentity = new Map(state.matrixIdByIdentity);
+      // One card owns at most one summary node (a data card as well as a function card).
+      // It has to go, and a data card's server table must outlive that DELETE: the backend
+      // refuses to drop a matrix a live node still reads (409).
+      const summaryRelease = releaseSummaryNode(id);
 
       if (isMatrixCard(card)) {
+        const releasedServerIds: number[] = [];
         for (const source of card.sources) {
           // Drop the parse only when no remaining card refers to it. The identity cache
           // is pruned by scanning it for the id that just died — keying on name would
@@ -1855,10 +2220,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
             const backendId = backendMatrixIds.get(source.matrixId);
             if (backendId !== undefined) {
               backendMatrixIds.delete(source.matrixId);
-              void backendClient.deleteMatrix(backendId);
+              releasedServerIds.push(backendId);
             }
           }
         }
+        const releaseAll = () => {
+          for (const backendId of releasedServerIds) void backendClient.deleteMatrix(backendId);
+        };
+        if (summaryRelease) void summaryRelease.then(releaseAll);
+        else releaseAll();
       } else if (isFormulaCard(card)) {
         // A function card owns its display cache outright; no other card references it, so
         // it must not be left behind in the map.
@@ -1880,18 +2250,23 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
       state.dependencies.removeAllDependencies(id);
 
-      set({
+      set((current) => ({
         cards,
         matrices,
         matrixIdByIdentity,
+        // The panel's node is gone with the card; the entry must not survive to describe
+        // a card id that a later card could inherit.
+        summaries: Object.fromEntries(
+          Object.entries(current.summaries).filter(([key]) => Number(key) !== id),
+        ),
         // An offer names a card that no longer exists; keeping it would leave a banner
         // pointing at nothing (and `applyRepoint` would silently do nothing).
-        repointOffers: state.repointOffers.filter(
+        repointOffers: current.repointOffers.filter(
           (offer) => offer.cardId !== id && offer.ownerCardId !== id,
         ),
-        selectedId: state.selectedId === id ? null : state.selectedId,
-        blockedCardId: state.blockedCardId === id ? null : state.blockedCardId,
-      });
+        selectedId: current.selectedId === id ? null : current.selectedId,
+        blockedCardId: current.blockedCardId === id ? null : current.blockedCardId,
+      }));
       return true;
     },
 
@@ -1905,6 +2280,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // one of them reads it.
       const nodeIds: number[] = [];
       const serverMatrixIds: number[] = [];
+      // Every 摘要 panel owns a node too (lifecycle plan A), and it reads either an uploaded
+      // table or a function card's result matrix — so it goes in the same "nodes first"
+      // batch, or the matrix DELETEs below would be refused with 409.
+      for (const entry of Object.values(state.summaries)) {
+        if (entry.nodeId !== null && entry.nodeId > 0) nodeIds.push(entry.nodeId);
+      }
       for (const card of state.cards) {
         if (isFormulaCard(card)) {
           const nodeId = card.node?.nodeId ?? -1;
@@ -1936,6 +2317,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         blockNonce: state.blockNonce + 1,
         dependencies: new DependencyGraph(),
         repointOffers: [],
+        // The panels' nodes were released above; their state goes with the cards.
+        summaries: {},
       });
     },
 
@@ -1990,6 +2373,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           c.id === cardId && isMatrixCard(c) ? { ...c, activeSource: index } : c,
         ),
       });
+
+      // The 摘要 panel describes the ACTIVE file. A node reads one fixed matrix, so the
+      // panel's node is released and the panel asks again — keeping it would summarise the
+      // file the card no longer shows. (Switching file releases no matrix, so nothing here
+      // needs the node's deletion to be awaited.)
+      void summarySourceChanged(cardId);
 
       // Charts that read this card must pick up the new file's data.
       refreshDependentsOf(cardId);
@@ -2567,6 +2956,190 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       void syncFunctionCard(cardId);
     },
 
+    // ── summary panel (`builtin:summary`) ─────────────────────────────
+
+    summaries: {},
+
+    setSummaryOpen(cardId, open) {
+      patchSummary(cardId, { open });
+    },
+
+    toggleSummaryStat(cardId, stat) {
+      const state = get();
+      const card = state.cards.find((c) => c.id === cardId);
+      if (!card || (!isMatrixCard(card) && !isFormulaCard(card))) return;
+      const entry = state.summaries[cardId] ?? emptySummaryEntry();
+      const selected = new Set(entry.stats);
+      if (selected.has(stat)) {
+        // Never send an empty `stats`: the backend answers `badSignatureParams`, and "no
+        // rows" is not a state this panel has. One statistic always stays selected.
+        if (selected.size <= 1) return;
+        selected.delete(stat);
+      } else {
+        selected.add(stat);
+      }
+      // Catalog order, whatever order the checkboxes were clicked in.
+      const stats = canonicalSummaryStats([...selected]);
+      patchSummary(cardId, { stats });
+      if (entry.nodeId === null) return;
+      // The parameters belong to the node (they are the signature's, not the card's), so a
+      // new subset is a definition change: one PATCH, which the backend answers with
+      // `dirty` — the panel then says 参数已改 until the user asks for a recompute.
+      const nodeId = entry.nodeId;
+      void backendClient.patchNode(nodeId, { params: summaryParams(stats) }).then((result) => {
+        if (!result.ok) {
+          if (result.code === 'backendUnavailable') {
+            set({ backend: { state: 'offline', error: result.code } });
+          } else {
+            patchSummary(cardId, {
+              status: 'error',
+              code: result.code ?? 'internalError',
+              result: null,
+            });
+          }
+          return;
+        }
+        patchSummary(cardId, { status: 'dirty', reason: 'definitionChanged', result: null });
+      });
+    },
+
+    computeSummary(cardId) {
+      void (async () => {
+        const state = get();
+        const card = state.cards.find((c) => c.id === cardId);
+        if (!card || (!isMatrixCard(card) && !isFormulaCard(card))) return;
+        const source = summarySourceOf(card);
+        if (!source) return;
+        // One compute per card at a time: two overlapping clicks both saw `nodeId === null`
+        // would create two nodes, and the loser is orphaned server-side.
+        if (summaryComputing.has(cardId)) return;
+        summaryComputing.add(cardId);
+        const epoch = workspaceEpoch;
+        const entry = state.summaries[cardId] ?? emptySummaryEntry();
+        // In-flight marker, same name the backend publishes, so the yellow bar is honest
+        // while the request is on the wire (the evaluation itself is synchronous there).
+        patchSummary(cardId, { status: 'computing', reason: undefined, code: undefined });
+        try {
+          // The panel sums a table the SERVER holds. A data card's file is normally
+          // uploaded when it loads; this awaits that upload (or starts it) so a click that
+          // beats the upload — or a reconnect — still works instead of doing nothing.
+          let serverMatrixId = source.serverMatrixId;
+          if (serverMatrixId === null) {
+            const matrix = state.matrices.get(source.localMatrixId);
+            if (matrix) {
+              serverMatrixId = await registerUploadedMatrix(
+                source.localMatrixId,
+                source.name,
+                matrix,
+              );
+            }
+          }
+          if (serverMatrixId === null) {
+            // Nothing authoritative to bind to (offline, or a function card with no result
+            // yet). Stay 未请求 rather than pretending a compute happened.
+            patchSummary(cardId, { status: 'idle', reason: undefined, result: null });
+            return;
+          }
+
+          // One node per card: reuse it unless the data underneath the panel changed (a
+          // node reads exactly one matrix, so a different source is a different request).
+          let nodeId = entry.nodeId;
+          if (nodeId !== null && entry.boundMatrixId !== source.localMatrixId) {
+            void releaseSummaryNode(cardId);
+            nodeId = null;
+          }
+          if (nodeId === null) {
+            const created = await backendClient.createNode(
+              [
+                {
+                  portId: SOURCE_PORT,
+                  varName: SOURCE_PORT,
+                  mode: 'matrix',
+                  sourceMatrixId: serverMatrixId,
+                },
+              ],
+              { signatureId: SUMMARY_SIGNATURE, params: summaryParams(entry.stats) },
+            );
+            if (!created.ok || created.nodeId === undefined) {
+              if (created.code === 'backendUnavailable') {
+                set({ backend: { state: 'offline', error: created.code } });
+                patchSummary(cardId, { status: 'idle' });
+              } else {
+                patchSummary(cardId, {
+                  status: 'error',
+                  code: created.code ?? 'internalError',
+                  result: null,
+                });
+              }
+              return;
+            }
+            nodeId = created.nodeId;
+            // The source (or the whole workspace) can change while the POST is in flight;
+            // a node bound to a matrix nobody shows any more would leak server-side.
+            if (epoch !== workspaceEpoch || !summaryStillCurrent(cardId, source.localMatrixId)) {
+              void backendClient.deleteNode(nodeId);
+              return;
+            }
+            patchSummary(cardId, { nodeId, boundMatrixId: source.localMatrixId });
+          }
+
+          // The one trigger (decision §四). Never a GET, never a PATCH: reading a status
+          // must not spend compute.
+          const computed = await backendClient.computeNode(nodeId);
+          if (!computed.ok) {
+            if (computed.code === 'backendUnavailable') {
+              set({ backend: { state: 'offline', error: computed.code } });
+              patchSummary(cardId, { status: 'idle' });
+            } else {
+              patchSummary(cardId, {
+                status: 'error',
+                code: computed.code ?? 'internalError',
+                result: null,
+              });
+            }
+            return;
+          }
+          if (computed.state === 'error') {
+            patchSummary(cardId, {
+              status: 'error',
+              code: computed.code ?? 'internalError',
+              result: null,
+              computedAt: null,
+            });
+            return;
+          }
+          if (computed.state !== 'done') {
+            // The backend declined to compute right now; mirror what it said instead of
+            // inventing a table.
+            patchSummary(cardId, {
+              status: computed.state ?? 'dirty',
+              reason: computed.reason,
+              result: null,
+            });
+            return;
+          }
+          if (!summaryStillCurrent(cardId, source.localMatrixId)) return;
+          const table = await fetchSummaryTable(nodeId, entry.stats);
+          if (!summaryStillCurrent(cardId, source.localMatrixId)) return;
+          if (!table) {
+            patchSummary(cardId, { status: 'error', code: 'internalError', result: null });
+            return;
+          }
+          patchSummary(cardId, {
+            status: 'done',
+            reason: undefined,
+            code: undefined,
+            // There is no protocol field for "computed at" (the status DTO carries none),
+            // so the panel labels this as local time rather than inventing one.
+            computedAt: Date.now(),
+            result: table,
+          });
+        } finally {
+          summaryComputing.delete(cardId);
+        }
+      })();
+    },
+
     // ── view helpers ──────────────────────────────────────────────────
 
     tileCards(viewportWidth, viewportHeight) {
@@ -2755,6 +3328,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       // Matrix-level events (no nodeId) carry no per-node state to mirror here.
       if (event.nodeId === undefined || !event.state) return;
       if (event.seq > lastEventSeq) lastEventSeq = event.seq;
+      // `reason` is the field that separates 未请求 from 待重算; the server puts it on a
+      // dirty event (`nodes.cpp` `markStaleLocked`), so it is part of NodeEvent.
+      const reason = event.reason;
+      // A summary node is not a function card's node, so it is routed separately.
+      const summaryCardId = locateSummaryCardByNode(event.nodeId);
+      if (summaryCardId !== null) {
+        applySummaryEvent(summaryCardId, event.state, reason, event.code);
+      }
       const cardId = locateCardByNode(event.nodeId);
       if (cardId === null) return;
       applyNodeSnapshot(cardId, {
@@ -2875,6 +3456,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         selectedId: null,
         blockedCardId: null,
         blockNonce: 1,
+        // Panel state names nodes of the workspace being replaced; a restored card starts
+        // with 未请求 like every other card.
+        summaries: {},
       });
 
       if (droppedEdges > 0) {
@@ -2932,6 +3516,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         blockedCardId: null,
         blockNonce: 0,
         repointOffers: [],
+        // Session-only panel state dies with the workspace (like the node map above, it
+        // must never be answered for a card that inherits the same id).
+        summaries: {},
         toast: null,
         // A reset returns the app to its initial state, including "no modal open".
         helpOpen: false,

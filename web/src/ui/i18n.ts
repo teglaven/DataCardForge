@@ -245,6 +245,25 @@ const dictionaries = {
     'relation.stat.r2': '决定系数 R²',
     'relation.stat.n': '样本数 n',
 
+    // 摘要面板（builtin:summary，P2）。行名是统计量目录 id 的原文，故意不在这里翻译：
+    // 传输层没有行标签通道，目录 id + 目录顺序就是行的身份（决策 2026-10-27 §七）。
+    'summary.title': '摘要',
+    'summary.collapse': '收起摘要面板',
+    'summary.notRequested': '未请求计算 — 这个面板默认不算；点「计算」才向后端要一次摘要',
+    'summary.noSource': '暂无可摘要的数据 — 这张卡还没有结果表',
+    'summary.compute': '计算',
+    'summary.recompute': '重算',
+    'summary.computing': '正在计算…',
+    'summary.computedAt': '计算于 {time}（本地时间）',
+    'summary.staleUpstream': '上游已变 — 结果已清空，请重算',
+    'summary.staleDefinition': '参数已改 — 结果已清空，请重算',
+    'summary.staleBody': '结果已清空 — 点上方「重算」向后端要一次新的摘要',
+    'summary.export': '导出 CSV',
+    'summary.stats': '选择统计量',
+    'summary.statsLast': '至少保留一个统计量',
+    'summary.statColumn': '统计量',
+    'summary.emptyResult': '后端返回的摘要表为空',
+
     // 帮助（公式 / 函数说明）：菜单项、卡片上的「?」与悬停提示共用同一份文案。
     // 签名（Pos.1、SUM(c)…）是代码，保持字面量；这里只有散文，因此两个语言都齐。
     'help.title': '公式与函数说明',
@@ -559,6 +578,26 @@ const dictionaries = {
     'relation.stat.r': 'Correlation r',
     'relation.stat.r2': 'R² (goodness of fit)',
     'relation.stat.n': 'Sample count n',
+
+    // Summary panel (builtin:summary, P2). Row labels are the raw catalog ids and are NOT
+    // translated here: the transport has no row-label channel, so the id plus its catalog
+    // position IS the row identity (decision 2026-10-27 §七).
+    'summary.title': 'Summary',
+    'summary.collapse': 'Collapse the summary panel',
+    'summary.notRequested': 'Not computed yet — this panel never computes on its own; press Compute to ask the backend once',
+    'summary.noSource': 'Nothing to summarise yet — this card has no result table',
+    'summary.compute': 'Compute',
+    'summary.recompute': 'Recompute',
+    'summary.computing': 'Computing…',
+    'summary.computedAt': 'Computed at {time} (local time)',
+    'summary.staleUpstream': 'Upstream changed — the result was cleared; recompute',
+    'summary.staleDefinition': 'Parameters changed — the result was cleared; recompute',
+    'summary.staleBody': 'Result cleared — press Recompute above to ask the backend again',
+    'summary.export': 'Export CSV',
+    'summary.stats': 'Statistics',
+    'summary.statsLast': 'Keep at least one statistic',
+    'summary.statColumn': 'Statistic',
+    'summary.emptyResult': 'The backend returned an empty summary table',
 
     // Help (formula / function reference): the menu entries, the card's "?" and the hover
     // tooltips all read these same strings.

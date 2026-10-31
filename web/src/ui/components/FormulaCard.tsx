@@ -32,6 +32,7 @@ import { REGRESSION_SIGNATURE } from '../migrate.ts';
 import { CardShell } from './CardShell.tsx';
 import { HoverHelp, useHoverHelp } from './HoverHelp.tsx';
 import { Popup } from './Popup.tsx';
+import { SummaryPanel } from './SummaryPanel.tsx';
 import { ROW_HEADER_WIDTH, VirtualTable } from './VirtualTable.tsx';
 
 /** How long to wait after the last keystroke before re-sending each formula to the backend. */
@@ -846,6 +847,11 @@ export function FormulaCard({
             )}
           </div>
         ) : null}
+
+        {/* 摘要 over THIS card's result table (the backend summarises the node's result
+            matrix; nothing is computed here). It sits below the contract bar because it is
+            the card's last rail, and its state lives in the store, session-only. */}
+        <SummaryPanel card={card} />
       </div>
 
       {chartMenu && resultMatrix ? (

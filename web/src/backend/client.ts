@@ -90,6 +90,8 @@ export interface NodeEvent {
   nodeId?: number;
   matrixId?: number;
   state?: NodeStateName;
+  /** Present on a `dirty` push: why the node has not computed (backend nodes.cpp). */
+  reason?: DirtyReasonName;
   code?: string;
   params?: Record<string, unknown>;
 }
