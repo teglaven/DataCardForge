@@ -358,24 +358,36 @@ export function CardCanvas({
   };
 
   // Wheel needs a non-passive native listener to be able to preventDefault.
+  //
+  // It listens in the **capture** phase, and that is load-bearing: a wheel over a chart
+  // plot is claimed by ECharts' inside `dataZoom`, which calls `preventDefault()` *and*
+  // `stopPropagation()` for every wheel — Ctrl held or not (`RoamController` →
+  // `eventTool.stop`). A bubble-phase listener here therefore never saw a Ctrl+wheel over
+  // a chart, so the modifier documented below ("zoom without moving the pointer off a
+  // card") silently did nothing there: the chart's axes zoomed instead of the workspace.
+  // Capturing reaches the event before the plot does.
   useEffect(() => {
     const element = canvasRef.current;
     if (!element) return;
     const onWheel = (event: WheelEvent) => {
       const overCard = (event.target as HTMLElement | null)?.closest('.card') !== null;
-      // A wheel over a card belongs to the card — a 10 000-row table must stay scrollable
-      // and the chart's dataZoom must keep working — unless the user holds Ctrl/Cmd. That
-      // modifier is also what a trackpad pinch sends, so pinch-to-zoom keeps working and
-      // gives a way to zoom without moving the pointer off a card.
+      // A plain wheel over a card belongs to the card — a 10 000-row table must stay
+      // scrollable and the chart's dataZoom must keep working — unless the user holds
+      // Ctrl/Cmd. That modifier is also what a trackpad pinch sends, so pinch-to-zoom
+      // keeps working and gives a way to zoom without moving the pointer off a card.
       if (overCard && !event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
+      // Stop it only for the gesture just taken: `preventDefault` alone would still let
+      // the card's own handler run, so one wheel would zoom the chart's axes *and* the
+      // canvas. The early return above keeps a plain wheel entirely the card's.
+      event.stopPropagation();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
       // Exponential so each wheel notch is a constant *ratio*: zooming feels the same at
       // 20% and at 300%, which a linear addend would not.
       zoomAt(Math.pow(1.0015, -event.deltaY * unit), event.clientX, event.clientY);
     };
-    element.addEventListener('wheel', onWheel, { passive: false });
-    return () => element.removeEventListener('wheel', onWheel);
+    element.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    return () => element.removeEventListener('wheel', onWheel, { capture: true });
   }, [zoomAt]);
 
   useEffect(() => {

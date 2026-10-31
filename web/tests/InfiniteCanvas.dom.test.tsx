@@ -409,6 +409,61 @@ describe('wheel zoom of the whole workbench', () => {
     expect(store().view.zoom).toBeGreaterThan(1);
   });
 
+  it('beats a plot that swallows the wheel, as ECharts dataZoom does', async () => {
+    // A wheel over a chart plot is claimed by ECharts' inside `dataZoom`, which calls
+    // preventDefault() *and* stopPropagation() for every wheel, Ctrl held or not
+    // (RoamController → eventTool.stop). The canvas used to listen in the bubble phase,
+    // so Ctrl+wheel over a chart never reached it and the workbench did not zoom — the
+    // modifier is documented as the way to zoom without moving the pointer off a card.
+    // The listener now captures, so it gets there first and takes the gesture whole.
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+    const card = document.createElement('div');
+    card.className = 'card';
+    const plot = document.createElement('div');
+    plot.className = 'plot';
+    let plotSawWheel = false;
+    // Registered on the descendant, exactly where zrender registers its own handler.
+    plot.addEventListener('wheel', (event) => {
+      plotSawWheel = true;
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    card.appendChild(plot);
+    canvas.appendChild(card);
+
+    await act(async () =>
+      wheel(plot, { deltaY: -120, ctrlKey: true, clientX: 300, clientY: 300 }),
+    );
+
+    expect(store().view.zoom).toBeGreaterThan(1);
+    // One wheel drives one zoom target: the canvas took it, so the plot never does.
+    expect(plotSawWheel).toBe(false);
+  });
+
+  it('still leaves a plain wheel over that same plot to the card', async () => {
+    // The capture listener must not steal the card's own wheel: without Ctrl/Cmd it
+    // returns before touching the event, so the table scrolls and dataZoom zooms.
+    const host = await mountCanvas();
+    const canvas = host.querySelector('.canvas') as HTMLElement;
+    const card = document.createElement('div');
+    card.className = 'card';
+    const plot = document.createElement('div');
+    plot.className = 'plot';
+    let plotSawWheel = false;
+    plot.addEventListener('wheel', (event) => {
+      plotSawWheel = true;
+      event.stopPropagation();
+    });
+    card.appendChild(plot);
+    canvas.appendChild(card);
+
+    await act(async () => wheel(plot, { deltaY: -120 }));
+
+    expect(plotSawWheel).toBe(true);
+    expect(store().view).toEqual({ x: 0, y: 0, zoom: 1 });
+  });
+
   it('measures the visible box in plane units while zoomed', () => {
     const viewport = document.createElement('div');
     stubRect(viewport, { left: 0, top: 0, width: 1000, height: 800 });
