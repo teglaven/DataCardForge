@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the compute backend for the persistent (systemd) services.
-# Used by datacardforge-build.service on every boot, and can be run manually:
+# Build the compute backend for a persistent (long-running) deployment.
+# Typically invoked at boot by the deployment; can also be run manually:
 #   ./scripts/build-backend.sh
 # Idempotent: cmake/ninja only rebuild what changed. Never deletes the existing
 # binary — if the build fails, the previous dc_backend stays in place so the

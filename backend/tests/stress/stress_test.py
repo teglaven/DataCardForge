@@ -3,7 +3,7 @@
 
 背景：旧构建在 detached thread 里用 std::stoul 解析数字，畸形 HTTP 请求触发
 std::invalid_argument/out_of_range 逃逸线程边界 → std::terminate 杀死整个进程。
-本脚本自起一个 dc_backend（绝不触碰 systemd 常驻服务），用多线程轰炸畸形/半合法
+本脚本自起一个 dc_backend（绝不触碰常驻后端服务），用多线程轰炸畸形/半合法
 报文，再验证：
   1. GET /api/hello 仍然存活（服务未死）；
   2. 进程退出码为 None（未被 terminate 杀死）。
@@ -54,7 +54,7 @@ class Target:
     def start(self) -> subprocess.Popen:
         last_exc = None
         # 压测自身制造的海量 TIME_WAIT（客户端侧临时端口占用）可能让 bind/listen 短暂
-        # EADDRINUSE，重试几次；绝不 pkill 同名进程——37811 上有 systemd 常驻服务。
+        # EADDRINUSE，重试几次；绝不 pkill 同名进程——37811 上有常驻后端服务。
         for _ in range(10):
             p = subprocess.Popen(
                 [self.binary, "--port", str(self.port)],
@@ -215,7 +215,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--binary", default=default_binary(), help="dc_backend 可执行文件路径")
     ap.add_argument("--port", type=int, default=37911,
-                    help="临时监听端口（默认 37911；避开 systemd 常驻服务的 37811）")
+                    help="临时监听端口（默认 37911；避开常驻服务的 37811）")
     ap.add_argument("--threads", type=int, default=_env_int("DC_STRESS_THREADS", 40))
     ap.add_argument("--requests", type=int, default=_env_int("DC_STRESS_REQUESTS", 10),
                     help="每线程请求数")

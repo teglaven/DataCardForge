@@ -49,9 +49,9 @@ import sys
 TZ = datetime.timezone(datetime.timedelta(hours=8))
 USAGE = os.path.expanduser(os.environ.get("DC_USAGE_FILE", "~/.dsh/.dshw-usage.json"))
 REPO = os.environ.get("DC_REPO", os.path.expanduser("~/DataCardForge"))
-SESSIONS = os.path.expanduser(
-    os.environ.get("DC_SESSION_DIR", "~/.dsh/sessions/--home-teg_vm-DataCardForge--")
-)
+# Session transcripts live under the agent harness's own home; point DC_SESSION_DIR at the
+# directory for this workspace. Nothing machine-specific is baked in.
+SESSIONS = os.path.expanduser(os.environ.get("DC_SESSION_DIR", "~/.dsh/sessions"))
 
 # Thresholds. Deliberately conservative: a YELLOW costs the operator one question, a missed
 # RED costs a month of quota.
