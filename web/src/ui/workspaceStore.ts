@@ -312,6 +312,13 @@ interface WorkspaceState {
   /** Re-send a function card's parameters + bindings to the backend. */
   recomputeFormula: (cardId: number) => void;
   /**
+   * Pull the WHOLE result of a function card into the display cache ("show more").
+   *
+   * The card mirrors only `RESULT_PREVIEW_ROWS` rows after a compute; this is the explicit
+   * user action that pays for the rest of a tall table.
+   */
+  loadFullResult: (cardId: number) => void;
+  /**
    * Push a card's current matrices into every chart that reads them.
    *
    * Called when a data card switches files (charts re-point at the new file) and when a
@@ -685,7 +692,7 @@ function locateCardByNode(nodeId: number): number | null {
 /** The server clamps one window request to this many rows (`maxWindowRows`). */
 const WINDOW_ROWS = 5000;
 /**
- * Upper bound on how many result rows are cached in the browser.
+ * Upper bound on how many result rows are ever cached in the browser.
  *
  * A result table is a *display cache*; the authoritative copy stays server-side. 200 000
  * rows covers the 10⁵-row measurements this tool targets with room to spare (≈1.6 MB per
@@ -693,26 +700,48 @@ const WINDOW_ROWS = 5000;
  * stops and says so — truncation is never silent.
  */
 const MAX_CACHE_ROWS = 200_000;
+/**
+ * Rows a function card shows by default.
+ *
+ * A 165 000-row result used to be paged down in full before the card could paint: 34
+ * window requests at ~40 ms each, three times over, i.e. seconds of waiting for numbers
+ * the first screenful already proved correct. The card now mirrors this many rows and the
+ * "show more" action fetches the rest — the dense-matrix frame carries the total shape, so
+ * the card can say "100 of 165 000" without downloading the table.
+ */
+const RESULT_PREVIEW_ROWS = 100;
+
+interface ResultFetch {
+  matrix: MatrixData;
+  /** Rows mirrored into the cache (= matrix.rowCount()). */
+  shownRows: number;
+  /** Rows of the stored result matrix, from the frame's shape header. */
+  totalRows: number;
+  /** The cache stopped at `MAX_CACHE_ROWS` instead of the end of the data. */
+  truncated: boolean;
+}
 
 /**
- * Page through a result matrix' windows and assemble the whole table.
+ * Page through a result matrix' windows and assemble up to `rowBudget` rows.
  *
- * v1 pulled ONE window (`count=5000`), so a 10 000-row formula silently showed the first
- * half — the numbers were right, the picture lied. Paging is server-side cheap (the frames
- * are binary) and the stop at `MAX_CACHE_ROWS` is reported to the user.
+ * `rowBudget` is what separates "first screenful" (`RESULT_PREVIEW_ROWS`) from "the whole
+ * result" (`loadFullResult`). Paging is server-side cheap (binary frames) and the stop at
+ * `MAX_CACHE_ROWS` is reported to the user.
  */
-async function fetchFullResult(
-  resultMatrixId: number,
-): Promise<{ matrix: MatrixData; truncated: boolean } | null> {
+async function fetchResultRows(resultMatrixId: number, rowBudget: number): Promise<ResultFetch | null> {
+  const budget = Math.min(rowBudget, MAX_CACHE_ROWS);
   const columns: number[][] = [];
   let names: string[] = [];
   let fetched = 0;
+  let totalRows = 0;
   let truncated = false;
 
   for (;;) {
-    const limit = Math.min(WINDOW_ROWS, MAX_CACHE_ROWS - fetched);
+    const limit = Math.min(WINDOW_ROWS, budget - fetched);
     if (limit <= 0) {
-      truncated = true;
+      // Budget exhausted. Only call it truncation when the matrix is genuinely taller than
+      // what the cache is allowed to hold (a 100-row preview of 100 rows is complete).
+      truncated = totalRows > fetched && budget >= MAX_CACHE_ROWS;
       break;
     }
     const frame = await backendClient.window(resultMatrixId, fetched, limit);
@@ -724,6 +753,9 @@ async function fetchFullResult(
     }
     const rows = frame.rows ?? 0;
     const data = frame.data ?? [];
+    // The frame carries the stored matrix' shape (DCM2); a legacy DCM1 frame has none, and
+    // there the window WAS the whole matrix.
+    totalRows = frame.totalRows ?? rows;
     // An empty result matrix is a legitimate state (an erroring node clears its output);
     // reading past it must stop, not spin the row counter forward.
     if (data.length === 0) break;
@@ -746,30 +778,30 @@ async function fetchFullResult(
     matrix.appendColumn(posName, columns[c]);
     matrix.setColumnAnnotation(matrix.columnCount() - 1, annotation);
   }
-  return { matrix, truncated };
+  return { matrix, shownRows: fetched, totalRows: Math.max(totalRows, fetched), truncated };
 }
 
-/**
- * Pull a done node's result into the card's display cache.
- *
- * The backend returns the whole wide table (one column per expression) with the expression
- * names attached as annotations, so the browser-side per-column merge and its cache slots
- * are gone. I/O is paged (see `fetchFullResult`); this function only decides where it goes.
- */
-async function pullResultIntoCache(cardId: number): Promise<void> {
-  const card = useWorkspace.getState().cards.find((c) => c.id === cardId);
-  if (!card || !isFormulaCard(card)) return;
-  const output = card.outputs[0];
-  if (!output || output.resultMatrixId < 0) return;
-
-  const result = await fetchFullResult(output.resultMatrixId);
-  if (!result) return;
+/** Store a fetched result in the card's display cache and record how much of it we hold. */
+function applyResultCache(cardId: number, result: ResultFetch): void {
   useWorkspace.setState((state) => {
     const current = state.cards.find((c) => c.id === cardId);
     if (!current || !isFormulaCard(current)) return {};
     const matrices = new Map(state.matrices);
     matrices.set(current.displayMatrixId, result.matrix);
-    return { matrices };
+    const cards = state.cards.map((card) =>
+      card.id === cardId && isFormulaCard(card)
+        ? {
+            ...card,
+            result: {
+              totalRows: result.totalRows,
+              shownRows: result.shownRows,
+              complete: result.shownRows >= result.totalRows,
+              truncated: result.truncated,
+            },
+          }
+        : card,
+    );
+    return { matrices, cards };
   });
   // A chart drawn from this output must show the numbers that just arrived — the same
   // "dependents follow their source" rule a data card's file switch follows.
@@ -784,6 +816,82 @@ async function pullResultIntoCache(cardId: number): Promise<void> {
         }),
       );
   }
+}
+
+/**
+ * Concurrent pulls of the same card are collapsed: create + event + PATCH used to trigger
+ * three identical full-table downloads of the same result.
+ */
+const pullsInFlight = new Map<number, Promise<void>>();
+
+async function pullPreviewIntoCache(cardId: number): Promise<void> {
+  const card = useWorkspace.getState().cards.find((c) => c.id === cardId);
+  if (!card || !isFormulaCard(card)) return;
+  const output = card.outputs[0];
+  if (!output || output.resultMatrixId < 0) return;
+
+  // A `done` event means the numbers may have changed, so the cache is always refreshed —
+  // but how much is refreshed follows the user's last choice: a card the user expanded with
+  // "show more" keeps mirroring the whole table instead of collapsing back to the preview.
+  const budget = card.result?.complete ? MAX_CACHE_ROWS : RESULT_PREVIEW_ROWS;
+  const result = await fetchResultRows(output.resultMatrixId, budget);
+  if (!result) return;
+  applyResultCache(cardId, result);
+}
+
+/**
+ * Pull a done node's result into the card's display cache (first screenful).
+ *
+ * The backend returns the whole wide table (one column per expression) with the expression
+ * names attached as annotations, so the browser-side per-column merge and its cache slots
+ * are gone. I/O is paged (see `fetchResultRows`); this function only decides where it goes.
+ */
+async function pullResultIntoCache(cardId: number): Promise<void> {
+  const inflight = pullsInFlight.get(cardId);
+  if (inflight) return inflight;
+  const task = pullPreviewIntoCache(cardId).finally(() => {
+    pullsInFlight.delete(cardId);
+    // A chart may have asked for the full column while the preview was in flight.
+    ensureChartData(cardId);
+  });
+  pullsInFlight.set(cardId, task);
+  return task;
+}
+
+/** Fetch the WHOLE result into the display cache ("show more"). */
+async function loadFullResultIntoCache(cardId: number): Promise<void> {
+  const inflight = pullsInFlight.get(cardId);
+  if (inflight) return inflight;
+  const task = (async () => {
+    const card = useWorkspace.getState().cards.find((c) => c.id === cardId);
+    if (!card || !isFormulaCard(card)) return;
+    const output = card.outputs[0];
+    if (!output || output.resultMatrixId < 0) return;
+    if (card.result?.complete) return;
+    const result = await fetchResultRows(output.resultMatrixId, MAX_CACHE_ROWS);
+    if (!result) return;
+    applyResultCache(cardId, result);
+  })().finally(() => pullsInFlight.delete(cardId));
+  pullsInFlight.set(cardId, task);
+  return task;
+}
+
+/**
+ * Charts need the whole column — a curve drawn from a 100-row preview would silently show
+ * a fraction of the data. So a chart dependent pulls the full result instead of the preview.
+ * (An explicit user action — "open a chart from this output" — is what makes paying for the
+ * whole table correct.)
+ */
+function ensureChartData(ownerCardId: number): void {
+  const state = useWorkspace.getState();
+  const owner = state.cards.find((c) => c.id === ownerCardId);
+  if (!owner || !isFormulaCard(owner) || owner.result?.complete) return;
+  const dependents = state.dependencies.getDependents(ownerCardId);
+  const needsFull = dependents.some((id) => {
+    const card = state.cards.find((c) => c.id === id);
+    return card ? isChartCard(card) : false;
+  });
+  if (needsFull) void loadFullResultIntoCache(ownerCardId);
 }
 
 /**
@@ -908,6 +1016,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     const owner = state.cards.find((c) => c.id === ownerCardId);
     if (!owner) return;
 
+    // A formula card's display cache may hold only the first screenful; charts read the
+    // whole column, so a chart dependent upgrades the cache before it re-points.
+    if (isFormulaCard(owner)) ensureChartData(ownerCardId);
+
     // A data card re-points dependents at its newly active file; a function card has one
     // output table, so dependents simply re-read it.
     let activeMatrixId: number | undefined;
@@ -939,10 +1051,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         return { ...source, matrixId: activeMatrixId };
       }
       const column = activeMatrix.column(source.columnIndex);
+      const raw = column.data.slice();
       return {
         ...source,
         matrixId: activeMatrixId,
-        raw: column.data.slice(),
+        raw,
         label: columnLabel(column),
       };
     };
@@ -1726,6 +1839,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         params: { formulas },
         outputs: [{ outputId: 'result', resultMatrixId: -1 }],
         node: null,
+        result: null,
         displayMatrixId,
       };
 
@@ -1846,6 +1960,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         params: {},
         outputs: [{ outputId: 'fit', resultMatrixId: -1 }],
         node: null,
+        result: null,
         displayMatrixId: state.nextMatrixId,
       };
       const cycle = state.dependencies.addDependency(
@@ -1876,6 +1991,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
     refreshDependentsOf(cardId) {
       refreshDependentsOf(cardId);
+    },
+
+    loadFullResult(cardId) {
+      void loadFullResultIntoCache(cardId);
     },
 
     recomputeFormula(cardId) {

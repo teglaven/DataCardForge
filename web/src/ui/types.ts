@@ -202,6 +202,27 @@ export interface FunctionCardModel extends CardBase {
    * matrix; nothing writes into it locally.
    */
   displayMatrixId: number;
+  /**
+   * How much of the result the display cache actually holds.
+   *
+   * A 10⁵-row result is shown as its first rows (`shownRows`) and the rest is fetched only
+   * when the user asks (`complete: false` + the "show more" action). `totalRows` comes from
+   * the dense-matrix frame's shape header, so the card can say "100 of 165 000" without
+   * downloading the whole table. `null` while no result has arrived.
+   */
+  result: ResultDisplay | null;
+}
+
+/** Row budget of a function card's display cache (see `FunctionCardModel.result`). */
+export interface ResultDisplay {
+  /** Rows of the stored result matrix (authoritative, server-side). */
+  totalRows: number;
+  /** Rows currently mirrored in the browser cache. */
+  shownRows: number;
+  /** True once `shownRows === totalRows` (nothing left to fetch). */
+  complete: boolean;
+  /** True when the cache stopped at the row ceiling instead of the end of the data. */
+  truncated: boolean;
 }
 
 export type CardModel = MatrixCardModel | ChartCardModel | FunctionCardModel;

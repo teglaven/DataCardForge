@@ -74,19 +74,35 @@ GET /api/hello
 - `GET /api/events?since=<seq>&timeout=25` → `[{seq, nodeId?, matrixId?, state, code?, params?}]`
   - `state ∈ dirty | computing | done | error`（前端指示灯：灰/黄/绿/红）
 
-## 载荷编码（二进制帧）
+## 载荷编码（二进制帧 · 稠密矩阵显示协议）
+
+矩阵显示只有一种帧格式。`GET /api/matrices/{id}/window`、`GET /api/nodes/{id}/result` 与
+`POST /api/matrices/raw` 的请求体都是它——数据文件、函数卡结果没有第二套。
 
 ```
-magic     u32 = 0x44434D31 ("DCM1")
-rows      u32
-cols      u32
-namesLen  u32                     names JSON 的字节数
-data      f64[rows*cols]          column-major，小端
-names     namesLen 字节的 JSON 数组（UTF-8），元素是 "Pos.1 annotation" 形式的标签
+magic      u32 = 0x44434D32 ("DCM2")
+rows       u32                    本次窗口的行数
+cols       u32                    列数
+namesLen   u32                    names JSON 的字节数
+totalRows  u32                    该矩阵的总行数（与窗口无关）
+totalCols  u32                    该矩阵的总列数
+data       f64[rows*cols]         column-major，小端
+names      namesLen 字节的 JSON 数组（UTF-8），元素是 "Pos.1 annotation" 形式的标签
 ```
-帧长恒为 `16 + rows*cols*8 + namesLen`；小端。`POST /api/matrices/raw` 的请求体就是这一帧
-（不带 HTTP 分块），服务端解码后与 JSON 端点等价入库。NaN 原样传输（IEEE 754），
-前端渲染为 `—` 的既有约定不变。
+帧长恒为 `24 + rows*cols*8 + namesLen`；小端。`rows`/`cols` 描述**窗口**，
+`totalRows`/`totalCols` 描述**整张矩阵**——这是「只取前 100 行却知道表有 165 000 行」的唯一来源，
+前端因此可以在不下载全表的前提下显示「显示前 100 行 · 共 165 000 行」。
+
+旧帧 `DCM1`（magic `0x44434D31`、16 字节头、无 total 字段）仍然**被接收**：
+`POST /api/matrices/raw` 两个 magic 都认，`total*` 缺省等于窗口大小。服务端只发 DCM2。
+
+`POST /api/matrices/raw` 的请求体就是这一帧（不带 HTTP 分块），服务端解码后与 JSON 端点等价入库。
+NaN 原样传输（IEEE 754），前端渲染为 `—` 的既有约定不变。
+
+**响应写回**：服务端对每个连接开 `TCP_NODELAY`，且头与体合并为**一次** `send`。
+分两次写会让 Nagle 把第二段压到对端的延迟 ACK 之后——探针实测每个请求固定多出 40 ms，
+而函数卡结果是要按窗口分页拉的，这个停顿会乘以页数（见
+[结果预览决策](../decisions/2026-10-29-result-preview.md)）。
 
 ## v2 增量（卡片 schema v2 / 函数签名）
 

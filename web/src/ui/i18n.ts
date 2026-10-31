@@ -194,6 +194,10 @@ const dictionaries = {
     'formula.outputColumns': '{n} 列 × {rows} 行',
     'formula.outputEmpty': '暂无结果',
     'formula.outputName': '结果',
+    'formula.resultPreview': '显示前 {shown} 行 · 共 {total} 行',
+    'formula.showMore': '显示更多',
+    'formula.showAllTip': '拉取全部 {total} 行到本地显示（结果一直在后端）',
+    'formula.resultTruncated': '已达到本地显示上限 {n} 行（完整结果仍在后端）',
     'formula.staleUpstream': '上游卡片失败 — 本卡结果已失效',
     'formula.signature': '签名：{id}',
 
@@ -482,6 +486,10 @@ const dictionaries = {
     'formula.outputColumns': '{n} cols × {rows} rows',
     'formula.outputEmpty': 'No result yet',
     'formula.outputName': 'Result',
+    'formula.resultPreview': 'Showing {shown} of {total} rows',
+    'formula.showMore': 'Show more',
+    'formula.showAllTip': 'Fetch all {total} rows into the browser (the result always stays on the backend)',
+    'formula.resultTruncated': 'Stopped at the local display limit of {n} rows (the full result stays on the backend)',
     'formula.staleUpstream': 'Upstream card failed — this result is invalidated',
     'formula.signature': 'signature: {id}',
 

@@ -625,18 +625,25 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /** Encode a DCM1 frame exactly as the C++ server does (see decodeMatrixFrame). */
-function encodeFrame(columns: number[][], names: string[]): ArrayBuffer {
+/**
+ * DCM2 frame, exactly what the backend sends: window shape + the stored matrix' shape.
+ * `totalRows` defaults to the window height, i.e. "this window is the whole table".
+ */
+function encodeFrame(columns: number[][], names: string[], totalRows?: number): ArrayBuffer {
   const rows = columns.reduce((max, c) => Math.max(max, c.length), 0);
   const cols = columns.length;
+  const total = totalRows ?? rows;
   const namesJson = JSON.stringify(names);
   const namesBytes = new TextEncoder().encode(namesJson);
-  const buffer = new ArrayBuffer(16 + cols * rows * 8 + namesBytes.length);
+  const buffer = new ArrayBuffer(24 + cols * rows * 8 + namesBytes.length);
   const view = new DataView(buffer);
-  view.setUint32(0, 0x44434d31, true);
+  view.setUint32(0, 0x44434d32, true); // DCM2
   view.setUint32(4, rows, true);
   view.setUint32(8, cols, true);
   view.setUint32(12, namesBytes.length, true);
-  let offset = 16;
+  view.setUint32(16, total, true);
+  view.setUint32(20, cols, true);
+  let offset = 24;
   for (const col of columns) {
     for (let r = 0; r < rows; ++r) {
       view.setFloat64(offset + r * 8, col[r] ?? NaN, true);
@@ -737,7 +744,7 @@ function stubBackend(opts: {
         return {
           ok: true,
           status: 200,
-          arrayBuffer: async () => encodeFrame([column], ['Pos.1 big']),
+          arrayBuffer: async () => encodeFrame([column], ['Pos.1 big'], opts.resultRows),
           json: async () => ({}),
           text: async () => '',
         } as unknown as Response;
@@ -1089,7 +1096,7 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
   });
 
   describe('result paging', () => {
-    it('assembles a result larger than one window instead of truncating it', async () => {
+    it('shows a preview first and assembles the rest only when asked', async () => {
       const stub = stubBackend({ resultRows: 12_000 });
       try {
         const srcId = await loadSource([[1], [2]], ['A']);
@@ -1097,14 +1104,34 @@ describe('formula-card compute authority (B-plan stage 3)', () => {
         await flush();
         await flush();
         const card = store().cards.find((c) => c.id === fId) as FunctionCardModel;
-        const cached = store().matrices.get(card.displayMatrixId)!;
-        expect(cached.rowCount()).toBe(12_000);
-        // Assembled in order, and the last row is really the last one.
-        expect(cached.cell(0, 0)).toBe(0);
-        expect(cached.cell(11_999, 0)).toBe(11_999);
-        // Three windows: 5000 + 5000 + 2000.
-        const windows = stub.calls.filter((c) => c.url.includes('/window'));
-        expect(windows.length).toBe(3);
+        // Default: the first screenful, never the whole table. The frame's shape header is
+        // what tells the card the table is 12 000 rows tall.
+        const preview = store().matrices.get(card.displayMatrixId)!;
+        expect(preview.rowCount()).toBe(100);
+        expect(card.result).toEqual({ totalRows: 12_000, shownRows: 100, complete: false, truncated: false });
+        expect(stub.calls.filter((c) => c.url.includes('/window')).length).toBe(1);
+
+        // "Show more" pulls the rest: 5000 + 5000 + 2000 windows, in order, up to the end.
+        store().loadFullResult(fId);
+        await flush();
+        await flush();
+        const full = store().matrices.get(card.displayMatrixId)!;
+        expect(full.rowCount()).toBe(12_000);
+        expect(full.cell(0, 0)).toBe(0);
+        expect(full.cell(11_999, 0)).toBe(11_999);
+        expect(stub.calls.filter((c) => c.url.includes('/window')).length).toBe(4);
+        const done = store().cards.find((c) => c.id === fId) as FunctionCardModel;
+        expect(done.result?.complete).toBe(true);
+
+        // A later `done` keeps the user's choice (whole table), it does not collapse to 100.
+        store().applyNodeEvent({
+          seq: 9000,
+          nodeId: done.node!.nodeId,
+          state: 'done',
+        });
+        await flush();
+        await flush();
+        expect(store().matrices.get(done.displayMatrixId)!.rowCount()).toBe(12_000);
       } finally {
         stub.restore();
       }

@@ -224,6 +224,8 @@ function migrateFormula(card: V1FormulaCard, cards: V1Card[]): CardModel {
         }
       : null,
     displayMatrixId: asNumber(card.resultMatrixId, -1),
+    // Display state, not a definition: a restored workspace re-pulls the preview.
+    result: null,
   };
 }
 

@@ -1766,9 +1766,43 @@ body {
 
 .formula-card__grid {
   display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   margin: 0 -6px;
+}
+
+/* The table keeps the height; the "show more" strip is a footer under it. */
+.formula-card__grid > .vtable {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/*
+ * Result preview footer. A tall result is mirrored as its first screenful, so the card says
+ * how much of the table it holds and offers the explicit action that fetches the rest.
+ */
+.formula-card__result-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 4px 6px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.formula-card__show-more {
+  flex: 0 0 auto;
+}
+
+.formula-card__result-truncated {
+  flex: 0 0 auto;
+  margin: 2px 6px 0;
+  color: var(--warn, #d08a2a);
+  font-size: 11px;
 }
 
 .formula-card__empty {

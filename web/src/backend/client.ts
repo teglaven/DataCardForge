@@ -96,9 +96,17 @@ export interface NodeEvent {
 
 export interface MatrixWindow {
   ok: boolean;
+  /** Rows in THIS window (never the whole table). */
   rows?: number;
   columns?: number;
   names?: string[];
+  /**
+   * Full matrix shape. The dense-matrix frame carries it on every window, so a card that
+   * only pulled the first 100 rows still knows the table is 165 000 rows tall.
+   * Absent only for a legacy DCM1 frame (where the window was assumed to be everything).
+   */
+  totalRows?: number;
+  totalCols?: number;
   /** column-major Float64 view into `buffer`. */
   data?: Float64Array[];
   buffer?: ArrayBuffer;
@@ -383,19 +391,33 @@ export class BackendClient {
   }
 }
 
-/** DCM1: magic u32, rows u32, cols u32, namesLen u32, f64[rows*cols] column-major, names JSON. */
+/**
+ * Dense-matrix display frame.
+ *
+ *   DCM2: magic u32, rows u32, cols u32, namesLen u32, totalRows u32, totalCols u32,
+ *         f64[rows*cols] column-major, names JSON
+ *   DCM1: the same without totalRows/totalCols (legacy; window == whole matrix)
+ *
+ * `rows`/`cols` describe the WINDOW that was asked for; `totalRows`/`totalCols` describe
+ * the stored matrix, which is what lets a client show "100 of 165 000 rows" and fetch the
+ * rest on demand.
+ */
 export function decodeMatrixFrame(buffer: ArrayBuffer): MatrixWindow {
   const view = new DataView(buffer);
-  if (buffer.byteLength < 16 || view.getUint32(0, true) !== 0x44434d31) {
-    return { ok: false, code: 'badFrame' };
-  }
+  if (buffer.byteLength < 16) return { ok: false, code: 'badFrame' };
+  const magic = view.getUint32(0, true);
+  const isV2 = magic === 0x44434d32;
+  if (magic !== 0x44434d31 && !isV2) return { ok: false, code: 'badFrame' };
+  const headerLen = isV2 ? 24 : 16;
   const rows = view.getUint32(4, true);
   const cols = view.getUint32(8, true);
   const namesLen = view.getUint32(12, true);
-  const expected = 16 + cols * rows * 8 + namesLen;
+  const totalRows = isV2 ? view.getUint32(16, true) : rows;
+  const totalCols = isV2 ? view.getUint32(20, true) : cols;
+  const expected = headerLen + cols * rows * 8 + namesLen;
   if (buffer.byteLength < expected) return { ok: false, code: 'truncatedFrame' };
   const data: Float64Array[] = [];
-  let offset = 16;
+  let offset = headerLen;
   for (let c = 0; c < cols; c++) {
     const col = new Float64Array(rows);
     for (let r = 0; r < rows; r++) col[r] = view.getFloat64(offset + r * 8, true);
@@ -409,5 +431,5 @@ export function decodeMatrixFrame(buffer: ArrayBuffer): MatrixWindow {
   } catch {
     /* keep names empty rather than failing the whole frame */
   }
-  return { ok: true, rows, columns: cols, names, data, buffer };
+  return { ok: true, rows, columns: cols, totalRows, totalCols, names, data, buffer };
 }

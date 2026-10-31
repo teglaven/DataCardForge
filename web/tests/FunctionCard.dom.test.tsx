@@ -663,3 +663,36 @@ describe('a header right-click stays inside the card', () => {
     }
   });
 });
+
+/**
+ * 结果预览（2026-10-29 决策）：默认只同步前 100 行，表格下方说明「显示前 N / 共 M 行」，
+ * 并提供显式动作拉全量。这两点是"慢"的修复本身，不是装饰——165 000 行的结果默认拉全表时
+ * 是 34 次往返，用户看到的是几秒钟的白屏。
+ */
+describe('result preview', () => {
+  const previewCard = () =>
+    makeCard({ result: { totalRows: 165_000, shownRows: 100, complete: false, truncated: false } });
+
+  it('says how much of the result is shown and offers the full table', async () => {
+    const host = await mount(previewCard(), { resultMatrix: matrix(1, 100) });
+    const strip = host.querySelector('.formula-card__result-more');
+    expect(strip).not.toBeNull();
+    expect(strip!.textContent).toContain('显示前 100 行');
+    expect(strip!.textContent).toContain('165000');
+    expect(strip!.querySelector('.formula-card__show-more')!.textContent).toBe('显示更多');
+  });
+
+  it('reports the stored height, not the cache height, in the output shape', async () => {
+    const host = await mount(previewCard(), { resultMatrix: matrix(1, 100) });
+    // 1 column × 165 000 rows — the cache only holds 100 of them.
+    expect(host.querySelector('.formula-card__output-shape')!.textContent).toContain('165000');
+  });
+
+  it('drops the preview strip once the whole table is cached', async () => {
+    const card = makeCard({
+      result: { totalRows: 100, shownRows: 100, complete: true, truncated: false },
+    });
+    const host = await mount(card, { resultMatrix: matrix(1, 100) });
+    expect(host.querySelector('.formula-card__result-more')).toBeNull();
+  });
+});

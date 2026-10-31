@@ -184,10 +184,13 @@ def main() -> int:
         window = urllib.request.urlopen(
             f"{client.base}/matrices/{result_id}/window?start=0&count=100", timeout=10
         ).read()
-        # DCM1: magic, rows, cols, namesLen, then column-major doubles.
+        # DCM2: magic, rows, cols, namesLen, totalRows, totalCols, then column-major
+        # doubles. (DCM1 was the same without the two totals; the header grew so a window
+        # can advertise the full table shape.)
         import struct
-        _, rows, cols, _names = struct.unpack_from("<IIII", window, 0)
-        values = struct.unpack_from(f"<{rows * cols}d", window, 16)
+        magic, rows, cols, _names = struct.unpack_from("<IIII", window, 0)
+        header = 24 if magic == 0x44434D32 else 16
+        values = struct.unpack_from(f"<{rows * cols}d", window, header)
         first = values[0:min(rows, 3)]
         if rows != 100 or cols != 1 or list(first) != [2.0, 4.0, 6.0]:
             print(f"FAIL: post-churn numbers wrong (rows={rows} cols={cols} first={first})")

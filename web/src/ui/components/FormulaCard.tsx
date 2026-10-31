@@ -108,6 +108,7 @@ export function FormulaCard({
   // Re-send this card's parameters + binding to the backend. The card has no compute of its
   // own, so "recompute" is exactly one push — the same call the expression editor makes.
   const recomputeFormula = useWorkspace((s) => s.recomputeFormula);
+  const loadFullResult = useWorkspace((s) => s.loadFullResult);
   /**
    * Explanations sit behind a ~1 s rest (`HoverHelp`), never on a native `title`: the card
    * is dense, and instant browser tooltips fire on every accidental pass-over.
@@ -282,9 +283,12 @@ export function FormulaCard({
   const title = t('card.formula', {
     name: draft[0]?.name || formulas?.[0]?.name || t('card.unlabeled'),
   });
+  // The card mirrors only the first screenful; the frame header carries the true height,
+  // so the badge must report the stored table, not the cache.
+  const totalRows = card.result?.totalRows ?? rows;
   const badge = expressionShaped
-    ? `${(formulas ?? []).length} ${t('formula.columns')} · ${rows} ${t('formula.rows')}`
-    : `${card.signatureId.replace(/^builtin:/, '')} · ${rows} ${t('formula.rows')}`;
+    ? `${(formulas ?? []).length} ${t('formula.columns')} · ${totalRows} ${t('formula.rows')}`
+    : `${card.signatureId.replace(/^builtin:/, '')} · ${totalRows} ${t('formula.rows')}`;
   const state: NodeStatus['state'] | 'idle' | 'stale' = invalidated
     ? 'stale'
     : (card.node?.state ?? 'idle');
@@ -507,7 +511,7 @@ export function FormulaCard({
                 <span className="formula-card__zone-tools">
                   {cols > 0 ? (
                     <span className="formula-card__output-shape">
-                      {t('formula.outputColumns', { n: cols, rows })}
+                      {t('formula.outputColumns', { n: cols, rows: totalRows })}
                     </span>
                   ) : null}
                   {expressionShaped ? (
@@ -629,6 +633,29 @@ export function FormulaCard({
                       setChartMenu({ x: event.clientX, y: event.clientY, column });
                     }}
                   />
+                  {card.result && !card.result.complete && !card.result.truncated ? (
+                    <div className="formula-card__result-more" role="status">
+                      <span className="formula-card__result-count">
+                        {t('formula.resultPreview', {
+                          shown: card.result.shownRows,
+                          total: card.result.totalRows,
+                        })}
+                      </span>
+                      <button
+                        type="button"
+                        className="card__control formula-card__show-more"
+                        title={t('formula.showAllTip', { total: card.result.totalRows })}
+                        onClick={() => loadFullResult(card.id)}
+                      >
+                        {t('formula.showMore')}
+                      </button>
+                    </div>
+                  ) : null}
+                  {card.result?.truncated ? (
+                    <p className="formula-card__result-truncated">
+                      {t('formula.resultTruncated', { n: card.result.shownRows })}
+                    </p>
+                  ) : null}
                 </div>
               ) : (
                 <div className="formula-card__empty">

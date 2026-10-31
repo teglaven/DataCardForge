@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -236,8 +237,13 @@ void sendResponse(int fd, HttpResponse& res, bool headersOnly) {
   headers += "Connection: keep-alive\r\n";
   headers += "Access-Control-Allow-Origin: *\r\n";
   headers += "\r\n";
+  // ONE write for headers + body. Two send() calls on a Nagle socket stall the second
+  // segment until the peer's delayed ACK (40 ms measured with the window endpoint): the
+  // frontend pages a result table, so that stall used to cost ~40 ms per page.
+  // HEAD announces the length but sends no body (smoke test: a HEAD with a body desyncs
+  // the next keep-alive request).
+  if (!headersOnly) headers.append(payload);
   writeAll(fd, headers.data(), headers.size());
-  if (!headersOnly) writeAll(fd, payload.data(), payload.size());
 }
 
 uint32_t readU32LE(const unsigned char* p) {
@@ -260,8 +266,17 @@ bool decodeMatrixFrame(const std::string& frame, std::vector<Column>* columns, s
     return false;
   }
   const auto* bytes = reinterpret_cast<const unsigned char*>(frame.data());
-  if (readU32LE(bytes) != 0x44434D31u) {
-    *err = "bad magic (expected DCM1)";
+  const uint32_t magic = readU32LE(bytes);
+  // DCM1 is the 16-byte header (no matrix shape); DCM2 adds totalRows/totalCols (24 bytes).
+  // Uploads keep accepting both so an old client keeps working after the format grew.
+  const bool isV2 = magic == 0x44434D32u;
+  if (magic != 0x44434D31u && !isV2) {
+    *err = "bad magic (expected DCM1 or DCM2)";
+    return false;
+  }
+  const size_t headerLen = isV2 ? 24u : 16u;
+  if (frame.size() < headerLen) {
+    *err = "frame shorter than the header";
     return false;
   }
   const uint32_t rows = readU32LE(bytes + 4);
@@ -275,14 +290,14 @@ bool decodeMatrixFrame(const std::string& frame, std::vector<Column>* columns, s
     return false;
   }
   const uint64_t dataLen = static_cast<uint64_t>(rows) * cols * 8u;
-  const uint64_t needed = 16ull + dataLen + namesLen;
+  const uint64_t needed = static_cast<uint64_t>(headerLen) + dataLen + namesLen;
   if (frame.size() < needed) {
     *err = "truncated frame";
     return false;
   }
   Json names;
   if (namesLen > 0) {
-    std::string namesJson(frame.data() + 16 + dataLen, namesLen);
+    std::string namesJson(frame.data() + headerLen + dataLen, namesLen);
     std::string jerr;
     if (!Json::parse(namesJson, &names, &jerr) || !names.isArray()) {
       *err = "bad names payload: " + jerr;
@@ -298,7 +313,7 @@ bool decodeMatrixFrame(const std::string& frame, std::vector<Column>* columns, s
     else
       col.posName = "Pos." + std::to_string(c + 1);
     col.data.resize(rows);
-    const unsigned char* base = bytes + 16 + static_cast<size_t>(c) * rows * 8u;
+    const unsigned char* base = bytes + headerLen + static_cast<size_t>(c) * rows * 8u;
     for (uint32_t r = 0; r < rows; ++r) col.data[r] = readF64LE(base + static_cast<size_t>(r) * 8u);
     columns->push_back(std::move(col));
   }
@@ -332,20 +347,25 @@ bool splitMatrixPath(const std::string& path, long* id, std::string* suffix) {
 }  // namespace
 
 std::string encodeMatrixFrame(const std::vector<std::vector<double>>& columns,
-                              const std::vector<std::string>& names, size_t rows) {
+                              const std::vector<std::string>& names, size_t rows,
+                              size_t totalRows, size_t totalCols) {
   Json nameArr = Json::array();
   for (const auto& n : names) nameArr.push(Json(n));
   std::string namesJson = nameArr.dump();
-  uint32_t magic = 0x44434D31;
+  uint32_t magic = 0x44434D32;  // "DCM2"
   uint32_t cols = static_cast<uint32_t>(columns.size());
   uint32_t rowsU = static_cast<uint32_t>(rows);
   uint32_t namesLen = static_cast<uint32_t>(namesJson.size());
+  uint32_t totalRowsU = static_cast<uint32_t>(totalRows);
+  uint32_t totalColsU = static_cast<uint32_t>(totalCols);
   std::string out;
-  out.reserve(16 + cols * rows * 8 + namesLen);
+  out.reserve(24 + cols * rows * 8 + namesLen);
   out.append(reinterpret_cast<char*>(&magic), 4);
   out.append(reinterpret_cast<char*>(&rowsU), 4);
   out.append(reinterpret_cast<char*>(&cols), 4);
   out.append(reinterpret_cast<char*>(&namesLen), 4);
+  out.append(reinterpret_cast<char*>(&totalRowsU), 4);
+  out.append(reinterpret_cast<char*>(&totalColsU), 4);
   for (const auto& col : columns) {
     std::vector<double> padded = col;
     padded.resize(rows, NAN);
@@ -439,8 +459,19 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
 
   // GET /api/matrices/{id}/window?start=&count=  → binary DCM1 frame
   if (isMatrixPath && req.method == "GET" && matrixSuffix == "/window") {
+    // One lock for shape + labels: the window response carries the FULL matrix shape, so a
+    // client that asks for 100 rows still learns the table is 165 000 rows tall.
     std::vector<std::string> names;
-    if (!store_->labels(matrixId, &names))
+    size_t shapeRows = 0;
+    size_t shapeCols = 0;
+    const bool found = store_->withMatrix(matrixId, [&](const Matrix& m) {
+      shapeRows = m.rowCount();
+      shapeCols = m.columnCount();
+      names.clear();
+      names.reserve(m.columnCount());
+      for (const Column& col : m.columns()) names.push_back(Matrix::label(col));
+    });
+    if (!found)
       return jsonError(404, "unknownMatrix", Json::object({{"matrixId", Json(matrixId)}}));
     const long start = qint("start", 0);
     long count = qint("count", 500);
@@ -451,7 +482,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
     HttpResponse res;
     res.status = 200;
     res.contentType = "application/octet-stream";
-    res.binary = new std::string(encodeMatrixFrame(window, names, rows));
+    res.binary = new std::string(encodeMatrixFrame(window, names, rows, shapeRows, shapeCols));
     return res;
   }
 
@@ -691,7 +722,16 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       const auto node = nodes_->get(id);
       if (!node) return jsonError(404, "unknownNode", Json::object({{"nodeId", Json(id)}}));
       std::vector<std::string> names;
-      if (!store_->labels(node->resultMatrixId(), &names)) return jsonError(404, "unknownMatrix");
+      size_t shapeRows = 0;
+      size_t shapeCols = 0;
+      const bool found = store_->withMatrix(node->resultMatrixId(), [&](const Matrix& m) {
+        shapeRows = m.rowCount();
+        shapeCols = m.columnCount();
+        names.clear();
+        names.reserve(m.columnCount());
+        for (const Column& col : m.columns()) names.push_back(Matrix::label(col));
+      });
+      if (!found) return jsonError(404, "unknownMatrix");
       const long start = qint("start", 0);
       long count = qint("count", 500);
       count = std::min<long>(std::max(0L, count), 5000);
@@ -701,7 +741,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
       HttpResponse res;
       res.status = 200;
       res.contentType = "application/octet-stream";
-      res.binary = new std::string(encodeMatrixFrame(window, names, rows));
+      res.binary = new std::string(encodeMatrixFrame(window, names, rows, shapeRows, shapeCols));
       return res;
     }
   }
@@ -744,6 +784,10 @@ bool HttpServer::serve() {
   while (true) {
     int fd = accept(srv, nullptr, nullptr);
     if (fd < 0) continue;
+    // Nagle off: responses are small control messages, and the client reads them serially.
+    // Batching here buys nothing and costs one delayed-ACK round trip per request.
+    int nodelay = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof nodelay);
     std::thread([this, fd] { handleConnection(fd); }).detach();
   }
 }

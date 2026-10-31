@@ -48,8 +48,14 @@ class HttpServer {
   EventBus* bus_;
 };
 
-// Encode one matrix window as a DCM1 binary frame (see backend-protocol-v1.md).
+// Encode one matrix window as a DCM2 binary frame (see backend-protocol-v1.md).
+//
+// The frame IS the dense-matrix display protocol: it carries the window (`rows` × `cols`)
+// AND the full matrix shape (`totalRows` × `totalCols`), so a client that only asked for
+// the first 100 rows still knows how tall the table is — without a second request and
+// without pulling the whole matrix down.
 std::string encodeMatrixFrame(const std::vector<std::vector<double>>& columns,
-                              const std::vector<std::string>& names, size_t rows);
+                              const std::vector<std::string>& names, size_t rows,
+                              size_t totalRows, size_t totalCols);
 
 }  // namespace dc
