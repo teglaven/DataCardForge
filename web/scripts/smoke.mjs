@@ -1033,6 +1033,98 @@ try {
     `${String(reusedY)} vs ${String(pipelineY)}`,
   );
 
+  // ── 12b. the 摘要 panel (builtin:summary, P2) ────────────────────────
+  // A lazy signature: creating the card's node computes nothing, so the panel must say
+  // 「未请求」 and print no number at all. Only the explicit 计算 click reaches
+  // `POST /api/nodes/{id}/compute`, and an upstream edit has to turn the panel into
+  // 待重算 with an EMPTY table (the backend clears the result matrix) — never a row of
+  // zeros. The data card is a file-backed, read-only card, which is why the lock is
+  // opened before the cell edit.
+  const summaryCard = page.locator('.card--matrix').first();
+  await summaryCard.locator('.summary-panel__toggle').click();
+  await page.waitForSelector('.card--matrix .summary-panel__bar--notRequested', {
+    timeout: 15_000,
+  });
+  const notRequestedText = (await summaryCard.locator('.summary-panel').innerText()).trim();
+  const summaryCompute = summaryCard.locator('.summary-panel__compute');
+  check(
+    'summary panel: 未请求 state offers 计算 and shows no number',
+    (await summaryCompute.count()) === 1 && !/\d/.test(notRequestedText),
+    notRequestedText.replace(/\s+/g, ' ').slice(0, 120),
+  );
+
+  await summaryCompute.click();
+  await page.waitForSelector('.card--matrix .summary-panel__row', { timeout: 30_000 });
+  const summaryStats = await page.$$eval(
+    '.card--matrix .summary-panel__row .summary-panel__stat',
+    (cells) => cells.map((cell) => (cell.textContent ?? '').trim()),
+  );
+  check(
+    'summary panel: 计算 produces 12 rows labelled with the catalog ids',
+    summaryStats.length === 12 &&
+      summaryStats[0] === 'n' &&
+      summaryStats[1] === 'nan' &&
+      summaryStats[11] === 'sem',
+    summaryStats.join(','),
+  );
+
+  await summaryCard.locator('.matrix-card__lock').click();
+  await summaryCard.locator('.vtable__cell').first().dblclick();
+  const cellInput = summaryCard.locator('.vtable__input').first();
+  await cellInput.waitFor({ timeout: 10_000 });
+  await cellInput.fill('123456');
+  await cellInput.press('Enter');
+  // The backend notices the edit and pushes `dirty` + `upstreamChanged` for the node.
+  await page.waitForSelector('.card--matrix .summary-panel__bar--stale', { timeout: 30_000 });
+  const staleText = (await summaryCard.locator('.summary-panel').innerText()).trim();
+  const staleRows = await summaryCard.locator('.summary-panel__row').count();
+  check(
+    'summary panel: an upstream edit makes it 待重算 with an empty table',
+    /上游已变|Upstream changed/.test(staleText) && staleRows === 0,
+    `rows=${staleRows} text=${staleText.replace(/\s+/g, ' ').slice(0, 80)}`,
+  );
+
+  const firstStamp = (await summaryCard.locator('.summary-panel__status').innerText()).trim();
+  // The stamp has one-second resolution; waiting past a second boundary is what makes
+  // "the timestamp changed" a real assertion instead of a coin flip.
+  await page.waitForTimeout(1_500);
+  await summaryCard.locator('.summary-panel__compute').click();
+  await page.waitForSelector('.card--matrix .summary-panel__row', { timeout: 30_000 });
+  const secondStamp = (await summaryCard.locator('.summary-panel__status').innerText()).trim();
+  check(
+    'summary panel: 重算 brings the numbers back and refreshes the timestamp',
+    (await summaryCard.locator('.summary-panel__row').count()) === 12 &&
+      firstStamp !== secondStamp &&
+      /计算于|Computed at/.test(secondStamp),
+    `${firstStamp} → ${secondStamp}`,
+  );
+
+  const summaryDownloadPromise = page.waitForEvent('download', { timeout: 20_000 }).catch(() => null);
+  await summaryCard.locator('.summary-panel__export').click();
+  const summaryDownload = await summaryDownloadPromise;
+  let summaryCsvPath = null;
+  if (summaryDownload) {
+    const suggested = summaryDownload.suggestedFilename() || 'summary.csv';
+    summaryCsvPath = path.join(exportDir, suggested);
+    await summaryDownload.saveAs(summaryCsvPath);
+  }
+  const summaryLines = summaryCsvPath
+    ? fs
+        .readFileSync(summaryCsvPath, 'utf8')
+        .replace(/^\ufeff/, '')
+        .split('\n')
+        .filter((line) => line.length > 0)
+    : [];
+  check(
+    'summary CSV: header row with the column labels, then 12 statistic rows',
+    summaryLines.length === 13 &&
+      /Pos\.1/.test(summaryLines[0]) &&
+      summaryLines[0].split(',').length === 10 &&
+      summaryLines[1].startsWith('n,') &&
+      summaryLines[12].startsWith('sem,'),
+    `lines=${summaryLines.length} header=${summaryLines[0] ?? ''}`,
+  );
+
   // ── 13. no runtime errors ───────────────────────────────────────────
   const realErrors = consoleErrors.filter(
     (text) => !/favicon|ResizeObserver loop/i.test(text),
