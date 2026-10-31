@@ -3,7 +3,7 @@
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages demo](https://img.shields.io/badge/demo-live%20(front%20end)-2ea44f)](https://teglaven.github.io/DataCardForge/)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-573%20unit%20%C2%B7%208%20ctest-brightgreen)](web/tests)
+[![Tests](https://img.shields.io/badge/tests-581%20unit%20%C2%B7%208%20ctest-brightgreen)](web/tests)
 
 **[English](README.md) | [中文](README.zh-CN.md)**
 
@@ -18,8 +18,8 @@ A lightweight **data matrix batch-processing workbench** for industrial / scient
 **Product / repository**: the product is *Data Workbench*; the repository is `DataCardForge`.
 **Author & provenance**: `teglaven` · GPL-3.0 · see [`PROVENANCE.md`](PROVENANCE.md) for the
 verifiable author identity, timeline and commit anchors.
-**Verified state** (last verified 2026-10-31): 573 frontend unit tests (14 opt-in
-skipped) · 8 backend ctest cases (4 opt-in) · 97 end-to-end smoke checks — all green.
+**Verified state** (last verified 2026-10-31): 581 frontend unit tests (14 opt-in
+skipped) · 8 backend ctest cases (4 opt-in) · 102 end-to-end smoke checks — all green.
 **Not finished yet**: function cards are a work in progress; hover and edge-editing of connections
 are still missing — both are spelled out under [Status & known gaps](#status--known-gaps).
 
@@ -344,7 +344,7 @@ cd backend && ctest --test-dir build --output-on-failure
 DC_RUN_FUZZ=1 ctest --test-dir build -R diff_fuzz --output-on-failure
 DC_RUN_STRESS=1 ctest --test-dir build -R http_stress --output-on-failure
 
-# End-to-end smoke: 97 checks against a production build
+# End-to-end smoke: 102 checks against a production build
 cd web && npm run build && npx playwright install chromium   # browser binary, once
 npx vite preview --port 4173 &                              # serve web/dist
 node scripts/smoke.mjs http://127.0.0.1:4173
@@ -418,7 +418,7 @@ one-time switch: **Settings → Pages → Source: GitHub Actions**, otherwise th
 
 ## Acknowledgements
 
-This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class tooling, and earlier GitHub Copilot). Authored by the maintainer: the requirements, the architecture decisions in [`docs/decisions/`](docs/decisions/), the acceptance criteria and the test gates. The repository does not claim "it was all typed by hand" — it claims that **every feature statement above is reproduced by the suites listed under Tests** (573 unit / 8 ctest / 97 end-to-end checks). Ownership and timeline: [`PROVENANCE.md`](PROVENANCE.md).
+This project is developed with the assistance of **AI coding agents** (DeepSeek Harness / Claude-class tooling, and earlier GitHub Copilot). Authored by the maintainer: the requirements, the architecture decisions in [`docs/decisions/`](docs/decisions/), the acceptance criteria and the test gates. The repository does not claim "it was all typed by hand" — it claims that **every feature statement above is reproduced by the suites listed under Tests** (581 unit / 8 ctest / 102 end-to-end checks). Ownership and timeline: [`PROVENANCE.md`](PROVENANCE.md).
 
 ## License
 

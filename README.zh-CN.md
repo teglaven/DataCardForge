@@ -3,7 +3,7 @@
 [![CI](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml/badge.svg)](https://github.com/teglaven/DataCardForge/actions/workflows/ci.yml)
 [![Pages 演示](https://img.shields.io/badge/%E6%BC%94%E7%A4%BA-%E5%89%8D%E7%AB%AF%E5%9C%A8%E7%BA%BF-2ea44f)](https://teglaven.github.io/DataCardForge/)
 [![许可证](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-573%20unit%20%C2%B7%208%20ctest-brightgreen)](web/tests)
+[![测试](https://img.shields.io/badge/tests-581%20unit%20%C2%B7%208%20ctest-brightgreen)](web/tests)
 
 **[English](README.md) | [中文](README.zh-CN.md)**
 
@@ -17,7 +17,7 @@
 
 **产品与仓库**：产品名 *Data Workbench*，仓库名 `DataCardForge`。
 **作者与权属**：`teglaven` · GPL-3.0 · 身份、时间线与提交锚点见 [`PROVENANCE.md`](PROVENANCE.md)。
-**当前实测状态**（2026-10-31 实测）：前端 573 个单元测试（14 个 opt-in 跳过）· 后端 8 个 ctest（4 个 opt-in）· 端到端 97 项检查，全绿。
+**当前实测状态**（2026-10-31 实测）：前端 581 个单元测试（14 个 opt-in 跳过）· 后端 8 个 ctest（4 个 opt-in）· 端到端 102 项检查，全绿。
 **尚未完成**：函数卡是半成品；连线的 hover 与断线编辑仍在路上——两者都在
 [状态与已知缺口](#状态与已知缺口)里写清楚了。
 
@@ -301,7 +301,7 @@ npm test                  # 单元测试（vitest，含跨层夹具）
 ### 测试
 
 ```bash
-# 前端：typecheck + 573 个单元测试（含 81 个跨层差分夹具、14 个 opt-in 跳过）
+# 前端：typecheck + 581 个单元测试（含 81 个跨层差分夹具、14 个 opt-in 跳过）
 cd web && npm run typecheck && npm test
 
 # 后端：8 个 ctest 用例（跨层夹具、矩阵算子、节点注册表、卡片夹具；另有 4 个按需门控，默认 Skipped）
@@ -311,7 +311,7 @@ cd backend && ctest --test-dir build --output-on-failure
 DC_RUN_FUZZ=1 ctest --test-dir build -R diff_fuzz --output-on-failure
 DC_RUN_STRESS=1 ctest --test-dir build -R http_stress --output-on-failure
 
-# 端到端冒烟：97 项检查，跑在生产构建上
+# 端到端冒烟：102 项检查，跑在生产构建上
 cd web && npm run build && npx playwright install chromium   # 浏览器二进制，只需一次
 npx vite preview --port 4173 &                              # 起 web/dist
 node scripts/smoke.mjs http://127.0.0.1:4173
